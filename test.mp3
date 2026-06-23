@@ -1,0 +1,1 @@
+{"detail":{"type":"authorization_error","code":"subscription_required","message":"Model is not available on the free tier. The eleven_monolingual_v1 and eleven_multilingual_v1 models are deprecated and have been removed from the free tier. Please migrate to newer models for continued service.","status":"model_deprecated_free_tier","request_id":"2fe6fbaf4b8039630b2f48ebc66867b4"}}
