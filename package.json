@@ -1,0 +1,22 @@
+{
+  "name": "voice_ai",
+  "version": "1.0.0",
+  "description": "Deepgram Nova-3 (STT) → Claude Sonnet (LLM) → ElevenLabs (TTS) pipeline'ını kullanan, Missed Check-In alert'larını işleyen, PRD v1.2 ve Orion önerisine uygun demo uygulama.",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
+    "@deepgram/sdk": "^5.4.0",
+    "axios": "^1.18.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ws": "^8.21.0"
+  }
+}
