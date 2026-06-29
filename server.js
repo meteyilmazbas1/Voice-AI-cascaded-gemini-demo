@@ -1,36 +1,47 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
 
-if (fs.existsSync('.env')) {
-  const envFile = fs.readFileSync('.env', 'utf8');
-  envFile.split('\n').forEach(line => {
-    const [key, ...val] = line.trim().split('=');
-    if (key && val.length) process.env[key] = val.join('=');
-  });
-}
+const envFile = fs.readFileSync('.env', 'utf8');
+envFile.split('\n').forEach(line => {
+  const [key, ...val] = line.trim().split('=');
+  if (key && val.length) process.env[key] = val.join('=');
+});
 
 const express = require('express');
 const WebSocket = require('ws');
 const http = require('http');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const { spawn } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
+
+// Two separate WebSocket servers on different paths
 const browserWss = new WebSocket.Server({ noServer: true });
 const twilioWss = new WebSocket.Server({ noServer: true });
 
+// Route WebSocket upgrades by path
+server.on('upgrade', function(request, socket, head) {
+  const pathname = request.url;
+  if (pathname === '/twilio') {
+    twilioWss.handleUpgrade(request, socket, head, function(ws) {
+      twilioWss.emit('connection', ws, request);
+    });
+  } else {
+    browserWss.handleUpgrade(request, socket, head, function(ws) {
+      browserWss.emit('connection', ws, request);
+    });
+  }
+});
+
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const CACHE_DIR = path.join(__dirname, 'audio_cache');
-const TWILIO_CHUNK_BYTES = 160; // 20ms of mulaw at 8kHz
-const TWILIO_CHUNK_MS = 20;
-
 function loadAudioCache() {
   const cache = {};
   if (!fs.existsSync(CACHE_DIR)) return cache;
@@ -38,151 +49,141 @@ function loadAudioCache() {
     if (file.endsWith('.mp3')) {
       const key = file.replace('.mp3', '');
       cache[key] = fs.readFileSync(path.join(CACHE_DIR, file)).toString('base64');
-      console.log(`[Cache] Loaded MP3: ${key}`);
+      console.log('[Cache] Loaded: ' + key);
     }
   });
   return cache;
 }
-
-function mp3BufferToMulaw(mp3Buffer) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    const stderr = [];
-    const ffmpeg = spawn('ffmpeg', [
-      '-hide_banner', '-loglevel', 'error',
-      '-f', 'mp3', '-i', 'pipe:0',
-      '-ar', '8000',
-      '-ac', '1',
-      '-f', 'mulaw',
-      'pipe:1'
-    ]);
-
-    ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk));
-    ffmpeg.stderr.on('data', (chunk) => stderr.push(chunk));
-    ffmpeg.on('error', reject);
-    ffmpeg.on('close', (code) => {
-      if (code === 0) resolve(Buffer.concat(chunks));
-      else reject(new Error(`ffmpeg failed (${code}): ${Buffer.concat(stderr).toString()}`));
-    });
-
-    ffmpeg.stdin.write(mp3Buffer);
-    ffmpeg.stdin.end();
-  });
-}
-
-function mp3FileToMulaw(filePath) {
-  return execSync(
-    `ffmpeg -hide_banner -loglevel error -i "${filePath}" -ar 8000 -ac 1 -f mulaw pipe:1`,
-    { encoding: 'buffer', stdio: ['pipe', 'pipe', 'pipe'] }
-  );
-}
-
-function loadMulawCache(mp3Cache) {
-  const cache = {};
-  if (!fs.existsSync(CACHE_DIR)) return cache;
-  fs.readdirSync(CACHE_DIR).forEach(file => {
-    if (!file.endsWith('.mp3')) return;
-    const key = file.replace('.mp3', '');
-    try {
-      cache[key] = mp3FileToMulaw(path.join(CACHE_DIR, file));
-      console.log(`[Cache] Loaded mulaw: ${key} (${cache[key].length} bytes)`);
-    } catch (e) {
-      console.error(`[Cache] mulaw conversion failed for ${key}:`, e.message);
-    }
-  });
-  return cache;
-}
-
 const audioCache = loadAudioCache();
-const mulawCache = loadMulawCache(audioCache);
 
-const SYSTEM_PROMPT = `You are an automated safety monitoring system for Aware360, a lone worker safety platform handling a MISSED CHECK-IN alert for an industrial/field worker.
+const SYSTEM_PROMPT = `Aware360 safety system. Worker missed check-in. Classify their response AND detect distress signals.
 
-Respond ONLY with a JSON object:
-{
-  "intent": "<SAFE_CONFIRMATION|DELAYED_CHECKIN|REQUEST_HUMAN|UNRECOGNISED>",
-  "confidence": <0.0-1.0>,
-  "response": "<spoken response>",
-  "resolved": <true|false>,
-  "escalate": <true|false>,
-  "delay_minutes": <null|number>
-}
+Return ONLY this JSON: {"intent":"<SAFE_CONFIRMATION|DELAYED_CHECKIN|REQUEST_HUMAN|UNRECOGNISED>","confidence":<0.0-1.0>,"response":"<reply>","resolved":<bool>,"escalate":<bool>,"delay_minutes":<null|number>,"distress":<null|"low"|"medium"|"high">,"distress_signals":<null|string>}
 
-Rules:
-- SAFE_CONFIRMATION: "yes/fine/good/safe/okay/yep" → resolved:true, response:"Got it — I've reset your safety timer. Stay safe."
-- DELAYED_CHECKIN: "late/minutes/time/reset/almost done" → resolved:true, delay_minutes: number or 15, response:"Understood. I've extended your check-in timer by [X] minutes. Please check in when ready."
-- REQUEST_HUMAN: "person/human/agent/help/SOS" → escalate:true, response:"Of course. I'm flagging this for a live agent — someone will call you back shortly. Keep your phone available."
-- UNRECOGNISED: anything else → response:"I'm sorry, I didn't catch that. Are you safe, need more time, or need a human agent?"
+INTENT RULES:
+SAFE_CONFIRMATION: clear safety confirmation ("yes", "yep", "fine", "ok", "okay", "good", "safe", "I'm fine", "all good", "no problem") -> resolved:true, confidence:0.95, response:"Got it — I've reset your safety timer. Stay safe."
+DELAYED_CHECKIN: needs more time -> resolved:true, delay_minutes:number or 15, response:"Understood. I've extended your check-in timer by [X] minutes. Please check in when ready."
+REQUEST_HUMAN: wants human/help/SOS -> escalate:true, response:"Of course. I'm flagging this for a live agent — someone will call you back shortly. Keep your phone available."
+UNRECOGNISED: unclear/ambiguous -> resolved:false, escalate:false, response:"I'm sorry, I didn't catch that. Are you safe, need more time, or need a human agent?"
 
-Return ONLY valid JSON.`;
+DISTRESS DETECTION:
+- distress:null — no signals
+- distress:"low" — hesitation, uncertainty ("I think", "maybe", "not sure")
+- distress:"medium" — stress words ("stuck", "trapped", "can't", "worried", "scared", "problem")
+- distress:"high" — emergency words ("help", "hurt", "pain", "emergency", "accident", "injured", "danger", "SOS")
+
+DISTRESS ESCALATION: distress "high" -> always escalate:true. distress "medium" -> escalate:true unless SAFE_CONFIRMATION with confidence > 0.85.
+distress_signals: brief description or null.
+
+Confidence: >0.90 clear | <0.60 hesitation/unclear -> UNRECOGNISED. When in doubt, ask again.
+
+CRITICAL SAFETY RULE — OVERRIDE EVERYTHING ELSE:
+If the worker's message contains ANY of these physical indicators, ALWAYS return REQUEST_HUMAN regardless of positive statements:
+- Fall/falling: "fell", "fall", "fallen", "tripped", "slipped"
+- Pain: "hurts", "pain", "ache", "sore", "burning"
+- Injury: "broke", "broken", "cut", "bleeding", "injured", "hurt"
+- Dizziness: "dizzy", "faint", "blurry", "can't see"
+- Entrapment: "stuck", "trapped", "can't move", "pinned"
+- Fear: "scared", "afraid", "worried", "panicking"
+
+"I just fell down but I'm okay" -> REQUEST_HUMAN (fell = physical incident)
+"I'm fine I promise" alone with NO physical indicators -> SAFE_CONFIRMATION
+The presence of reassurance ("I promise", "I'm okay") does NOT cancel physical incident indicators.`;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
 const INTENT_CACHE_MAP = {
-  SAFE_CONFIRMATION: 'safe_confirmation',
-  REQUEST_HUMAN: 'request_human',
-  UNRECOGNISED: 'unrecognised',
+  'SAFE_CONFIRMATION': 'safe_confirmation',
+  'REQUEST_HUMAN': 'request_human',
+  'UNRECOGNISED': 'unrecognised',
 };
 
-async function* streamClassifyIntent(transcript, model) {
+const PUBLIC_URL = process.env.PUBLIC_URL || process.env.PUBLIC_URL || 'https://wanted-untried-sandbar.ngrok-free.dev';
+const WS_URL = PUBLIC_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+
+// ─── TwiML webhook ───
+app.post('/incoming-call', function(req, res) {
+  const caller = (req.body && req.body.From) ? req.body.From : 'unknown';
+  console.log('[Twilio] Incoming call from:', caller);
+  const wsUrl = WS_URL + '/twilio';
+  res.type('text/xml');
+  res.send('<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="' + wsUrl + '"><Parameter name="caller" value="' + caller + '"/></Stream></Connect></Response>');
+});
+
+// ─── Shared functions ───
+async function classifyIntent(transcript, model) {
   const stream = anthropic.messages.stream({
     model: model || 'claude-haiku-4-5',
-    max_tokens: 256,
+    max_tokens: 100,
     system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: `Worker said: "${transcript}"` }]
+    messages: [{ role: 'user', content: 'Worker said: "' + transcript + '"' }]
   });
-
   let fullText = '';
+  let usage = { input_tokens: 0, output_tokens: 0 };
   for await (const chunk of stream) {
-    if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
+    if (chunk.type === 'content_block_delta' && chunk.delta && chunk.delta.type === 'text_delta') {
       fullText += chunk.delta.text;
     }
+    if (chunk.type === 'message_delta' && chunk.usage) {
+      usage.output_tokens = chunk.usage.output_tokens || 0;
+    }
+    if (chunk.type === 'message_start' && chunk.message && chunk.message.usage) {
+      usage.input_tokens = chunk.message.usage.input_tokens || 0;
+    }
   }
-
   const clean = fullText.trim();
-  try {
-    yield JSON.parse(clean);
-  } catch (e) {
+  let parsed;
+  try { parsed = JSON.parse(clean); } catch (e) {
     const match = clean.match(/\{[\s\S]*\}/);
-    if (match) yield JSON.parse(match[0]);
+    if (match) parsed = JSON.parse(match[0]);
     else throw new Error('Invalid JSON: ' + clean);
   }
+  parsed._usage = usage;
+  return parsed;
 }
 
-async function fetchTTSMp3Buffer(text, apiKey, voiceId) {
+async function synthesizeSpeech(text) {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
   const response = await axios.post(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-    {
-      text,
-      model_id: 'eleven_flash_v2_5',
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-    },
-    {
-      headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
-      responseType: 'arraybuffer'
-    }
+    'https://api.elevenlabs.io/v1/text-to-speech/' + voiceId,
+    { text: text, model_id: 'eleven_flash_v2_5', voice_settings: { stability: 0.5, similarity_boost: 0.75 } },
+    { headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' }, responseType: 'arraybuffer' }
   );
   return Buffer.from(response.data);
 }
 
+async function mp3ToMulaw(mp3Buffer) {
+  return new Promise(function(resolve, reject) {
+    const ffmpeg = spawn('ffmpeg', [
+      '-i', 'pipe:0',
+      '-ar', '8000',
+      '-ac', '1',
+      '-acodec', 'pcm_mulaw',
+      '-f', 'mulaw',
+      'pipe:1'
+    ]);
+    const chunks = [];
+    ffmpeg.stdout.on('data', function(chunk) { chunks.push(chunk); });
+    ffmpeg.stdout.on('end', function() { resolve(Buffer.concat(chunks)); });
+    ffmpeg.stderr.on('data', function() {});
+    ffmpeg.stdin.write(mp3Buffer);
+    ffmpeg.stdin.end();
+    ffmpeg.on('error', function(e) {
+      console.error('[ffmpeg] Error:', e.message);
+      resolve(mp3Buffer);
+    });
+  });
+}
+
 async function* streamTTS(text, apiKey, voiceId) {
   const response = await axios.post(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
-    {
-      text,
-      model_id: 'eleven_flash_v2_5',
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-      optimize_streaming_latency: 4
-    },
-    {
-      headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
-      responseType: 'stream'
-    }
+    'https://api.elevenlabs.io/v1/text-to-speech/' + voiceId + '/stream',
+    { text: text, model_id: 'eleven_flash_v2_5', voice_settings: { stability: 0.5, similarity_boost: 0.75 }, optimize_streaming_latency: 4 },
+    { headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' }, responseType: 'stream' }
   );
-
   const CHUNK_SIZE = 4096;
   let buffer = Buffer.alloc(0);
-
   for await (const chunk of response.data) {
     buffer = Buffer.concat([buffer, chunk]);
     while (buffer.length >= CHUNK_SIZE) {
@@ -193,381 +194,148 @@ async function* streamTTS(text, apiKey, voiceId) {
   if (buffer.length > 0) yield buffer.toString('base64');
 }
 
-async function mp3Base64ToMulaw(mp3Base64) {
-  return mp3BufferToMulaw(Buffer.from(mp3Base64, 'base64'));
-}
-
-function applyConfidenceGating(result) {
-  const HIGH_CONF = 0.85;
-  const LOW_CONF = 0.60;
-  if (result.confidence < LOW_CONF) {
-    console.log(`[Intent] Low confidence (${result.confidence}) — treating as UNRECOGNISED`);
-    result.intent = 'UNRECOGNISED';
+function applyDistressLogic(result) {
+  if (result.distress === 'high') {
+    result.escalate = true;
     result.resolved = false;
-    result.escalate = false;
-    result.response = "I'm sorry, I didn't catch that clearly. Could you say if you're safe, need more time, or need a human agent?";
-  } else if (result.confidence < HIGH_CONF) {
-    console.log(`[Intent] Medium confidence (${result.confidence}) — proceeding with caution`);
-    result.low_confidence = true;
+    if (result.intent !== 'REQUEST_HUMAN') {
+      result.response = 'I can hear this may be urgent. I am connecting you to a live agent right now. Please stay on the line.';
+    }
+    console.log('[DISTRESS HIGH] Auto-escalating | signals:', result.distress_signals);
+  } else if (result.distress === 'medium' && !(result.intent === 'SAFE_CONFIRMATION' && result.confidence > 0.85)) {
+    result.escalate = true;
+    result.resolved = false;
+    result.response = 'I want to make sure you are okay. I am connecting you to a live agent who can help. Please stay on the line.';
+    console.log('[DISTRESS MEDIUM] Auto-escalating | signals:', result.distress_signals);
   }
   return result;
 }
 
-function getTwilioStreamUrl(req) {
-  if (process.env.PUBLIC_URL) {
-    const base = process.env.PUBLIC_URL.replace(/\/$/, '');
-    // Twilio requires secure WebSocket (wss) for Media Streams in production
-    const wsBase = base.replace(/^http:\/\//i, 'wss://').replace(/^https:\/\//i, 'wss://');
-    return `${wsBase}/twilio`;
-  }
-  const host = req.headers['x-forwarded-host'] || req.headers.host;
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const wsProto = proto === 'https' ? 'wss' : 'ws';
-  return `${wsProto}://${host}/twilio`;
-}
-
-function twimlConnectStream(streamUrl) {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream url="${streamUrl}" />
-  </Connect>
-</Response>`;
-}
-
-function handleIncomingCall(req, res) {
-  try {
-    const streamUrl = getTwilioStreamUrl(req);
-    if (!streamUrl.startsWith('wss://')) {
-      console.warn(`[Twilio] WARNING: stream URL is not wss:// — Twilio may reject: ${streamUrl}`);
-    }
-    console.log(`[Twilio] Incoming call — stream URL: ${streamUrl}`);
-    res.type('text/xml').send(twimlConnectStream(streamUrl));
-  } catch (err) {
-    console.error('[Twilio] TwiML error:', err.message);
-    res.type('text/xml').status(500).send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response><Say>An error occurred. Please try again later.</Say></Response>`);
-  }
-}
-
-app.post('/incoming-call', handleIncomingCall);
-app.post('/twilio/voice', handleIncomingCall);
-app.get('/incoming-call', handleIncomingCall);
-app.get('/twilio/voice', handleIncomingCall);
-
-server.on('upgrade', (request, socket, head) => {
-  try {
-    const host = request.headers.host || 'localhost';
-    const { pathname } = new URL(request.url, `http://${host}`);
-    if (pathname === '/twilio') {
-      console.log('[Twilio WS] Upgrade request for /twilio');
-      twilioWss.handleUpgrade(request, socket, head, (ws) => {
-        twilioWss.emit('connection', ws, request);
-      });
-      return;
-    }
-    browserWss.handleUpgrade(request, socket, head, (ws) => {
-      browserWss.emit('connection', ws, request);
-    });
-  } catch (err) {
-    console.error('[WS Upgrade Error]', err.message);
-    socket.destroy();
-  }
-});
-
-async function sendMulawToTwilio(ws, streamSid, mulawBuffer, isPlayingRef) {
-  if (!streamSid || !mulawBuffer || mulawBuffer.length === 0) {
-    console.warn('[Twilio] sendMulawToTwilio skipped — missing streamSid or audio');
-    return;
-  }
-  if (ws.readyState !== WebSocket.OPEN) {
-    console.warn('[Twilio] WebSocket not open — cannot send audio');
-    return;
-  }
-
-  isPlayingRef.value = true;
-  const markName = `done-${Date.now()}`;
-
-  ws.send(JSON.stringify({ event: 'clear', streamSid }));
-
-  let chunkNum = 0;
-  for (let i = 0; i < mulawBuffer.length; i += TWILIO_CHUNK_BYTES) {
-    if (ws.readyState !== WebSocket.OPEN) break;
-    const chunk = mulawBuffer.slice(i, i + TWILIO_CHUNK_BYTES);
-    chunkNum++;
-    ws.send(JSON.stringify({
-      event: 'media',
-      streamSid,
-      media: {
-        track: 'outbound',
-        chunk: String(chunkNum),
-        timestamp: String(Math.floor((i / 8000) * 1000)),
-        payload: chunk.toString('base64'),
-      },
-    }));
-    await new Promise((r) => setTimeout(r, TWILIO_CHUNK_MS));
-  }
-
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ event: 'mark', streamSid, mark: { name: markName } }));
-  }
-
-  const durationMs = Math.ceil(mulawBuffer.length / 8000 * 1000);
-  await new Promise((r) => setTimeout(r, durationMs + 200));
-  isPlayingRef.value = false;
-}
-
-async function resolveMulawAudio(cacheKey, text) {
-  if (cacheKey && mulawCache[cacheKey]) {
-    console.log(`[Twilio Cache] mulaw hit: ${cacheKey}`);
-    return mulawCache[cacheKey];
-  }
-  if (cacheKey && audioCache[cacheKey]) {
-    console.log(`[Twilio Cache] converting MP3 cache: ${cacheKey}`);
-    return mp3Base64ToMulaw(audioCache[cacheKey]);
-  }
-
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
-  if (!apiKey || apiKey === 'your_elevenlabs_key') {
-    console.warn('[Twilio TTS] ElevenLabs key missing — no audio');
-    return null;
-  }
-
-  console.log(`[Twilio TTS] Generating: "${text.slice(0, 60)}..."`);
-  const mp3Buffer = await fetchTTSMp3Buffer(text, apiKey, voiceId);
-  return mp3BufferToMulaw(mp3Buffer);
-}
-
-twilioWss.on('connection', (ws) => {
+// ─── Twilio WebSocket ───
+twilioWss.on('connection', function(ws) {
   console.log('[Twilio WS] Connected');
   let streamSid = null;
-  let callSid = null;
   let deepgramWs = null;
   let transcript = '';
   let sessionState = 'GREETING';
   let unrecognisedCount = 0;
-  let audioBuffer = Buffer.alloc(0);
-  let silenceTimer = null;
   let utteranceStartTime = null;
-  let processing = false;
-  const isPlayingRef = { value: false };
-  const selectedModel = 'claude-haiku-4-5';
-  const SILENCE_MS = 4000;
+  let silenceTimer = null;
 
-  function clearSilenceTimer() {
-    if (silenceTimer) {
-      clearTimeout(silenceTimer);
-      silenceTimer = null;
-    }
+  function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
+
+  function sendAudioToTwilio(audioBuffer) {
+    if (ws.readyState !== WebSocket.OPEN || !streamSid) return;
+    ws.send(JSON.stringify({
+      event: 'media',
+      streamSid: streamSid,
+      media: { payload: audioBuffer.toString('base64') }
+    }));
   }
 
-  function resetSilenceTimer() {
-    clearSilenceTimer();
-    silenceTimer = setTimeout(async () => {
-      if (transcript && transcript.trim() && sessionState === 'LISTENING' && !processing && !isPlayingRef.value) {
-        const sttMs = utteranceStartTime ? Date.now() - utteranceStartTime : null;
-        utteranceStartTime = null;
-        const toProcess = transcript;
-        transcript = '';
-        await handleTranscript(toProcess, sttMs);
-      }
-    }, SILENCE_MS);
-  }
-
-  async function playMulawResponse(cacheKey, text) {
-    if (!streamSid) return;
-    try {
-      const mulaw = await resolveMulawAudio(cacheKey, text);
-      if (mulaw) await sendMulawToTwilio(ws, streamSid, mulaw, isPlayingRef);
+  async function speakText(text, cacheKey) {
+  try {
+    let mp3Buffer;
+    // Twilio için her zaman ElevenLabs'tan canlı üret — cache mulaw dönüşümünde sorun çıkarıyor
+    mp3Buffer = await synthesizeSpeech(text);
+    console.log('[Twilio TTS] Generated fresh audio, bytes:', mp3Buffer.length);
+      const mulawBuffer = await mp3ToMulaw(mp3Buffer);
+      sendAudioToTwilio(mulawBuffer);
     } catch (e) {
       console.error('[Twilio TTS Error]', e.message);
     }
   }
 
-  async function handleTranscript(finalTranscript, sttMs) {
-    if (!finalTranscript || !finalTranscript.trim() || processing || isPlayingRef.value) return;
-    processing = true;
-    console.log(`[Twilio Transcript] ${finalTranscript} | STT: ${sttMs}ms`);
+  async function handleTwilioTranscript(finalTranscript) {
+    if (!finalTranscript || finalTranscript.trim() === '') return;
+    console.log('[Twilio Transcript]', finalTranscript);
     sessionState = 'PROCESSING';
-
     try {
-      let result = null;
-      const llmStart = Date.now();
-      for await (const parsed of streamClassifyIntent(finalTranscript, selectedModel)) {
-        result = parsed;
+      let result = await classifyIntent(finalTranscript, 'claude-haiku-4-5');
+      if (result.confidence < 0.45) {
+        result.intent = 'UNRECOGNISED'; result.resolved = false; result.escalate = false;
+        result.response = "I'm sorry, I didn't catch that. Are you safe, need more time, or need a human agent?";
       }
-      const llmMs = Date.now() - llmStart;
-      result = applyConfidenceGating(result);
-      console.log(`[Twilio Intent] ${result.intent} | conf: ${result.confidence} | LLM: ${llmMs}ms`);
-
+      result = applyDistressLogic(result);
+      console.log('[Twilio Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none');
       const cacheKey = INTENT_CACHE_MAP[result.intent];
-      await playMulawResponse(cacheKey, result.response);
-
+      await speakText(result.response, cacheKey);
       if (result.intent === 'UNRECOGNISED') {
         unrecognisedCount++;
         if (unrecognisedCount > 1) {
-          await playMulawResponse('escalate_max', "I'm unable to process your response. A human agent will follow up shortly.");
-          sessionState = 'ENDED';
-          processing = false;
-          return;
+          await speakText("I'm unable to process your response. A human agent will follow up shortly.", null);
+          sessionState = 'ENDED'; return;
         }
       }
-
       sessionState = (result.resolved || result.escalate) ? 'ENDED' : 'LISTENING';
     } catch (err) {
       console.error('[Twilio Error]', err.message);
       sessionState = 'LISTENING';
-    } finally {
-      processing = false;
     }
   }
 
-  function startDeepgramStream() {
+  function startTwilioDeepgram() {
     const dgApiKey = process.env.DEEPGRAM_API_KEY;
-    if (!dgApiKey || dgApiKey === 'your_deepgram_key') {
-      console.error('[Twilio Deepgram] API key not set');
-      return;
-    }
-
     const params = new URLSearchParams({
-      model: 'nova-3',
-      language: 'en-US',
-      encoding: 'mulaw',
-      sample_rate: '8000',
-      channels: '1',
-      punctuate: 'true',
-      smart_format: 'true',
-      interim_results: 'true',
-      utterance_end_ms: '1200',
-      vad_events: 'true',
+      model: 'nova-3', language: 'en-US', punctuate: 'true',
+      smart_format: 'true', interim_results: 'true',
+      utterance_end_ms: '1200', vad_events: 'true',
+      encoding: 'mulaw', sample_rate: '8000', channels: '1'
     });
-
-    const dgWsUrl = 'wss://api.deepgram.com/v1/listen?' + params.toString();
-    console.log('[Twilio Deepgram] Connecting (mulaw 8kHz)');
-    deepgramWs = new WebSocket(dgWsUrl, { headers: { Authorization: `Token ${dgApiKey}` } });
-
-    deepgramWs.on('open', () => {
-      console.log('[Twilio Deepgram] Connected');
-      if (audioBuffer.length > 0) {
-        deepgramWs.send(audioBuffer);
-        audioBuffer = Buffer.alloc(0);
-      }
+    deepgramWs = new WebSocket('wss://api.deepgram.com/v1/listen?' + params.toString() + '&keyterm=help&keyterm=SOS&keyterm=emergency&keyterm=hurt&keyterm=pain&keyterm=injured&keyterm=injury&keyterm=stuck&keyterm=trapped&keyterm=dizzy&keyterm=bleeding&keyterm=fallen&keyterm=fell&keyterm=scared&keyterm=afraid&keyterm=agent&keyterm=human&keyterm=danger&keyterm=accident', {
+      headers: { Authorization: 'Token ' + dgApiKey }
     });
-
-    deepgramWs.on('message', async (data) => {
+    deepgramWs.on('open', function() { console.log('[Twilio Deepgram] Connected'); });
+    deepgramWs.on('message', async function(data) {
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'SpeechStarted') utteranceStartTime = Date.now();
-
-        if (msg.type === 'Results' && msg.channel?.alternatives?.[0]) {
+        if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const text = msg.channel.alternatives[0].transcript;
-          if (text && text.trim()) {
-            if (!utteranceStartTime) utteranceStartTime = Date.now();
-            if (msg.is_final) transcript = text;
-
-            if (msg.is_final && msg.speech_final && sessionState === 'LISTENING' && !processing && !isPlayingRef.value) {
-              clearSilenceTimer();
-              const sttMs = utteranceStartTime ? Date.now() - utteranceStartTime : null;
-              utteranceStartTime = null;
-              const toProcess = transcript;
-              transcript = '';
-              await handleTranscript(toProcess, sttMs);
-            } else if (msg.is_final) {
-              resetSilenceTimer();
-            }
+          if (text && text.trim() && msg.is_final && msg.speech_final && sessionState === 'LISTENING') {
+            clearSilenceTimer();
+            await handleTwilioTranscript(text);
           }
         }
-
-        if (msg.type === 'UtteranceEnd' && transcript && sessionState === 'LISTENING' && !processing && !isPlayingRef.value) {
-          clearSilenceTimer();
-          const sttMs = utteranceStartTime ? Date.now() - utteranceStartTime : null;
-          utteranceStartTime = null;
-          const toProcess = transcript;
-          transcript = '';
-          await handleTranscript(toProcess, sttMs);
-        }
-      } catch (e) {
-        console.error('[Twilio Deepgram parse error]', e.message);
-      }
+      } catch (e) {}
     });
-
-    deepgramWs.on('error', (e) => console.error('[Twilio Deepgram] Error:', e.message));
-    deepgramWs.on('close', (code, reason) => console.log('[Twilio Deepgram] Closed', code, reason.toString()));
+    deepgramWs.on('error', function(e) { console.error('[Twilio Deepgram] Error:', e.message); });
+    deepgramWs.on('close', function() { console.log('[Twilio Deepgram] Closed'); });
   }
 
-  async function sendGreeting() {
-    if (!streamSid) {
-      console.error('[Twilio] sendGreeting aborted — streamSid not set');
-      return;
-    }
-    sessionState = 'GREETING';
-    console.log('[Twilio] Playing greeting');
+  ws.on('message', async function(data) {
     try {
-      await playMulawResponse('greeting', WORKER_INTRO);
-    } catch (e) {
-      console.error('[Twilio] Greeting failed:', e.message);
-    } finally {
-      sessionState = 'LISTENING';
-    }
-  }
-
-  ws.on('message', (data) => {
-    (async () => {
-      try {
-        const msg = JSON.parse(data.toString());
-
-        if (msg.event === 'connected') {
-          console.log('[Twilio WS] Protocol:', msg.protocol);
-        }
-
-        if (msg.event === 'start') {
-          streamSid = msg.start?.streamSid || msg.streamSid;
-          callSid = msg.start?.callSid || msg.callSid;
-          console.log(`[Twilio WS] Stream started — streamSid=${streamSid} callSid=${callSid}`);
-          if (!streamSid) {
-            console.error('[Twilio WS] start event missing streamSid:', JSON.stringify(msg));
-            return;
-          }
-          startDeepgramStream();
-          setTimeout(() => { sendGreeting().catch((e) => console.error('[Twilio] Greeting error:', e.message)); }, 300);
-        }
-
-        if (msg.event === 'media' && msg.media?.payload) {
-          if (msg.media.track && msg.media.track !== 'inbound') return;
-          if (isPlayingRef.value || processing || sessionState !== 'LISTENING') return;
-          const audio = Buffer.from(msg.media.payload, 'base64');
-          if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-            deepgramWs.send(audio);
-          } else {
-            audioBuffer = Buffer.concat([audioBuffer, audio]);
-          }
-        }
-
-        if (msg.event === 'mark') {
-          console.log('[Twilio WS] Mark received:', msg.mark?.name);
-        }
-
-        if (msg.event === 'stop') {
-          console.log(`[Twilio WS] Stream stopped — callSid=${callSid}`);
-          sessionState = 'ENDED';
-        }
-      } catch (e) {
-        console.error('[Twilio WS Message Error]', e.message);
+      const msg = JSON.parse(data.toString());
+      if (msg.event === 'connected') { console.log('[Twilio] Stream connected'); }
+      if (msg.event === 'start') {
+        streamSid = msg.start.streamSid;
+        console.log('[Twilio] Stream started | SID:', streamSid);
+        startTwilioDeepgram();
+        sessionState = 'GREETING';
+        setTimeout(async function() {
+          await speakText(WORKER_INTRO, 'greeting');
+          sessionState = 'LISTENING';
+        }, 1000);
       }
-    })().catch((e) => console.error('[Twilio WS Unhandled]', e.message));
+      if (msg.event === 'media' && deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+        deepgramWs.send(Buffer.from(msg.media.payload, 'base64'));
+      }
+      if (msg.event === 'stop') {
+        console.log('[Twilio] Stream stopped');
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
+        clearSilenceTimer();
+      }
+    } catch (e) { console.error('[Twilio WS Error]', e.message); }
   });
 
-  ws.on('error', (err) => console.error('[Twilio WS] Socket error:', err.message));
-
-  ws.on('close', () => {
+  ws.on('close', function() {
     console.log('[Twilio WS] Disconnected');
-    clearSilenceTimer();
     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
+    clearSilenceTimer();
   });
 });
 
-browserWss.on('connection', (ws) => {
+// ─── Browser WebSocket ───
+browserWss.on('connection', function(ws) {
   console.log('[WS] Client connected');
   let deepgramWs = null;
   let transcript = '';
@@ -582,58 +350,52 @@ browserWss.on('connection', (ws) => {
   const SILENCE_MS = 4000;
 
   function send(obj) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+  function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
 
   async function handleTranscript(finalTranscript, sttMs) {
     if (!finalTranscript || finalTranscript.trim() === '') return;
-    console.log(`[Transcript] ${finalTranscript} | STT: ${sttMs}ms`);
+    console.log('[Transcript]', finalTranscript, '| STT:', sttMs + 'ms');
     send({ type: 'transcript', text: finalTranscript });
     if (sttMs) send({ type: 'stt_latency', ms: sttMs });
-
     sessionState = 'PROCESSING';
     send({ type: 'stage', stage: 'llm', status: 'processing' });
     const llmStart = Date.now();
-
     try {
-      let result = null;
-      for await (const parsed of streamClassifyIntent(finalTranscript, selectedModel)) {
-        result = parsed;
-      }
+      let result = await classifyIntent(finalTranscript, selectedModel);
       const llmMs = Date.now() - llmStart;
-      result = applyConfidenceGating(result);
-
-      console.log(`[Intent] ${result.intent} | conf: ${result.confidence} | LLM: ${llmMs}ms`);
+      if (result.confidence < 0.45) {
+        result.intent = 'UNRECOGNISED'; result.resolved = false; result.escalate = false;
+        result.response = "I'm sorry, I didn't catch that clearly. Could you say if you're safe, need more time, or need a human agent?";
+      } else if (result.confidence < 0.85) {
+        result.low_confidence = true;
+      }
+      result = applyDistressLogic(result);
+      console.log('[Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none', '| LLM:', llmMs + 'ms');
       send({ type: 'intent', data: result });
+      if (result._usage) {
+        send({ type: 'token_usage', input: result._usage.input_tokens, output: result._usage.output_tokens, model: selectedModel });
+      }
       send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
-
       send({ type: 'stage', stage: 'tts', status: 'processing' });
       const ttsStart = Date.now();
-
       if (ttsMode === 'browser') {
         send({ type: 'stage', stage: 'tts', status: 'done', ms: 0 });
         send({ type: 'response', text: result.response, audio: null, resolved: result.resolved, escalate: result.escalate });
       } else {
         const cacheKey = INTENT_CACHE_MAP[result.intent];
         if (cacheKey && audioCache[cacheKey]) {
-          console.log(`[Cache] Hit: ${cacheKey}`);
-          const ttsMs = Date.now() - ttsStart;
-          send({ type: 'stage', stage: 'tts', status: 'done', ms: ttsMs });
+          console.log('[Cache] Hit:', cacheKey);
+          send({ type: 'stage', stage: 'tts', status: 'done', ms: Date.now() - ttsStart });
           send({ type: 'response', text: result.response, audio: audioCache[cacheKey], resolved: result.resolved, escalate: result.escalate });
         } else {
           const apiKey = process.env.ELEVENLABS_API_KEY;
           const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
-          let firstChunk = true;
-          let chunkIndex = 0;
-
+          let firstChunk = true; let chunkIndex = 0;
           try {
             send({ type: 'audio_stream_start', text: result.response, resolved: result.resolved, escalate: result.escalate });
             for await (const chunk of streamTTS(result.response, apiKey, voiceId)) {
-              if (firstChunk) {
-                const ttsMs = Date.now() - ttsStart;
-                send({ type: 'stage', stage: 'tts', status: 'done', ms: ttsMs });
-                console.log(`[TTS] First chunk: ${ttsMs}ms`);
-                firstChunk = false;
-              }
-              send({ type: 'audio_chunk', chunk, index: chunkIndex++ });
+              if (firstChunk) { send({ type: 'stage', stage: 'tts', status: 'done', ms: Date.now() - ttsStart }); firstChunk = false; }
+              send({ type: 'audio_chunk', chunk: chunk, index: chunkIndex++ });
             }
             send({ type: 'audio_stream_end' });
           } catch (e) {
@@ -643,13 +405,11 @@ browserWss.on('connection', (ws) => {
           }
         }
       }
-
       if (result.intent === 'UNRECOGNISED') {
         unrecognisedCount++;
         if (unrecognisedCount > 1) {
           send({ type: 'escalate', reason: 'max_unrecognised', message: "I'm unable to process your response. A human agent will follow up shortly." });
-          sessionState = 'ENDED';
-          return;
+          sessionState = 'ENDED'; return;
         }
       }
       sessionState = (result.resolved || result.escalate) ? 'ENDED' : 'LISTENING';
@@ -662,56 +422,38 @@ browserWss.on('connection', (ws) => {
 
   function startDeepgramStream() {
     const dgApiKey = process.env.DEEPGRAM_API_KEY;
-    if (!dgApiKey || dgApiKey === 'your_deepgram_key') {
-      send({ type: 'log', message: 'Deepgram API key not set — mock STT mode' });
-      return;
-    }
+    if (!dgApiKey || dgApiKey === 'your_deepgram_key') { send({ type: 'log', message: 'Deepgram API key not set — mock STT mode' }); return; }
     const isOgg = clientMimeType.includes('ogg');
     const params = new URLSearchParams({
-      model: 'nova-3',
-      language: 'en-US',
-      punctuate: 'true',
-      smart_format: 'true',
-      interim_results: 'true',
-      utterance_end_ms: '1200',
-      vad_events: 'true',
+      model: 'nova-3', language: 'en-US', punctuate: 'true',
+      smart_format: 'true', interim_results: 'true',
+      utterance_end_ms: '1200', vad_events: 'true'
     });
-    if (isOgg) {
-      params.set('encoding', 'opus');
-      params.set('container', 'ogg');
-    }
-    const dgWsUrl = 'wss://api.deepgram.com/v1/listen?' + params.toString();
-    console.log('[Deepgram] Connecting, mimeType:', clientMimeType);
-    deepgramWs = new WebSocket(dgWsUrl, { headers: { Authorization: `Token ${dgApiKey}` } });
-
-    deepgramWs.on('open', () => {
+    if (isOgg) { params.set('encoding', 'opus'); params.set('container', 'ogg'); }
+    deepgramWs = new WebSocket('wss://api.deepgram.com/v1/listen?' + params.toString() + '&keyterm=help&keyterm=SOS&keyterm=emergency&keyterm=hurt&keyterm=pain&keyterm=injured&keyterm=injury&keyterm=stuck&keyterm=trapped&keyterm=dizzy&keyterm=bleeding&keyterm=fallen&keyterm=fell&keyterm=scared&keyterm=afraid&keyterm=agent&keyterm=human&keyterm=danger&keyterm=accident', {
+      headers: { Authorization: 'Token ' + dgApiKey }
+    });
+    deepgramWs.on('open', function() {
       console.log('[Deepgram] Connected');
       send({ type: 'stage', stage: 'stt', status: 'connected' });
-      if (audioBuffer.length > 0) {
-        deepgramWs.send(audioBuffer);
-        audioBuffer = Buffer.alloc(0);
-      }
+      if (audioBuffer.length > 0) { deepgramWs.send(audioBuffer); audioBuffer = Buffer.alloc(0); }
     });
-
-    deepgramWs.on('message', async (data) => {
+    deepgramWs.on('message', async function(data) {
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'SpeechStarted') utteranceStartTime = Date.now();
-        if (msg.type === 'Results' && msg.channel?.alternatives?.[0]) {
+        if (msg.type === 'SpeechStarted') utteranceStartTime = null;
+        if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const text = msg.channel.alternatives[0].transcript;
           if (text && text.trim()) {
             if (!utteranceStartTime) utteranceStartTime = Date.now();
-            send({ type: 'interim_transcript', text, is_final: msg.is_final });
-            if (msg.is_final && msg.speech_final) {
+            send({ type: 'interim_transcript', text: text, is_final: msg.is_final });
+            if (msg.is_final && msg.speech_final && sessionState === 'LISTENING') {
+              clearSilenceTimer();
+              const sttMs = utteranceStartTime ? Date.now() - utteranceStartTime : null;
+              utteranceStartTime = null;
               transcript = text;
-              if (sessionState === 'LISTENING') {
-                clearSilenceTimer();
-                const sttMs = utteranceStartTime ? Date.now() - utteranceStartTime : null;
-                utteranceStartTime = null;
-                const toProcess = transcript;
-                transcript = '';
-                await handleTranscript(toProcess, sttMs);
-              }
+              const toProcess = transcript; transcript = '';
+              await handleTranscript(toProcess, sttMs);
             }
           }
         }
@@ -719,137 +461,80 @@ browserWss.on('connection', (ws) => {
           clearSilenceTimer();
           const sttMs = utteranceStartTime ? Date.now() - utteranceStartTime : null;
           utteranceStartTime = null;
-          const toProcess = transcript;
-          transcript = '';
+          const toProcess = transcript; transcript = '';
           await handleTranscript(toProcess, sttMs);
         }
       } catch (e) {}
     });
-
-    deepgramWs.on('error', (e) => {
-      console.error('[Deepgram] Error:', e.message);
-      send({ type: 'stage', stage: 'stt', status: 'error' });
-    });
-    deepgramWs.on('close', (code, reason) => {
-      console.log('[Deepgram] Closed', code, reason.toString());
-      send({ type: 'stage', stage: 'stt', status: 'disconnected' });
-    });
+    deepgramWs.on('error', function(e) { console.error('[Deepgram] Error:', e.message); send({ type: 'stage', stage: 'stt', status: 'error' }); });
+    deepgramWs.on('close', function(code, reason) { console.log('[Deepgram] Closed', code, reason.toString()); send({ type: 'stage', stage: 'stt', status: 'disconnected' }); });
   }
 
-  function resetSilenceTimer() {
-    clearSilenceTimer();
-    silenceTimer = setTimeout(async () => {
-      if (transcript && transcript.trim() && sessionState === 'LISTENING') {
-        const sttMs = utteranceStartTime ? Date.now() - utteranceStartTime : null;
-        utteranceStartTime = null;
-        const toProcess = transcript;
-        transcript = '';
-        await handleTranscript(toProcess, sttMs);
-      }
-    }, SILENCE_MS);
-  }
+  ws.on('error', function(e) { console.error('[WS Error]', e.message); });
 
-  function clearSilenceTimer() {
-    if (silenceTimer) {
-      clearTimeout(silenceTimer);
-      silenceTimer = null;
-    }
-  }
-
-  ws.on('message', async (data) => {
+  ws.on('message', async function(data) {
     try {
       if (typeof data === 'string' || (data instanceof Buffer && data[0] === 0x7b)) {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'mime_type') {
-          clientMimeType = msg.mimeType;
-          console.log('[Client] mimeType:', clientMimeType);
-        }
-        if (msg.type === 'set_model') {
-          selectedModel = msg.model;
-          console.log('[Model] Selected:', selectedModel);
-        }
-        if (msg.type === 'tts_mode') {
-          ttsMode = msg.mode;
-          console.log('[TTS] Mode:', ttsMode);
-        }
+        if (msg.type === 'mime_type') { clientMimeType = msg.mimeType; }
+        if (msg.type === 'set_model') { selectedModel = msg.model; console.log('[Model]', selectedModel); }
+        if (msg.type === 'tts_mode') { ttsMode = msg.mode; }
         if (msg.type === 'start') {
           send({ type: 'log', message: 'Session started — Missed Check-In alert for Industrial Worker' });
-          send({ type: 'stage', stage: 'stt', status: 'connecting' });
-          startDeepgramStream();
           sessionState = 'GREETING';
-          setTimeout(async () => {
-            send({ type: 'stage', stage: 'tts', status: 'processing' });
-            let introAudio = null;
-            if (ttsMode === 'elevenlabs') {
-              introAudio = audioCache.greeting || null;
-              if (introAudio) console.log('[Cache] Using cached greeting');
-              else {
-                try {
-                  const apiKey = process.env.ELEVENLABS_API_KEY;
-                  const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
-                  const chunks = [];
-                  for await (const chunk of streamTTS(WORKER_INTRO, apiKey, voiceId)) chunks.push(chunk);
-                  introAudio = chunks.join('');
-                } catch (e) {
-                  console.error('[TTS Error]', e.message);
-                }
-              }
+          send({ type: 'stage', stage: 'stt', status: 'connecting' });
+          send({ type: 'stage', stage: 'tts', status: 'processing' });
+          startDeepgramStream();
+          let introAudio = null;
+          if (ttsMode === 'elevenlabs') {
+            if (audioCache['greeting']) {
+              console.log('[Cache] Using cached greeting');
+              introAudio = audioCache['greeting'];
+            } else {
+              try {
+                const apiKey = process.env.ELEVENLABS_API_KEY;
+                const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+                const chunks = [];
+                for await (const chunk of streamTTS(WORKER_INTRO, apiKey, voiceId)) chunks.push(chunk);
+                introAudio = chunks.join('');
+              } catch (e) { console.error('[Greeting TTS Error]', e.message); }
             }
-            send({ type: 'stage', stage: 'tts', status: 'done' });
-            send({ type: 'greeting', text: WORKER_INTRO, audio: introAudio });
-            sessionState = 'LISTENING';
-          }, 500);
+          }
+          send({ type: 'stage', stage: 'tts', status: 'done' });
+          send({ type: 'greeting', text: WORKER_INTRO, audio: introAudio });
+          sessionState = 'LISTENING';
         }
         if (msg.type === 'mock_transcript' && sessionState === 'LISTENING') await handleTranscript(msg.text, null);
         if (msg.type === 'stop') {
           if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
-          clearSilenceTimer();
-          sessionState = 'ENDED';
+          clearSilenceTimer(); sessionState = 'ENDED';
         }
       } else {
         if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.send(data);
         else audioBuffer = Buffer.concat([audioBuffer, data]);
       }
-    } catch (e) {
-      console.error('[WS Message Error]', e.message);
-    }
+    } catch (e) { console.error('[WS Message Error]', e.message, e.stack); }
   });
 
-  ws.on('close', () => {
+  ws.on('close', function() {
     console.log('[WS] Client disconnected');
     clearSilenceTimer();
     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
   });
 });
 
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    ffmpeg: fs.existsSync('/usr/bin/ffmpeg'),
-    mulaw_cache: Object.keys(mulawCache),
-    apis: {
-      deepgram: !!process.env.DEEPGRAM_API_KEY && process.env.DEEPGRAM_API_KEY !== 'your_deepgram_key',
-      anthropic: !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_anthropic_key',
-      elevenlabs: !!process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_API_KEY !== 'your_elevenlabs_key',
-      twilio: !!process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_ACCOUNT_SID !== 'your_twilio_sid',
-    },
-    twilio_stream_url: process.env.PUBLIC_URL
-      ? `${process.env.PUBLIC_URL.replace(/^http/, 'ws').replace(/^https/, 'wss')}/twilio`
-      : null,
-  });
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('[Unhandled Rejection]', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('[Uncaught Exception]', err.message);
+app.get('/health', function(req, res) {
+  res.json({ status: 'ok', ngrok: PUBLIC_URL, twilio_ws: PUBLIC_URL.replace('https://', 'wss://') + '/twilio', apis: {
+    deepgram: !!process.env.DEEPGRAM_API_KEY && process.env.DEEPGRAM_API_KEY !== 'your_deepgram_key',
+    anthropic: !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_anthropic_key',
+    elevenlabs: !!process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_API_KEY !== 'your_elevenlabs_key'
+  }});
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`\n🎙️  Voice AI Demo running at http://localhost:${PORT}`);
-  console.log('Cascaded Pipeline: Deepgram Nova-3 → Claude → ElevenLabs (streaming)');
-  console.log(`Twilio Media Stream: ws://localhost:${PORT}/twilio`);
-  console.log(`Twilio Webhook:      http://localhost:${PORT}/incoming-call\n`);
+server.listen(PORT, function() {
+  console.log('\n🎙️  Voice AI Demo: http://localhost:' + PORT);
+  console.log('📞  Twilio webhook: ' + PUBLIC_URL + '/incoming-call');
+  console.log('🔌  Twilio WS path: ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio');
+  console.log('Cascaded Pipeline: Deepgram Nova-3 -> Claude -> ElevenLabs\n');
 });
