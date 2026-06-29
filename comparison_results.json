@@ -1,0 +1,623 @@
+{
+  "timestamp": "2026-06-26T08:57:41.327Z",
+  "runs_per_transcript": 3,
+  "models": [
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6"
+  ],
+  "transcripts": 22,
+  "results": [
+    {
+      "transcript": "I'm fine",
+      "category": "Net - Safe",
+      "expected": "SAFE_CONFIRMATION",
+      "models": {
+        "Haiku": {
+          "avgLatency": 984,
+          "avgInput": 390,
+          "avgOutput": 93,
+          "cost": 0.0006839999999999999,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.95,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 1713,
+          "avgInput": 391,
+          "avgOutput": 75,
+          "cost": 0.0022979999999999997,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.95,
+          "distress": null,
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "Yes",
+      "category": "Net - Safe (kısa)",
+      "expected": "SAFE_CONFIRMATION",
+      "models": {
+        "Haiku": {
+          "avgLatency": 989,
+          "avgInput": 388,
+          "avgOutput": 93,
+          "cost": 0.0006824,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.95,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 1975,
+          "avgInput": 389,
+          "avgOutput": 66,
+          "cost": 0.002157,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.95,
+          "distress": null,
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I need a human agent please",
+      "category": "Net - Human",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1032,
+          "avgInput": 393,
+          "avgOutput": 104,
+          "cost": 0.0007304,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.99,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2111,
+          "avgInput": 394,
+          "avgOutput": 104,
+          "cost": 0.0027419999999999996,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.99,
+          "distress": null,
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "Running late, give me 15 minutes",
+      "category": "Net - Delayed",
+      "expected": "DELAYED_CHECKIN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1014,
+          "avgInput": 396,
+          "avgOutput": 105,
+          "cost": 0.0007368,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.98,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 1891,
+          "avgInput": 397,
+          "avgOutput": 86,
+          "cost": 0.002481,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.97,
+          "distress": null,
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I'm fine I'm safe. I broke my leg and it hurts too much I'm not good I'm okay",
+      "category": "Çelişkili - Kritik",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2644,
+          "avgInput": 411,
+          "avgOutput": 200,
+          "cost": 0.0011288000000000001,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.85,
+          "distress": "high",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 4721,
+          "avgInput": 412,
+          "avgOutput": 174,
+          "cost": 0.0038459999999999996,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.95,
+          "distress": "high",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I'm fine but I need help",
+      "category": "Çelişkili - Basit",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1525,
+          "avgInput": 394,
+          "avgOutput": 132,
+          "cost": 0.0008432000000000001,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.92,
+          "distress": "medium",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 3102,
+          "avgInput": 395,
+          "avgOutput": 143,
+          "cost": 0.0033300000000000005,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.85,
+          "distress": "medium",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "Yes I'm okay but something feels wrong",
+      "category": "Çelişkili - Belirsiz",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2197,
+          "avgInput": 395,
+          "avgOutput": 168,
+          "cost": 0.000988,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.85,
+          "distress": "medium",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 3618,
+          "avgInput": 396,
+          "avgOutput": 155,
+          "cost": 0.0035129999999999996,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.62,
+          "distress": "medium",
+          "correct": false
+        }
+      }
+    },
+    {
+      "transcript": "All good, actually wait no I'm not okay",
+      "category": "Çelişkili - Geri Alma",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1536,
+          "avgInput": 397,
+          "avgOutput": 133,
+          "cost": 0.0008496,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.92,
+          "distress": "high",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 3066,
+          "avgInput": 398,
+          "avgOutput": 142,
+          "cost": 0.003324,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.97,
+          "distress": "high",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I think I'm fine but I'm a bit worried",
+      "category": "Çelişkili - Tereddütlü",
+      "expected": "UNRECOGNISED",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2845,
+          "avgInput": 398,
+          "avgOutput": 170,
+          "cost": 0.0009984,
+          "intent": "UNRECOGNISED",
+          "confidence": 0.55,
+          "distress": "low",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2831,
+          "avgInput": 399,
+          "avgOutput": 130,
+          "cost": 0.0031469999999999996,
+          "intent": "UNRECOGNISED",
+          "confidence": 0.45,
+          "distress": "low",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I broke my leg I need help",
+      "category": "Distress - Yaralanma",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1554,
+          "avgInput": 394,
+          "avgOutput": 118,
+          "cost": 0.0007872,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.98,
+          "distress": "high",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2701,
+          "avgInput": 395,
+          "avgOutput": 128,
+          "cost": 0.003105,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.99,
+          "distress": "high",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I'm stuck and a bit scared",
+      "category": "Distress - Medium",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1443,
+          "avgInput": 394,
+          "avgOutput": 131,
+          "cost": 0.0008392,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.92,
+          "distress": "medium",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2748,
+          "avgInput": 395,
+          "avgOutput": 136,
+          "cost": 0.0032250000000000004,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.92,
+          "distress": "high",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "SOS help me please",
+      "category": "Distress - Emergency",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1577,
+          "avgInput": 392,
+          "avgOutput": 118,
+          "cost": 0.0007856,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.99,
+          "distress": "high",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2974,
+          "avgInput": 393,
+          "avgOutput": 132,
+          "cost": 0.003159,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.99,
+          "distress": "high",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I'm okay just a little dizzy and my head hurts",
+      "category": "Distress - Subtle",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1867,
+          "avgInput": 400,
+          "avgOutput": 159,
+          "cost": 0.000956,
+          "intent": "REQUEST_HUMAN",
+          "confidence": 0.92,
+          "distress": "medium",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 4824,
+          "avgInput": 401,
+          "avgOutput": 186,
+          "cost": 0.003993,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.72,
+          "distress": "medium",
+          "correct": false
+        }
+      }
+    },
+    {
+      "transcript": "Everything is fine I just fell down but I'm okay I promise",
+      "category": "Distress - Minimize Eden",
+      "expected": "REQUEST_HUMAN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2579,
+          "avgInput": 400,
+          "avgOutput": 200,
+          "cost": 0.0011200000000000001,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.72,
+          "distress": "medium",
+          "correct": false
+        },
+        "Sonnet": {
+          "avgLatency": 4066,
+          "avgInput": 401,
+          "avgOutput": 163,
+          "cost": 0.003648,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.82,
+          "distress": "low",
+          "correct": false
+        }
+      }
+    },
+    {
+      "transcript": "almost done just a bit more time",
+      "category": "Belirsiz - Delayed",
+      "expected": "DELAYED_CHECKIN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1018,
+          "avgInput": 394,
+          "avgOutput": 105,
+          "cost": 0.0007352000000000001,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.92,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 1966,
+          "avgInput": 395,
+          "avgOutput": 105,
+          "cost": 0.0027600000000000003,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.92,
+          "distress": null,
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "Give me like maybe 10 or 15 minutes I think",
+      "category": "Delayed - Belirsiz Süre",
+      "expected": "DELAYED_CHECKIN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2141,
+          "avgInput": 401,
+          "avgOutput": 105,
+          "cost": 0.0007408,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.92,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2059,
+          "avgInput": 402,
+          "avgOutput": 105,
+          "cost": 0.002781,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.82,
+          "distress": null,
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I'm running behind but should be done soon",
+      "category": "Delayed - Belirsiz",
+      "expected": "DELAYED_CHECKIN",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1078,
+          "avgInput": 396,
+          "avgOutput": 105,
+          "cost": 0.0007368,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.92,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2032,
+          "avgInput": 397,
+          "avgOutput": 105,
+          "cost": 0.0027660000000000002,
+          "intent": "DELAYED_CHECKIN",
+          "confidence": 0.85,
+          "distress": null,
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "fi... oka... fine",
+      "category": "Gürültülü - Bozuk",
+      "expected": "SAFE_CONFIRMATION",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2744,
+          "avgInput": 393,
+          "avgOutput": 193,
+          "cost": 0.0010864,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.75,
+          "distress": "low",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 3170,
+          "avgInput": 394,
+          "avgOutput": 129,
+          "cost": 0.003117,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.72,
+          "distress": "low",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I'm fi-- yes I'm good --static-- okay",
+      "category": "Gürültülü - Karışık",
+      "expected": "SAFE_CONFIRMATION",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2539,
+          "avgInput": 399,
+          "avgOutput": 200,
+          "cost": 0.0011192,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.85,
+          "distress": "low",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 4260,
+          "avgInput": 400,
+          "avgOutput": 134,
+          "cost": 0.00321,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.82,
+          "distress": "low",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "eeee sanırım iyiyim",
+      "category": "Belirsiz - Türkçe",
+      "expected": "UNRECOGNISED",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2140,
+          "avgInput": 397,
+          "avgOutput": 200,
+          "cost": 0.0011176,
+          "intent": "UNRECOGNISED",
+          "confidence": 0.45,
+          "distress": null,
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 3542,
+          "avgInput": 398,
+          "avgOutput": 160,
+          "cost": 0.0035940000000000004,
+          "intent": "UNRECOGNISED",
+          "confidence": 0.45,
+          "distress": "low",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "I think I'm okay maybe",
+      "category": "Belirsiz - Tereddütlü",
+      "expected": "UNRECOGNISED",
+      "models": {
+        "Haiku": {
+          "avgLatency": 2009,
+          "avgInput": 393,
+          "avgOutput": 174,
+          "cost": 0.0010104,
+          "intent": "UNRECOGNISED",
+          "confidence": 0.55,
+          "distress": "low",
+          "correct": true
+        },
+        "Sonnet": {
+          "avgLatency": 2893,
+          "avgInput": 394,
+          "avgOutput": 135,
+          "cost": 0.0032069999999999998,
+          "intent": "UNRECOGNISED",
+          "confidence": 0.45,
+          "distress": "low",
+          "correct": true
+        }
+      }
+    },
+    {
+      "transcript": "ye",
+      "category": "Çok Kısa",
+      "expected": "UNRECOGNISED",
+      "models": {
+        "Haiku": {
+          "avgLatency": 1261,
+          "avgInput": 388,
+          "avgOutput": 93,
+          "cost": 0.0006824,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.85,
+          "distress": null,
+          "correct": false
+        },
+        "Sonnet": {
+          "avgLatency": 1681,
+          "avgInput": 389,
+          "avgOutput": 66,
+          "cost": 0.002157,
+          "intent": "SAFE_CONFIRMATION",
+          "confidence": 0.92,
+          "distress": null,
+          "correct": false
+        }
+      }
+    }
+  ],
+  "summary": {
+    "haiku": {
+      "correct": 20,
+      "total": 22,
+      "accuracy": 91,
+      "avgLatency": 1760,
+      "avgTokens": 536,
+      "totalCost": 0.019358399999999998
+    },
+    "sonnet": {
+      "correct": 18,
+      "total": 22,
+      "accuracy": 82,
+      "avgLatency": 2907,
+      "avgTokens": 522,
+      "totalCost": 0.06756
+    }
+  }
+}
