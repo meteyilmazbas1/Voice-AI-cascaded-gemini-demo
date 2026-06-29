@@ -50,7 +50,7 @@ function mp3BufferToMulaw(mp3Buffer) {
     const stderr = [];
     const ffmpeg = spawn('ffmpeg', [
       '-hide_banner', '-loglevel', 'error',
-      '-i', 'pipe:0',
+      '-f', 'mp3', '-i', 'pipe:0',
       '-ar', '8000',
       '-ac', '1',
       '-f', 'mulaw',
@@ -216,7 +216,8 @@ function applyConfidenceGating(result) {
 function getTwilioStreamUrl(req) {
   if (process.env.PUBLIC_URL) {
     const base = process.env.PUBLIC_URL.replace(/\/$/, '');
-    const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+    // Twilio requires secure WebSocket (wss) for Media Streams in production
+    const wsBase = base.replace(/^http:\/\//i, 'wss://').replace(/^https:\/\//i, 'wss://');
     return `${wsBase}/twilio`;
   }
   const host = req.headers['x-forwarded-host'] || req.headers.host;
@@ -235,9 +236,18 @@ function twimlConnectStream(streamUrl) {
 }
 
 function handleIncomingCall(req, res) {
-  const streamUrl = getTwilioStreamUrl(req);
-  console.log(`[Twilio] Incoming call — stream URL: ${streamUrl}`);
-  res.type('text/xml').send(twimlConnectStream(streamUrl));
+  try {
+    const streamUrl = getTwilioStreamUrl(req);
+    if (!streamUrl.startsWith('wss://')) {
+      console.warn(`[Twilio] WARNING: stream URL is not wss:// — Twilio may reject: ${streamUrl}`);
+    }
+    console.log(`[Twilio] Incoming call — stream URL: ${streamUrl}`);
+    res.type('text/xml').send(twimlConnectStream(streamUrl));
+  } catch (err) {
+    console.error('[Twilio] TwiML error:', err.message);
+    res.type('text/xml').status(500).send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response><Say>An error occurred. Please try again later.</Say></Response>`);
+  }
 }
 
 app.post('/incoming-call', handleIncomingCall);
@@ -246,37 +256,64 @@ app.get('/incoming-call', handleIncomingCall);
 app.get('/twilio/voice', handleIncomingCall);
 
 server.on('upgrade', (request, socket, head) => {
-  const { pathname } = new URL(request.url, `http://${request.headers.host}`);
-  if (pathname === '/twilio') {
-    twilioWss.handleUpgrade(request, socket, head, (ws) => {
-      twilioWss.emit('connection', ws, request);
+  try {
+    const host = request.headers.host || 'localhost';
+    const { pathname } = new URL(request.url, `http://${host}`);
+    if (pathname === '/twilio') {
+      console.log('[Twilio WS] Upgrade request for /twilio');
+      twilioWss.handleUpgrade(request, socket, head, (ws) => {
+        twilioWss.emit('connection', ws, request);
+      });
+      return;
+    }
+    browserWss.handleUpgrade(request, socket, head, (ws) => {
+      browserWss.emit('connection', ws, request);
     });
-    return;
+  } catch (err) {
+    console.error('[WS Upgrade Error]', err.message);
+    socket.destroy();
   }
-  browserWss.handleUpgrade(request, socket, head, (ws) => {
-    browserWss.emit('connection', ws, request);
-  });
 });
 
 async function sendMulawToTwilio(ws, streamSid, mulawBuffer, isPlayingRef) {
-  if (!mulawBuffer || mulawBuffer.length === 0) return;
+  if (!streamSid || !mulawBuffer || mulawBuffer.length === 0) {
+    console.warn('[Twilio] sendMulawToTwilio skipped — missing streamSid or audio');
+    return;
+  }
+  if (ws.readyState !== WebSocket.OPEN) {
+    console.warn('[Twilio] WebSocket not open — cannot send audio');
+    return;
+  }
+
   isPlayingRef.value = true;
+  const markName = `done-${Date.now()}`;
 
   ws.send(JSON.stringify({ event: 'clear', streamSid }));
 
+  let chunkNum = 0;
   for (let i = 0; i < mulawBuffer.length; i += TWILIO_CHUNK_BYTES) {
     if (ws.readyState !== WebSocket.OPEN) break;
     const chunk = mulawBuffer.slice(i, i + TWILIO_CHUNK_BYTES);
+    chunkNum++;
     ws.send(JSON.stringify({
       event: 'media',
       streamSid,
-      media: { payload: chunk.toString('base64') }
+      media: {
+        track: 'outbound',
+        chunk: String(chunkNum),
+        timestamp: String(Math.floor((i / 8000) * 1000)),
+        payload: chunk.toString('base64'),
+      },
     }));
     await new Promise((r) => setTimeout(r, TWILIO_CHUNK_MS));
   }
 
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ event: 'mark', streamSid, mark: { name: markName } }));
+  }
+
   const durationMs = Math.ceil(mulawBuffer.length / 8000 * 1000);
-  await new Promise((r) => setTimeout(r, durationMs + 100));
+  await new Promise((r) => setTimeout(r, durationMs + 200));
   isPlayingRef.value = false;
 }
 
@@ -460,46 +497,68 @@ twilioWss.on('connection', (ws) => {
   }
 
   async function sendGreeting() {
+    if (!streamSid) {
+      console.error('[Twilio] sendGreeting aborted — streamSid not set');
+      return;
+    }
     sessionState = 'GREETING';
     console.log('[Twilio] Playing greeting');
-    await playMulawResponse('greeting', WORKER_INTRO);
-    sessionState = 'LISTENING';
+    try {
+      await playMulawResponse('greeting', WORKER_INTRO);
+    } catch (e) {
+      console.error('[Twilio] Greeting failed:', e.message);
+    } finally {
+      sessionState = 'LISTENING';
+    }
   }
 
-  ws.on('message', async (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (msg.event === 'connected') {
-        console.log('[Twilio WS] Protocol:', msg.protocol);
-      }
+  ws.on('message', (data) => {
+    (async () => {
+      try {
+        const msg = JSON.parse(data.toString());
 
-      if (msg.event === 'start') {
-        streamSid = msg.start?.streamSid;
-        callSid = msg.start?.callSid;
-        console.log(`[Twilio WS] Stream started — streamSid=${streamSid} callSid=${callSid}`);
-        startDeepgramStream();
-        setTimeout(sendGreeting, 300);
-      }
-
-      if (msg.event === 'media' && msg.media?.payload) {
-        if (msg.media.track && msg.media.track !== 'inbound') return;
-        if (isPlayingRef.value || processing || sessionState !== 'LISTENING') return;
-        const audio = Buffer.from(msg.media.payload, 'base64');
-        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-          deepgramWs.send(audio);
-        } else {
-          audioBuffer = Buffer.concat([audioBuffer, audio]);
+        if (msg.event === 'connected') {
+          console.log('[Twilio WS] Protocol:', msg.protocol);
         }
-      }
 
-      if (msg.event === 'stop') {
-        console.log(`[Twilio WS] Stream stopped — callSid=${callSid}`);
-        sessionState = 'ENDED';
+        if (msg.event === 'start') {
+          streamSid = msg.start?.streamSid || msg.streamSid;
+          callSid = msg.start?.callSid || msg.callSid;
+          console.log(`[Twilio WS] Stream started — streamSid=${streamSid} callSid=${callSid}`);
+          if (!streamSid) {
+            console.error('[Twilio WS] start event missing streamSid:', JSON.stringify(msg));
+            return;
+          }
+          startDeepgramStream();
+          setTimeout(() => { sendGreeting().catch((e) => console.error('[Twilio] Greeting error:', e.message)); }, 300);
+        }
+
+        if (msg.event === 'media' && msg.media?.payload) {
+          if (msg.media.track && msg.media.track !== 'inbound') return;
+          if (isPlayingRef.value || processing || sessionState !== 'LISTENING') return;
+          const audio = Buffer.from(msg.media.payload, 'base64');
+          if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+            deepgramWs.send(audio);
+          } else {
+            audioBuffer = Buffer.concat([audioBuffer, audio]);
+          }
+        }
+
+        if (msg.event === 'mark') {
+          console.log('[Twilio WS] Mark received:', msg.mark?.name);
+        }
+
+        if (msg.event === 'stop') {
+          console.log(`[Twilio WS] Stream stopped — callSid=${callSid}`);
+          sessionState = 'ENDED';
+        }
+      } catch (e) {
+        console.error('[Twilio WS Message Error]', e.message);
       }
-    } catch (e) {
-      console.error('[Twilio WS Message Error]', e.message);
-    }
+    })().catch((e) => console.error('[Twilio WS Unhandled]', e.message));
   });
+
+  ws.on('error', (err) => console.error('[Twilio WS] Socket error:', err.message));
 
   ws.on('close', () => {
     console.log('[Twilio WS] Disconnected');
@@ -778,6 +837,13 @@ app.get('/health', (req, res) => {
       ? `${process.env.PUBLIC_URL.replace(/^http/, 'ws').replace(/^https/, 'wss')}/twilio`
       : null,
   });
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Unhandled Rejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]', err.message);
 });
 
 const PORT = process.env.PORT || 3000;
