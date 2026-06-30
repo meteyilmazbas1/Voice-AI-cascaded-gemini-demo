@@ -84,6 +84,11 @@
   .conf-warning.show { display: block; }
   .conf-warning.low { background: rgba(248,81,73,0.1); color: var(--danger); border: 1px solid rgba(248,81,73,0.25); }
   .conf-warning.medium { background: rgba(227,179,65,0.1); color: var(--warn); border: 1px solid rgba(227,179,65,0.25); }
+  .distress-card { border-radius: 8px; padding: 8px 12px; margin-top: 8px; display: none; font-size: 12px; }
+  .distress-card.show { display: block; }
+  .distress-card.low { background: rgba(227,179,65,0.08); border: 1px solid rgba(227,179,65,0.2); color: var(--warn); }
+  .distress-card.medium { background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.2); color: var(--danger); }
+  .distress-card.high { background: rgba(248,81,73,0.15); border: 1px solid rgba(248,81,73,0.4); color: var(--danger); font-weight: 600; }
   .intent-response { font-size: 13px; line-height: 1.6; color: var(--text); background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-top: 10px; font-style: italic; }
   .sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); }
   .tab { flex: 1; padding: 10px; text-align: center; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
@@ -115,7 +120,28 @@
   .tts-mode-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .tts-mode-badge.elevenlabs { background: rgba(227,179,65,0.1); color: var(--warn); border: 1px solid rgba(227,179,65,0.25); }
   .tts-mode-badge.browser { background: rgba(88,166,255,0.1); color: var(--info); border: 1px solid rgba(88,166,255,0.25); }
+  .audio-quality-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .quality-btn { padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); font-size: 11px; cursor: pointer; transition: all 0.15s; }
+  .quality-btn:hover { border-color: var(--muted); color: var(--text); }
+  .quality-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(29,158,117,0.1); }
   audio { display: none; }
+  .pipeline-toggle { display: flex; align-items: center; gap: 0; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+  .pipeline-btn { flex: 1; padding: 10px 16px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--muted); }
+  .pipeline-btn.active { background: var(--accent); color: white; }
+  .pipeline-btn.active.gemini { background: #4285f4; }
+  .pipeline-label { font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .token-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .token-title { font-size: 12px; color: var(--muted); margin-bottom: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
+  .token-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .token-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+  .token-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .token-value { font-size: 18px; font-weight: 700; color: var(--text); }
+  .token-value.input { color: var(--pipeline-stt); }
+  .token-value.output { color: var(--pipeline-llm); }
+  .token-value.total { color: var(--warn); }
+  .token-value.cost { color: var(--pipeline-tts); }
+  .token-history { font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
+  .token-row { display: flex; justify-content: space-between; padding: 2px 0; }
 </style>
 </head>
 <body>
@@ -143,6 +169,17 @@
       </div>
     </div>
 
+    <div style="margin-bottom: 4px;">
+      <div class="pipeline-label">Pipeline Modu</div>
+      <div class="pipeline-toggle">
+        <button class="pipeline-btn active" id="btn-cascaded" onclick="switchPipeline('cascaded')">
+          🔗 Cascaded Pipeline<br><span style="font-weight:400;font-size:10px">Deepgram · Claude · ElevenLabs</span>
+        </button>
+        <button class="pipeline-btn gemini" id="btn-gemini" onclick="switchPipeline('gemini')">
+          🤖 Gemini Live<br><span style="font-weight:400;font-size:10px">End-to-End · Google</span>
+        </button>
+      </div>
+    </div>
     <div class="pipeline-card">
       <div class="pipeline-title">Cascaded Pipeline</div>
       <div class="pipeline-stages">
@@ -199,17 +236,59 @@
           <span id="micLabel">Not recording</span>
         </div>
       </div>
-      <div class="mock-title">Quick test responses (no mic needed):</div>
+      <div class="audio-quality-row">
+        <span class="model-label">Ses Kalitesi:</span>
+        <button class="quality-btn active" id="q-high" onclick="setAudioQuality('high')">🎤 Normal (Browser)</button>
+        <button class="quality-btn" id="q-low" onclick="setAudioQuality('low')">📞 Twilio Sim (8kHz)</button>
+        <button class="quality-btn" id="q-noisy" onclick="setAudioQuality('noisy')">🏭 Gürültülü (8kHz)</button>
+      </div>
+      <div class="mock-title">Hızlı test senaryoları (mikrofon gerekmez):</div>
       <div class="mock-buttons">
-        <button class="mock-btn" onclick="sendMock('I am fine')">I'm fine</button>
-        <button class="mock-btn" onclick="sendMock('All good here')">All good</button>
-        <button class="mock-btn" onclick="sendMock('Running late, give me 15 minutes')">Running late — 15 min</button>
-        <button class="mock-btn" onclick="sendMock('I need a human agent please')">Need human agent</button>
-        <button class="mock-btn" onclick="sendMock('Reset my check-in')">Reset check-in</button>
-        <button class="mock-btn" onclick="sendMock('blah blah something unclear xyzzy')">Unclear response</button>
+        <button class="mock-btn" onclick="sendMock('I am fine')">✅ I'm fine</button>
+        <button class="mock-btn" onclick="sendMock('All good here')">✅ All good</button>
+        <button class="mock-btn" onclick="sendMock('Running late, give me 15 minutes')">⏱ Running late 15 min</button>
+        <button class="mock-btn" onclick="sendMock('I need a human agent please')">👤 Need human agent</button>
+        <button class="mock-btn" onclick="sendMock('Reset my check-in')">🔄 Reset check-in</button>
+        <button class="mock-btn" onclick="sendMock('blah blah something unclear xyzzy')">❓ Unclear response</button>
+        <button class="mock-btn" onclick="sendMock('eeee şey... iyiyim sanırım')">🔇 Belirsiz (Türkçe karışık)</button>
+        <button class="mock-btn" onclick="sendMock('ye')">🔇 Çok kısa (ye)</button>
+        <button class="mock-btn" onclick="sendMock('I am fine ya')">🌐 Karışık dil</button>
+        <button class="mock-btn" onclick="sendMock('HELP ME PLEASE SOS')">🆘 SOS / Yardım</button>
       </div>
     </div>
 
+    <div class="token-card" id="tokenCard" style="display:none">
+      <div class="token-title">Token Kullanımı</div>
+      <div class="token-grid">
+        <div class="token-item">
+          <div class="token-label">Input (sistem + transcript)</div>
+          <div class="token-value input" id="tokenInput">—</div>
+        </div>
+        <div class="token-item">
+          <div class="token-label">Output (JSON cevap)</div>
+          <div class="token-value output" id="tokenOutput">—</div>
+        </div>
+        <div class="token-item">
+          <div class="token-label">Bu turda toplam</div>
+          <div class="token-value total" id="tokenTotal">—</div>
+        </div>
+        <div class="token-item">
+          <div class="token-label">Tahmini maliyet</div>
+          <div class="token-value cost" id="tokenCost">—</div>
+        </div>
+      </div>
+      <div class="token-history">
+        <div class="token-row" style="font-weight:600; color: var(--text);">
+          <span>Oturum toplamı</span><span id="sessionTotal">0 token</span>
+        </div>
+        <div class="token-row">
+          <span>Toplam maliyet</span><span id="sessionCost">$0.000000</span>
+        </div>
+        <div class="token-row">
+          <span>Tur sayısı</span><span id="turnCount">0</span>
+        </div>
+      </div>
+    </div>
     <div class="intent-card" id="intentCard">
       <div id="intentBadge" class="intent-badge"></div>
       <div class="intent-row">
@@ -218,6 +297,7 @@
         <span class="conf-val" id="confVal">—</span>
       </div>
       <div class="conf-warning" id="confWarning"></div>
+      <div class="distress-card" id="distressCard"></div>
       <div class="intent-response" id="aiResponse"></div>
     </div>
   </div>
@@ -267,6 +347,53 @@ let stageTimers = {};
 let currentModel = 'claude-haiku-4-5';
 let ttsMode = 'elevenlabs';
 let browserTts = window.speechSynthesis;
+let audioQuality = 'high'; 
+let aiSpeaking = false;
+let pipelineMode = 'cascaded'; // 'cascaded' or 'gemini'
+
+function switchPipeline(mode) {
+  pipelineMode = mode;
+  document.getElementById('btn-cascaded').classList.toggle('active', mode === 'cascaded');
+  document.getElementById('btn-gemini').classList.toggle('active', mode === 'gemini');
+
+  document.querySelectorAll('.pipeline-card').forEach(el => {
+    el.style.display = mode === 'gemini' ? 'none' : '';
+  });
+  const modelRow = document.getElementById('modelSelect');
+  if (modelRow) {
+    const wrapper = modelRow.closest('div');
+    if (wrapper) wrapper.style.display = mode === 'gemini' ? 'none' : '';
+  }
+
+  const badge = document.querySelector('.badge');
+  if (mode === 'gemini') {
+    badge.textContent = 'Gemini Live API — End-to-End';
+    badge.style.color = '#4285f4';
+    badge.style.borderColor = '#4285f4';
+  } else {
+    badge.textContent = 'Deepgram Nova-3 · Claude · ElevenLabs';
+    badge.style.color = '';
+    badge.style.borderColor = '';
+  }
+
+  if (sessionActive) stopSession();
+}
+let sessionInputTokens = 0;
+let sessionOutputTokens = 0;
+let turnCount = 0;
+
+const TOKEN_COSTS = {
+  'claude-haiku-4-5':   { input: 0.80, output: 4.00 },
+  'claude-sonnet-4-6':  { input: 3.00, output: 15.00 },
+  'claude-opus-4-6':    { input: 15.00, output: 75.00 },
+  'claude-opus-4-7':    { input: 15.00, output: 75.00 },
+  'claude-opus-4-8':    { input: 15.00, output: 75.00 },
+};
+
+function calcCost(model, inputTokens, outputTokens) {
+  const rates = TOKEN_COSTS[model] || TOKEN_COSTS['claude-haiku-4-5'];
+  return (inputTokens / 1_000_000 * rates.input) + (outputTokens / 1_000_000 * rates.output);
+}
 
 function updateAlertTimes() {
   const n = new Date();
@@ -332,6 +459,39 @@ function updateLatency(stage, ms) {
   recalcTotal();
 }
 
+function setAudioQuality(quality) {
+  audioQuality = quality;
+  document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('q-' + quality).classList.add('active');
+  const labels = { high: 'Normal (Browser)', low: 'Twilio Sim (8kHz)', noisy: 'Gürültülü (8kHz)' };
+  addConversationEntry('system', `Ses kalitesi değiştirildi: ${labels[quality]}`, 'system');
+}
+
+function getAudioConstraints() {
+  if (audioQuality === 'low') {
+    return {
+      sampleRate: 8000,
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    };
+  } else if (audioQuality === 'noisy') {
+    return {
+      sampleRate: 8000,
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    };
+  }
+  return {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true
+  };
+}
+
 function recalcTotal() {
   const vals = ['stt','llm','tts'].map(s => { const el = document.getElementById('lat-'+s); return el && el.textContent !== '—' ? parseInt(el.textContent) : null; });
   const valid = vals.filter(v => v !== null);
@@ -354,56 +514,93 @@ function addConversationEntry(role, text, subclass) {
   entry.scrollIntoView({ behavior: 'smooth' });
 }
 
-// --- Streaming Audio Player ---
+// --- Audio Player ---
 let audioCtx = null;
 let audioChunks = [];
-let isPlaying = false;
-let streamingText = null;
-let streamingResolved = false;
-let streamingEscalate = false;
+let audioChunkMimeType = null;
+let isStreaming = false;
 
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
 
-async function playChunks() {
-  if (isPlaying || audioChunks.length === 0) return;
-  isPlaying = true;
-  const ctx = getAudioContext();
-  while (audioChunks.length > 0) {
-    const b64 = audioChunks.shift();
-    try {
-      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      const decoded = await ctx.decodeAudioData(bytes.buffer);
-      await new Promise(resolve => {
-        const src = ctx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(ctx.destination);
-        src.onended = resolve;
-        src.start();
-      });
-    } catch(e) { console.warn('[Audio] Decode error:', e.message); }
-  }
-  isPlaying = false;
-}
-
 function resetStreamPlayer() {
   audioChunks = [];
-  isPlaying = false;
-  streamingText = null;
+  audioChunkMimeType = null;
+  isStreaming = false;
+}
+
+// Play raw PCM audio (from Gemini — audio/pcm;rate=24000)
+async function playPCMChunks(chunks) {
+  try {
+    const ctx = getAudioContext();
+    const sampleRate = 24000;
+    const allBytes = chunks.map(b64 => {
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return arr;
+    });
+    const totalLen = allBytes.reduce((sum, a) => sum + a.length, 0);
+    const combined = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const arr of allBytes) { combined.set(arr, offset); offset += arr.length; }
+
+    // PCM 16-bit little-endian → float32
+    const int16 = new Int16Array(combined.buffer);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768.0;
+
+    const audioBuffer = ctx.createBuffer(1, float32.length, sampleRate);
+    audioBuffer.getChannelData(0).set(float32);
+    const src = ctx.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(ctx.destination);
+    src.start();
+  } catch(e) { console.warn('[PCM] Decode error:', e.message); }
+}
+
+// Merge all base64 chunks into one and play (MP3/ElevenLabs)
+async function playAllChunks() {
+  if (audioChunks.length === 0) return;
+
+  // PCM path for Gemini
+  if (audioChunkMimeType && audioChunkMimeType.startsWith('audio/pcm')) {
+    await playPCMChunks(audioChunks);
+    return;
+  }
+
+  try {
+    const ctx = getAudioContext();
+    const allBytes = audioChunks.map(b64 => {
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return arr;
+    });
+    const totalLen = allBytes.reduce((sum, a) => sum + a.length, 0);
+    const combined = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const arr of allBytes) { combined.set(arr, offset); offset += arr.length; }
+    const decoded = await ctx.decodeAudioData(combined.buffer);
+    const src = ctx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(ctx.destination);
+    src.start();
+  } catch(e) { console.warn('[Audio] Decode error:', e.message); }
 }
 
 function playAudio(base64, text) {
   if (ttsMode === 'elevenlabs' && base64) {
     resetStreamPlayer();
     audioChunks = [base64];
-    playChunks();
+    playAllChunks();
   } else if (ttsMode === 'browser' && text) {
-    browserTts.cancel();
+    window.speechSynthesis.cancel();
     const utt = new SpeechSynthesisUtterance(text);
     utt.lang = 'en-US'; utt.rate = 1.05;
-    browserTts.speak(utt);
+    window.speechSynthesis.speak(utt);
   }
 }
 
@@ -423,9 +620,11 @@ function changeTtsMode(useElevenLabs) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tts_mode', mode: ttsMode }));
 }
 
-function connectWS() {
+function 7() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(proto + '://' + location.host);
+  const port = pipelineMode === 'gemini' ? '3001' : location.port || '3000';
+  const host = location.hostname + ':' + port;
+  ws = new WebSocket(proto + '://' + host);
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'set_model', model: currentModel }));
     ws.send(JSON.stringify({ type: 'start' }));
@@ -434,13 +633,26 @@ function connectWS() {
     const msg = JSON.parse(event.data);
     if (msg.type === 'stage') setStageState(msg.stage, msg.status, msg.ms);
     if (msg.type === 'stt_latency') updateLatency('stt', msg.ms);
-    if (msg.type === 'greeting') { addConversationEntry('ai', msg.text); playAudio(msg.audio, msg.text); }
+    if (msg.type === 'greeting') {
+  addConversationEntry('ai', msg.text);
+  if (msg.audio) {
+    playAudio(msg.audio, msg.text);
+  } else {
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(msg.text);
+    utt.lang = 'en-US'; utt.rate = 1.05;
+    window.speechSynthesis.speak(utt);
+  }
+}
     if (msg.type === 'interim_transcript') {
       let ex = document.getElementById('interimEntry');
       if (!ex) { const d = document.createElement('div'); d.className='log-entry worker'; d.id='interimEntry'; d.innerHTML='<div class="log-label">Worker (live)</div><span id="interimText"></span>'; document.getElementById('tab-conversation').appendChild(d); }
       document.getElementById('interimText').textContent = msg.text;
     }
-    if (msg.type === 'transcript') { const ex=document.getElementById('interimEntry'); if(ex)ex.remove(); addConversationEntry('worker', msg.text); }
+    if (msg.type === 'transcript') {
+  const ex=document.getElementById('interimEntry'); if(ex)ex.remove();
+  addConversationEntry(msg.role === 'ai' ? 'ai' : 'worker', msg.text);
+}
     if (msg.type === 'intent') {
       const d = msg.data;
       document.getElementById('intentCard').classList.add('show');
@@ -451,6 +663,19 @@ function connectWS() {
       const conf = Math.round(d.confidence * 100);
       document.getElementById('confBar').style.width = conf + '%';
       document.getElementById('confVal').textContent = conf + '%';
+      const distressCard = document.getElementById('distressCard');
+      if (d.distress === 'high') {
+        distressCard.className = 'distress-card show high';
+        distressCard.textContent = '🚨 Yüksek sıkıntı — Otomatik escalate: ' + (d.distress_signals || '');
+      } else if (d.distress === 'medium') {
+        distressCard.className = 'distress-card show medium';
+        distressCard.textContent = '⚠ Orta sıkıntı — ' + (d.distress_signals || '');
+      } else if (d.distress === 'low') {
+        distressCard.className = 'distress-card show low';
+        distressCard.textContent = '⚡ Hafif sıkıntı — ' + (d.distress_signals || '');
+      } else {
+        distressCard.className = 'distress-card';
+      }
       const warning = document.getElementById('confWarning');
       if (d.confidence < 0.60) {
         warning.textContent = '⚠ Düşük güven skoru — UNRECOGNISED olarak işlendi';
@@ -467,7 +692,25 @@ function connectWS() {
     if (msg.type === 'response') { document.getElementById('aiResponse').textContent = '"'+msg.text+'"'; addConversationEntry('ai', msg.text); playAudio(msg.audio, msg.text); }
     if (msg.type === 'escalate') { addConversationEntry('escalate', msg.message, 'escalate'); document.getElementById('workerStatus').textContent='⬆ Escalated'; document.getElementById('workerStatus').style.color='var(--danger)'; }
     if (msg.type === 'log') addConversationEntry('system', msg.message, 'system');
+    if (msg.type === 'token_usage') {
+      document.getElementById('tokenCard').style.display = 'block';
+      const inp = msg.input, out = msg.output, total = inp + out;
+      const cost = calcCost(msg.model, inp, out);
+      document.getElementById('tokenInput').textContent = inp.toLocaleString();
+      document.getElementById('tokenOutput').textContent = out.toLocaleString();
+      document.getElementById('tokenTotal').textContent = total.toLocaleString();
+      document.getElementById('tokenCost').textContent = '$' + cost.toFixed(6);
+      sessionInputTokens += inp;
+      sessionOutputTokens += out;
+      turnCount++;
+      const sessionTotal = sessionInputTokens + sessionOutputTokens;
+      const sessionCostVal = calcCost(msg.model, sessionInputTokens, sessionOutputTokens);
+      document.getElementById('sessionTotal').textContent = sessionTotal.toLocaleString() + ' token';
+      document.getElementById('sessionCost').textContent = '$' + sessionCostVal.toFixed(6);
+      document.getElementById('turnCount').textContent = turnCount;
+    }
     if (msg.type === 'audio_stream_start') {
+      resetStreamPlayer();
       resetStreamPlayer();
       streamingText = msg.text;
       streamingResolved = msg.resolved;
@@ -478,14 +721,17 @@ function connectWS() {
       if (msg.escalate) { document.getElementById('workerStatus').textContent = '⬆ Escalated'; document.getElementById('workerStatus').style.color = 'var(--danger)'; }
     }
     if (msg.type === 'audio_chunk') {
-      if (ttsMode === 'elevenlabs') {
-        audioChunks.push(msg.chunk);
-        if (!isPlaying) playChunks();
-      }
-    }
-    if (msg.type === 'audio_stream_end') {
-      // All chunks received, playChunks handles the rest
-    }
+  if (!aiSpeaking) { audioChunks = []; }
+  aiSpeaking = true;
+  audioChunks.push(msg.chunk);
+  if (msg.mimeType) audioChunkMimeType = msg.mimeType;
+}
+if (msg.type === 'audio_stream_end') {
+  if (audioChunks.length > 0) {
+    playAllChunks();
+  }
+  setTimeout(() => { aiSpeaking = false; }, 500);
+}
   };
   ws.onclose = () => { if (sessionActive) addConversationEntry('system', 'Connection closed.', 'system'); };
 }
@@ -498,8 +744,11 @@ function startSession() {
   document.getElementById('stopBtn').disabled = false;
   document.getElementById('intentCard').classList.remove('show');
   document.getElementById('confWarning').className = 'conf-warning';
+  document.getElementById('distressCard').className = 'distress-card';
   ['lat-stt','lat-llm','lat-tts','lat-total'].forEach(id => document.getElementById(id).textContent = '—');
   document.getElementById('workerStatus').textContent = 'Overdue';
+  sessionInputTokens = 0; sessionOutputTokens = 0; turnCount = 0;
+  document.getElementById('tokenCard').style.display = 'none';
   document.getElementById('workerStatus').style.color = '';
   connectWS();
 }
@@ -507,21 +756,56 @@ function startSession() {
 async function toggleMic() {
   if (!micActive) {
     try {
-      audioStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
-                       MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' :
-                       MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg;codecs=opus' : '';
-      console.log('[Mic] mimeType:', mimeType || 'default');
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'mime_type', mimeType: mimeType || 'audio/webm' }));
-      mediaRecorder = new MediaRecorder(audioStream, mimeType ? { mimeType } : {});
-      mediaRecorder.ondataavailable = (e) => { if (ws && ws.readyState === WebSocket.OPEN && e.data.size > 0) e.data.arrayBuffer().then(buf => ws.send(buf)); };
-      mediaRecorder.start(250);
+      audioStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true } 
+      });
+
+      if (pipelineMode === 'gemini') {
+  const ctx = getAudioContext();
+  console.log('[Gemini Mic] AudioContext actual sampleRate:', ctx.sampleRate);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+  ws.send(JSON.stringify({ type: 'gemini_sample_rate', rate: ctx.sampleRate }));
+}
+  window._geminiSampleRate = ctx.sampleRate;
+  const source = ctx.createMediaStreamSource(audioStream);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          if (ws && ws.readyState === WebSocket.OPEN && !aiSpeaking) {
+            const float32 = e.inputBuffer.getChannelData(0);
+            const int16 = new Int16Array(float32.length);
+            for (let i = 0; i < float32.length; i++) {
+              int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+            }
+            ws.send(int16.buffer);
+          }
+        };
+        source.connect(processor);
+        processor.connect(ctx.destination);
+        window._geminiProcessor = { source, processor };
+      } else {
+        // Cascaded pipeline için MediaRecorder kullan
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
+                         MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+        mediaRecorder = new MediaRecorder(audioStream, mimeType ? { mimeType } : {});
+        mediaRecorder.ondataavailable = (e) => {
+          if (ws && ws.readyState === WebSocket.OPEN && e.data.size > 0) {
+            e.data.arrayBuffer().then(buf => ws.send(buf));
+          }
+        };
+        mediaRecorder.start(250);
+      }
+
       micActive = true;
       document.getElementById('micDot').classList.add('active');
       document.getElementById('micLabel').textContent = 'Recording...';
       document.getElementById('micBtn').textContent = '⏹ Stop Mic';
     } catch (err) { alert('Mic access denied: ' + err.message); }
   } else {
+    if (window._geminiProcessor) {
+      window._geminiProcessor.source.disconnect();
+      window._geminiProcessor.processor.disconnect();
+      window._geminiProcessor = null;
+    }
     if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     if (audioStream) audioStream.getTracks().forEach(t => t.stop());
     micActive = false;
@@ -541,7 +825,10 @@ function stopSession() {
   ['stt','llm','tts'].forEach(s => setStageState(s, 'disconnected'));
 }
 
-function sendMock(text) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'mock_transcript', text })); }
+function sendMock(text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
+  ws.send(JSON.stringify({ type: 'mock_transcript', text }));
+}
 
 updateAlertTimes();
 setInterval(updateAlertTimes, 60000);

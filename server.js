@@ -1,11 +1,7 @@
+require('dotenv').config();
+
 const fs = require('fs');
 const path = require('path');
-
-const envFile = fs.readFileSync('.env', 'utf8');
-envFile.split('\n').forEach(line => {
-  const [key, ...val] = line.trim().split('=');
-  if (key && val.length) process.env[key] = val.join('=');
-});
 
 const express = require('express');
 const WebSocket = require('ws');
@@ -98,7 +94,8 @@ const INTENT_CACHE_MAP = {
   'UNRECOGNISED': 'unrecognised',
 };
 
-const PUBLIC_URL = process.env.PUBLIC_URL || process.env.PUBLIC_URL || 'https://wanted-untried-sandbar.ngrok-free.dev';
+const PUBLIC_URL = process.env.PUBLIC_URL;
+if (!PUBLIC_URL) throw new Error('PUBLIC_URL is not set in .env');
 const WS_URL = PUBLIC_URL.replace('https://', 'wss://').replace('http://', 'ws://');
 
 // ─── TwiML webhook ───
@@ -114,7 +111,7 @@ app.post('/incoming-call', function(req, res) {
 async function classifyIntent(transcript, model) {
   const stream = anthropic.messages.stream({
     model: model || 'claude-haiku-4-5',
-    max_tokens: 100,
+    max_tokens: 300,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: 'Worker said: "' + transcript + '"' }]
   });
@@ -171,7 +168,7 @@ async function mp3ToMulaw(mp3Buffer) {
     ffmpeg.stdin.end();
     ffmpeg.on('error', function(e) {
       console.error('[ffmpeg] Error:', e.message);
-      resolve(mp3Buffer);
+      reject(new Error('ffmpeg failed: ' + e.message));
     });
   });
 }
@@ -216,7 +213,6 @@ twilioWss.on('connection', function(ws) {
   console.log('[Twilio WS] Connected');
   let streamSid = null;
   let deepgramWs = null;
-  let transcript = '';
   let sessionState = 'GREETING';
   let unrecognisedCount = 0;
   let utteranceStartTime = null;
