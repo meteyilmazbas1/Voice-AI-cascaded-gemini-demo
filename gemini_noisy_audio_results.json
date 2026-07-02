@@ -1,0 +1,185 @@
+{
+  "timestamp": "2026-07-01T11:17:36.760Z",
+  "model": "gemini-3.1-flash-live-preview",
+  "runsPerFile": 3,
+  "summary": {
+    "successfulRuns": 11,
+    "averageWer": 0.2828282828282828,
+    "criticalWordRecall": 1
+  },
+  "results": [
+    {
+      "file": "gemini_haiku_comparion(fi... oka... fine).mp3",
+      "expected": "fi... oka... fine",
+      "runs": [
+        {
+          "transcript": "fiko fiko",
+          "latencyMs": 9597,
+          "wer": 1,
+          "criticalWords": {
+            "expected": [],
+            "found": [],
+            "missed": []
+          }
+        },
+        {
+          "transcript": "fiko fiko",
+          "latencyMs": 6574,
+          "wer": 1,
+          "criticalWords": {
+            "expected": [],
+            "found": [],
+            "missed": []
+          }
+        },
+        {
+          "transcript": "fiko fiko",
+          "latencyMs": 8362,
+          "wer": 1,
+          "criticalWords": {
+            "expected": [],
+            "found": [],
+            "missed": []
+          }
+        }
+      ]
+    },
+    {
+      "file": "gemini_haiku_comparison(Everything is fine I just fell down but I'm okay I promise).mp3",
+      "expected": "Everything is fine I just fell down but I'm okay I promise",
+      "runs": [
+        {
+          "transcript": "Everything is fine. I just fell down, but I'm okay. I promise.",
+          "latencyMs": 12124,
+          "wer": 0,
+          "criticalWords": {
+            "expected": [
+              "fell"
+            ],
+            "found": [
+              "fell"
+            ],
+            "missed": []
+          }
+        },
+        {
+          "transcript": "Everything is fine. I just fell down, but I'm okay. I promise.",
+          "latencyMs": 12033,
+          "wer": 0,
+          "criticalWords": {
+            "expected": [
+              "fell"
+            ],
+            "found": [
+              "fell"
+            ],
+            "missed": []
+          }
+        },
+        {
+          "transcript": "Everything is fine. I just fell down, but I'm okay. I promise.",
+          "latencyMs": 13320,
+          "wer": 0,
+          "criticalWords": {
+            "expected": [
+              "fell"
+            ],
+            "found": [
+              "fell"
+            ],
+            "missed": []
+          }
+        }
+      ]
+    },
+    {
+      "file": "gemini_haiku_comparison(I think I'm fine but I'm a bit worried).mp3",
+      "expected": "I think I'm fine but I'm a bit worried",
+      "runs": [
+        {
+          "transcript": "I think I'm fine but I'm a bit worried.",
+          "latencyMs": 13891,
+          "wer": 0,
+          "criticalWords": {
+            "expected": [
+              "worried"
+            ],
+            "found": [
+              "worried"
+            ],
+            "missed": []
+          }
+        },
+        {
+          "transcript": "I think I'm fine but I'm a bit worried.",
+          "latencyMs": 10340,
+          "wer": 0,
+          "criticalWords": {
+            "expected": [
+              "worried"
+            ],
+            "found": [
+              "worried"
+            ],
+            "missed": []
+          }
+        },
+        {
+          "transcript": "I think I'm fine but I'm a bit worried.",
+          "latencyMs": 10915,
+          "wer": 0,
+          "criticalWords": {
+            "expected": [
+              "worried"
+            ],
+            "found": [
+              "worried"
+            ],
+            "missed": []
+          }
+        }
+      ]
+    },
+    {
+      "file": "gemini_haiku_comparison(I'm fine I'm safe. I broke my leg and it hurts too much I'm not good I'm okay).mp3",
+      "expected": "I'm fine I'm safe. I broke my leg and it hurts too much I'm not good I'm okay",
+      "runs": [
+        {
+          "error": "Gemini timed out"
+        },
+        {
+          "transcript": "I'm fine. I'm safe. I broke my leg and it hurts you too much. I'm not good. I'm okay.",
+          "latencyMs": 18154,
+          "wer": 0.05555555555555555,
+          "criticalWords": {
+            "expected": [
+              "hurts",
+              "broke"
+            ],
+            "found": [
+              "hurts",
+              "broke"
+            ],
+            "missed": []
+          }
+        },
+        {
+          "transcript": "I'm fine. I'm safe. I broke my leg and it hurts you too much. I'm not good. I'm okay.",
+          "latencyMs": 19672,
+          "wer": 0.05555555555555555,
+          "criticalWords": {
+            "expected": [
+              "hurts",
+              "broke"
+            ],
+            "found": [
+              "hurts",
+              "broke"
+            ],
+            "missed": []
+          }
+        }
+      ]
+    }
+  ]
+}

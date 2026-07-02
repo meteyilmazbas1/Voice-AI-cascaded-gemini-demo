@@ -1,0 +1,200 @@
+{
+  "timestamp": "2026-07-01T13:42:48.135Z",
+  "model": "gemini-3.1-flash-live-preview",
+  "runs_per_transcript": 3,
+  "results": [
+    {
+      "transcript": "I'm fine",
+      "category": "Net - Safe",
+      "avgLatency": 3907,
+      "minLatency": 3594,
+      "maxLatency": 4216,
+      "avgTokens": 480,
+      "lastResponse": "Got it — I've reset your safety timer. Stay safe."
+    },
+    {
+      "transcript": "Yes",
+      "category": "Net - Safe (short)",
+      "avgLatency": 3620,
+      "minLatency": 3501,
+      "maxLatency": 3710,
+      "avgTokens": 469,
+      "lastResponse": "Got it—I've reset your safety timer. Stay safe."
+    },
+    {
+      "transcript": "I need a human agent please",
+      "category": "Net - Human",
+      "avgLatency": 2543,
+      "minLatency": 418,
+      "maxLatency": 3808,
+      "avgTokens": 447,
+      "lastResponse": "Of course. I'm flagging this for a live agent now."
+    },
+    {
+      "transcript": "Running late, give me 15 minutes",
+      "category": "Net - Delayed",
+      "avgLatency": 4272,
+      "minLatency": 4152,
+      "maxLatency": 4412,
+      "avgTokens": 494,
+      "lastResponse": "Understood. I've extended your check-in timer. Please check in when ready."
+    },
+    {
+      "transcript": "I'm fine I'm safe. I broke my leg and it hurts too much I'm not good I'm okay",
+      "category": "Contradictory - Critical",
+      "avgLatency": 5558,
+      "minLatency": 5140,
+      "maxLatency": 5912,
+      "avgTokens": 747,
+      "lastResponse": "Of course. I'm flagging this for a live agent — someone will call you back shortly."
+    },
+    {
+      "transcript": "I'm fine but I need help",
+      "category": "Contradictory - Simple",
+      "avgLatency": 1729,
+      "minLatency": 433,
+      "maxLatency": 4313,
+      "avgTokens": 428,
+      "lastResponse": "Of course. I'm flagging this for a live agent. They'll call shortly."
+    },
+    {
+      "transcript": "Yes I'm okay but something feels wrong",
+      "category": "Contradictory - Vague",
+      "avgLatency": 403,
+      "minLatency": 394,
+      "maxLatency": 413,
+      "avgTokens": 397,
+      "lastResponse": "Of course. I'm flagging this for a live agent."
+    },
+    {
+      "transcript": "All good, actually wait no I'm not okay",
+      "category": "Contradictory - Retraction",
+      "avgLatency": 1819,
+      "minLatency": 469,
+      "maxLatency": 4499,
+      "avgTokens": 434,
+      "lastResponse": "I'm flagging this for a live agent — someone will call you back shortly."
+    },
+    {
+      "transcript": "I think I'm fine but I'm a bit worried",
+      "category": "Contradictory - Hesitant",
+      "avgLatency": 2928,
+      "minLatency": 417,
+      "maxLatency": 4313,
+      "avgTokens": 463,
+      "lastResponse": "I'm flagging this for a live agent — someone will call you shortly."
+    },
+    {
+      "transcript": "I broke my leg I need help",
+      "category": "Distress - Injury",
+      "avgLatency": 1759,
+      "minLatency": 401,
+      "maxLatency": 4396,
+      "avgTokens": 427,
+      "lastResponse": "Of course. I'm flagging this for a live agent."
+    },
+    {
+      "transcript": "I'm stuck and a bit scared",
+      "category": "Distress - Medium",
+      "avgLatency": 4420,
+      "minLatency": 3979,
+      "maxLatency": 5259,
+      "avgTokens": 495,
+      "lastResponse": "I'm flagging this for a live agent — someone will call you shortly."
+    },
+    {
+      "transcript": "SOS help me please",
+      "category": "Distress - Emergency",
+      "avgLatency": 2998,
+      "minLatency": 420,
+      "maxLatency": 4460,
+      "avgTokens": 453,
+      "lastResponse": "I'm flagging this for a live agent — someone will call you back shortly."
+    },
+    {
+      "transcript": "I'm okay just a little dizzy and my head hurts",
+      "category": "Distress - Subtle",
+      "avgLatency": 6591,
+      "minLatency": 4537,
+      "maxLatency": 9627,
+      "avgTokens": 758,
+      "lastResponse": "Of course. I'm flagging this for a live agent — someone will call you back shortly. This is not medical advice or diagnosis. See a healthcare professional or seek care."
+    },
+    {
+      "transcript": "Everything is fine I just fell down but I'm okay I promise",
+      "category": "Distress - Minimizing",
+      "avgLatency": 4013,
+      "minLatency": 3866,
+      "maxLatency": 4175,
+      "avgTokens": 491,
+      "lastResponse": "I'm flagging this for a live agent — someone will call you back shortly."
+    },
+    {
+      "transcript": "almost done just a bit more time",
+      "category": "Delayed - Vague",
+      "avgLatency": 4361,
+      "minLatency": 4332,
+      "maxLatency": 4411,
+      "avgTokens": 493,
+      "lastResponse": "Understood. I've extended your check-in timer. Please check in when ready."
+    },
+    {
+      "transcript": "Give me like maybe 10 or 15 minutes I think",
+      "category": "Delayed - Vague Time",
+      "avgLatency": 3227,
+      "minLatency": 487,
+      "maxLatency": 4671,
+      "avgTokens": 471,
+      "lastResponse": "Understood. I've extended your check-in timer. Please check in when ready."
+    },
+    {
+      "transcript": "I'm running behind but should be done soon",
+      "category": "Delayed - Vague",
+      "avgLatency": 3234,
+      "minLatency": 476,
+      "maxLatency": 4726,
+      "avgTokens": 468,
+      "lastResponse": "Understood. I've extended your check-in timer. Please check in when ready."
+    },
+    {
+      "transcript": "fi... oka... fine",
+      "category": "Noisy - Broken",
+      "avgLatency": 2562,
+      "minLatency": 548,
+      "maxLatency": 3664,
+      "avgTokens": 446,
+      "lastResponse": "Got it — I've reset your safety timer. Stay safe."
+    },
+    {
+      "transcript": "I'm fi-- yes I'm good --static-- okay",
+      "category": "Noisy - Mixed",
+      "avgLatency": 2553,
+      "minLatency": 503,
+      "maxLatency": 3624,
+      "avgTokens": 454,
+      "lastResponse": "Got it — I've reset your safety timer. Stay safe."
+    },
+    {
+      "transcript": "I think I'm okay maybe",
+      "category": "Ambiguous - Hesitant",
+      "avgLatency": 2327,
+      "minLatency": 428,
+      "maxLatency": 3288,
+      "avgTokens": 443,
+      "lastResponse": "Of course. I'm flagging this for a live agent."
+    },
+    {
+      "transcript": "ye",
+      "category": "Too Short",
+      "avgLatency": 3188,
+      "minLatency": 2927,
+      "maxLatency": 3558,
+      "avgTokens": 460,
+      "lastResponse": "Sorry, I didn't catch that. Could you repeat?"
+    }
+  ],
+  "summary": {
+    "avgLatency": 3239,
+    "avgTokens": 487
+  }
+}
