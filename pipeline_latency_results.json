@@ -1,0 +1,203 @@
+{
+  "timestamp": "2026-07-01T07:57:37.360Z",
+  "model": "claude-haiku-4-5",
+  "runs_per_transcript": 3,
+  "stt_proxy_ms": 352,
+  "results": [
+    {
+      "transcript": "I'm fine",
+      "category": "Net - Safe",
+      "stt": 352,
+      "llm": 2038,
+      "tts": 1,
+      "total": 2391,
+      "intent": "SAFE_CONFIRMATION"
+    },
+    {
+      "transcript": "Yes",
+      "category": "Net - Safe (short)",
+      "stt": 352,
+      "llm": 1836,
+      "tts": 1,
+      "total": 2189,
+      "intent": "SAFE_CONFIRMATION"
+    },
+    {
+      "transcript": "I need a human agent please",
+      "category": "Net - Human",
+      "stt": 352,
+      "llm": 1143,
+      "tts": 5,
+      "total": 1500,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "Running late, give me 15 minutes",
+      "category": "Net - Delayed",
+      "stt": 352,
+      "llm": 1306,
+      "tts": 2,
+      "total": 1660,
+      "intent": "DELAYED_CHECKIN"
+    },
+    {
+      "transcript": "I'm fine I'm safe. I broke my leg and it hurts too much I'm not good I'm okay",
+      "category": "Contradictory - Critical",
+      "stt": 352,
+      "llm": 2200,
+      "tts": 1,
+      "total": 2553,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "I'm fine but I need help",
+      "category": "Contradictory - Simple",
+      "stt": 352,
+      "llm": 3599,
+      "tts": 1,
+      "total": 3952,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "Yes I'm okay but something feels wrong",
+      "category": "Contradictory - Vague",
+      "stt": 352,
+      "llm": 3602,
+      "tts": 0,
+      "total": 3954,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "All good, actually wait no I'm not okay",
+      "category": "Contradictory - Retraction",
+      "stt": 352,
+      "llm": 1870,
+      "tts": 1,
+      "total": 2223,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "I think I'm fine but I'm a bit worried",
+      "category": "Contradictory - Hesitant",
+      "stt": 352,
+      "llm": 4496,
+      "tts": 4,
+      "total": 4852,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "I broke my leg I need help",
+      "category": "Distress - Injury",
+      "stt": 352,
+      "llm": 1492,
+      "tts": 0,
+      "total": 1844,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "I'm stuck and a bit scared",
+      "category": "Distress - Medium",
+      "stt": 352,
+      "llm": 1745,
+      "tts": 0,
+      "total": 2097,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "SOS help me please",
+      "category": "Distress - Emergency",
+      "stt": 352,
+      "llm": 2144,
+      "tts": 1,
+      "total": 2497,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "I'm okay just a little dizzy and my head hurts",
+      "category": "Distress - Subtle",
+      "stt": 352,
+      "llm": 1870,
+      "tts": 1,
+      "total": 2223,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "Everything is fine I just fell down but I'm okay I promise",
+      "category": "Distress - Minimizing",
+      "stt": 352,
+      "llm": 3042,
+      "tts": 1,
+      "total": 3395,
+      "intent": "REQUEST_HUMAN"
+    },
+    {
+      "transcript": "almost done just a bit more time",
+      "category": "Delayed - Vague",
+      "stt": 352,
+      "llm": 1209,
+      "tts": 1,
+      "total": 1562,
+      "intent": "DELAYED_CHECKIN"
+    },
+    {
+      "transcript": "Give me like maybe 10 or 15 minutes I think",
+      "category": "Delayed - Vague Time",
+      "stt": 352,
+      "llm": 1095,
+      "tts": 0,
+      "total": 1447,
+      "intent": "DELAYED_CHECKIN"
+    },
+    {
+      "transcript": "I'm running behind but should be done soon",
+      "category": "Delayed - Vague",
+      "stt": 352,
+      "llm": 2245,
+      "tts": 1,
+      "total": 2598,
+      "intent": "DELAYED_CHECKIN"
+    },
+    {
+      "transcript": "fi... oka... fine",
+      "category": "Noisy - Broken",
+      "stt": 352,
+      "llm": 2312,
+      "tts": 1,
+      "total": 2665,
+      "intent": "SAFE_CONFIRMATION"
+    },
+    {
+      "transcript": "I'm fi-- yes I'm good --static-- okay",
+      "category": "Noisy - Mixed",
+      "stt": 352,
+      "llm": 4891,
+      "tts": 1,
+      "total": 5244,
+      "intent": "UNRECOGNISED"
+    },
+    {
+      "transcript": "I think I'm okay maybe",
+      "category": "Ambiguous - Hesitant",
+      "stt": 352,
+      "llm": 2288,
+      "tts": 0,
+      "total": 2640,
+      "intent": "UNRECOGNISED"
+    },
+    {
+      "transcript": "ye",
+      "category": "Too Short",
+      "stt": 352,
+      "llm": 1179,
+      "tts": 1,
+      "total": 1532,
+      "intent": "UNRECOGNISED"
+    }
+  ],
+  "summary": {
+    "avgSTT": 352,
+    "avgLLM": 2267,
+    "avgTTS": 1,
+    "avgTotal": 2620
+  }
+}
