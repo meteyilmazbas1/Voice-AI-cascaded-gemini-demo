@@ -170,7 +170,7 @@
     </div>
 
     <div style="margin-bottom: 4px;">
-      <div class="pipeline-label">Pipeline Modu</div>
+      <div class="pipeline-label">Pipeline Mode</div>
       <div class="pipeline-toggle">
         <button class="pipeline-btn active" id="btn-cascaded" onclick="switchPipeline('cascaded')">
           🔗 Cascaded Pipeline<br><span style="font-weight:400;font-size:10px">Deepgram · Claude · ElevenLabs</span>
@@ -202,13 +202,13 @@
       <div class="model-row">
         <span class="model-label">LLM Model:</span>
         <select class="model-select" id="modelSelect" onchange="changeModel(this.value)">
-          <optgroup label="⚡ Haiku — En Hızlı">
+          <optgroup label="⚡ Haiku — Fastest">
             <option value="claude-haiku-4-5" selected>Claude Haiku 4.5</option>
           </optgroup>
-          <optgroup label="⚖️ Sonnet — Dengeli">
+          <optgroup label="⚖️ Sonnet — Balanced">
             <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
           </optgroup>
-          <optgroup label="🧠 Opus — En Güçlü">
+          <optgroup label="🧠 Opus — Most Powerful">
             <option value="claude-opus-4-8">Claude Opus 4.8</option>
             <option value="claude-opus-4-7">Claude Opus 4.7</option>
             <option value="claude-opus-4-6">Claude Opus 4.6</option>
@@ -224,7 +224,7 @@
             <span class="toggle-slider"></span>
           </label>
           <span class="tts-mode-badge elevenlabs" id="ttsModeBadge">ElevenLabs</span>
-          <span class="tts-label" id="ttsDesc" style="font-size:11px">Yüksek kalite · Kredi harcar</span>
+          <span class="tts-label" id="ttsDesc" style="font-size:11px">High quality · Uses credits</span>
         </div>
       </div>
       <div class="controls-row">
@@ -237,12 +237,12 @@
         </div>
       </div>
       <div class="audio-quality-row">
-        <span class="model-label">Ses Kalitesi:</span>
+        <span class="model-label">Audio Quality:</span>
         <button class="quality-btn active" id="q-high" onclick="setAudioQuality('high')">🎤 Normal (Browser)</button>
         <button class="quality-btn" id="q-low" onclick="setAudioQuality('low')">📞 Twilio Sim (8kHz)</button>
-        <button class="quality-btn" id="q-noisy" onclick="setAudioQuality('noisy')">🏭 Gürültülü (8kHz)</button>
+        <button class="quality-btn" id="q-noisy" onclick="setAudioQuality('noisy')">🏭 Noisy (8kHz)</button>
       </div>
-      <div class="mock-title">Hızlı test senaryoları (mikrofon gerekmez):</div>
+      <div class="mock-title">Quick test scenarios (no microphone needed):</div>
       <div class="mock-buttons">
         <button class="mock-btn" onclick="sendMock('I am fine')">✅ I'm fine</button>
         <button class="mock-btn" onclick="sendMock('All good here')">✅ All good</button>
@@ -250,15 +250,15 @@
         <button class="mock-btn" onclick="sendMock('I need a human agent please')">👤 Need human agent</button>
         <button class="mock-btn" onclick="sendMock('Reset my check-in')">🔄 Reset check-in</button>
         <button class="mock-btn" onclick="sendMock('blah blah something unclear xyzzy')">❓ Unclear response</button>
-        <button class="mock-btn" onclick="sendMock('eeee şey... iyiyim sanırım')">🔇 Belirsiz (Türkçe karışık)</button>
-        <button class="mock-btn" onclick="sendMock('ye')">🔇 Çok kısa (ye)</button>
-        <button class="mock-btn" onclick="sendMock('I am fine ya')">🌐 Karışık dil</button>
-        <button class="mock-btn" onclick="sendMock('HELP ME PLEASE SOS')">🆘 SOS / Yardım</button>
+        <button class="mock-btn" onclick="sendMock('umm... I think I am okay')">🔇 Ambiguous (mixed language)</button>
+        <button class="mock-btn" onclick="sendMock('ye')">🔇 Too short (ye)</button>
+        <button class="mock-btn" onclick="sendMock('I am fine ya')">🌐 Mixed language</button>
+        <button class="mock-btn" onclick="sendMock('HELP ME PLEASE SOS')">🆘 SOS / Help</button>
       </div>
     </div>
 
     <div class="token-card" id="tokenCard" style="display:none">
-      <div class="token-title">Token Kullanımı</div>
+      <div class="token-title">Token Usage</div>
       <div class="token-grid">
         <div class="token-item">
           <div class="token-label">Input (sistem + transcript)</div>
@@ -279,13 +279,13 @@
       </div>
       <div class="token-history">
         <div class="token-row" style="font-weight:600; color: var(--text);">
-          <span>Oturum toplamı</span><span id="sessionTotal">0 token</span>
+          <span>Session total</span><span id="sessionTotal">0 token</span>
         </div>
         <div class="token-row">
           <span>Toplam maliyet</span><span id="sessionCost">$0.000000</span>
         </div>
         <div class="token-row">
-          <span>Tur sayısı</span><span id="turnCount">0</span>
+          <span>Turn count</span><span id="turnCount">0</span>
         </div>
       </div>
     </div>
@@ -312,6 +312,10 @@
     </div>
     <div class="tab-content" id="tab-latency">
       <div style="padding: 4px 0;">
+        <div class="latency-row">
+          <div><div class="latency-label">Gemini Live (End-to-End)</div><div class="target-note">Worker bitişi → ilk ses chunk</div></div>
+          <span class="latency-val" id="lat-gemini">—</span>
+        </div>
         <div class="latency-row">
           <div><div class="latency-label">STT (Deepgram)</div><div class="target-note">Target: &lt; 500ms</div></div>
           <span class="latency-val" id="lat-stt">—</span>
@@ -348,7 +352,7 @@ let currentModel = 'claude-haiku-4-5';
 let ttsMode = 'elevenlabs';
 let browserTts = window.speechSynthesis;
 let audioQuality = 'high'; 
-let aiSpeaking = false;
+let aiSpeaking = false; let lastMicSendTime = null;
 let pipelineMode = 'cascaded'; // 'cascaded' or 'gemini'
 
 function switchPipeline(mode) {
@@ -388,6 +392,7 @@ const TOKEN_COSTS = {
   'claude-opus-4-6':    { input: 15.00, output: 75.00 },
   'claude-opus-4-7':    { input: 15.00, output: 75.00 },
   'claude-opus-4-8':    { input: 15.00, output: 75.00 },
+  'gemini-live':        { input: 2.10, output: 8.50 },
 };
 
 function calcCost(model, inputTokens, outputTokens) {
@@ -451,20 +456,20 @@ function setStageState(stage, state, ms) {
 }
 
 function updateLatency(stage, ms) {
-  const targets = { stt: 500, llm: 200, tts: 400 };
+  const targets = { stt: 500, llm: 200, tts: 400, gemini: 500 };
   const el = document.getElementById('lat-'+stage);
   if (!el) return;
   el.textContent = ms + 'ms';
   el.className = 'latency-val ' + (ms <= targets[stage] ? 'good' : 'warn');
-  recalcTotal();
+  if (stage !== 'gemini') recalcTotal();
 }
 
 function setAudioQuality(quality) {
   audioQuality = quality;
   document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('q-' + quality).classList.add('active');
-  const labels = { high: 'Normal (Browser)', low: 'Twilio Sim (8kHz)', noisy: 'Gürültülü (8kHz)' };
-  addConversationEntry('system', `Ses kalitesi değiştirildi: ${labels[quality]}`, 'system');
+  const labels = { high: 'Normal (Browser)', low: 'Twilio Sim (8kHz)', noisy: 'Noisy (8kHz)' };
+  addConversationEntry('system', `Audio quality changed: ${labels[quality]}`, 'system');
 }
 
 function getAudioConstraints() {
@@ -611,16 +616,16 @@ function changeTtsMode(useElevenLabs) {
   if (useElevenLabs) {
     badge.textContent = 'ElevenLabs';
     badge.className = 'tts-mode-badge elevenlabs';
-    desc.textContent = 'Yüksek kalite · Kredi harcar';
+    desc.textContent = 'High quality · Uses credits';
   } else {
-    badge.textContent = 'Tarayıcı TTS';
+    badge.textContent = 'Browser TTS';
     badge.className = 'tts-mode-badge browser';
-    desc.textContent = 'Ücretsiz · Sınırsız';
+    desc.textContent = 'Free · Unlimited';
   }
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tts_mode', mode: ttsMode }));
 }
 
-function 7() {
+function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const port = pipelineMode === 'gemini' ? '3001' : location.port || '3000';
   const host = location.hostname + ':' + port;
@@ -633,16 +638,9 @@ function 7() {
     const msg = JSON.parse(event.data);
     if (msg.type === 'stage') setStageState(msg.stage, msg.status, msg.ms);
     if (msg.type === 'stt_latency') updateLatency('stt', msg.ms);
+    if (msg.type === 'gemini_turn_latency') updateLatency('gemini', msg.ms);
     if (msg.type === 'greeting') {
   addConversationEntry('ai', msg.text);
-  if (msg.audio) {
-    playAudio(msg.audio, msg.text);
-  } else {
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(msg.text);
-    utt.lang = 'en-US'; utt.rate = 1.05;
-    window.speechSynthesis.speak(utt);
-  }
 }
     if (msg.type === 'interim_transcript') {
       let ex = document.getElementById('interimEntry');
@@ -666,22 +664,22 @@ function 7() {
       const distressCard = document.getElementById('distressCard');
       if (d.distress === 'high') {
         distressCard.className = 'distress-card show high';
-        distressCard.textContent = '🚨 Yüksek sıkıntı — Otomatik escalate: ' + (d.distress_signals || '');
+        distressCard.textContent = '🚨 High distress — Auto-escalating: ' + (d.distress_signals || '');
       } else if (d.distress === 'medium') {
         distressCard.className = 'distress-card show medium';
-        distressCard.textContent = '⚠ Orta sıkıntı — ' + (d.distress_signals || '');
+        distressCard.textContent = '⚠ Medium distress — ' + (d.distress_signals || '');
       } else if (d.distress === 'low') {
         distressCard.className = 'distress-card show low';
-        distressCard.textContent = '⚡ Hafif sıkıntı — ' + (d.distress_signals || '');
+        distressCard.textContent = '⚡ Low distress — ' + (d.distress_signals || '');
       } else {
         distressCard.className = 'distress-card';
       }
       const warning = document.getElementById('confWarning');
       if (d.confidence < 0.60) {
-        warning.textContent = '⚠ Düşük güven skoru — UNRECOGNISED olarak işlendi';
+        warning.textContent = '⚠ Low confidence score — treated as UNRECOGNISED';
         warning.className = 'conf-warning show low';
       } else if (d.confidence < 0.85 || d.low_confidence) {
-        warning.textContent = '⚠ Orta güven skoru — dikkatli işlendi';
+        warning.textContent = '⚠ Medium confidence score — processed cautiously';
         warning.className = 'conf-warning show medium';
       } else {
         warning.className = 'conf-warning';
@@ -709,6 +707,21 @@ function 7() {
       document.getElementById('sessionCost').textContent = '$' + sessionCostVal.toFixed(6);
       document.getElementById('turnCount').textContent = turnCount;
     }
+    if (msg.type === 'gemini_token_usage') {
+      document.getElementById('tokenCard').style.display = 'block';
+      const inp = msg.input, out = msg.output, total = inp + out;
+      const cost = calcCost('gemini-live', inp, out);
+      document.getElementById('tokenInput').textContent = inp.toLocaleString();
+      document.getElementById('tokenOutput').textContent = out.toLocaleString();
+      document.getElementById('tokenTotal').textContent = total.toLocaleString();
+      document.getElementById('tokenCost').textContent = '$' + cost.toFixed(6);
+      sessionInputTokens = inp;
+      sessionOutputTokens = out;
+      turnCount++;
+      document.getElementById('sessionTotal').textContent = total.toLocaleString() + ' token';
+      document.getElementById('sessionCost').textContent = '$' + cost.toFixed(6);
+      document.getElementById('turnCount').textContent = turnCount;
+    }
     if (msg.type === 'audio_stream_start') {
       resetStreamPlayer();
       resetStreamPlayer();
@@ -721,7 +734,9 @@ function 7() {
       if (msg.escalate) { document.getElementById('workerStatus').textContent = '⬆ Escalated'; document.getElementById('workerStatus').style.color = 'var(--danger)'; }
     }
     if (msg.type === 'audio_chunk') {
-  if (!aiSpeaking) { audioChunks = []; }
+  if (!aiSpeaking) {
+    audioChunks = [];
+  }
   aiSpeaking = true;
   audioChunks.push(msg.chunk);
   if (msg.mimeType) audioChunkMimeType = msg.mimeType;
@@ -730,7 +745,7 @@ if (msg.type === 'audio_stream_end') {
   if (audioChunks.length > 0) {
     playAllChunks();
   }
-  setTimeout(() => { aiSpeaking = false; }, 500);
+  setTimeout(() => { aiSpeaking = false; }, 800);
 }
   };
   ws.onclose = () => { if (sessionActive) addConversationEntry('system', 'Connection closed.', 'system'); };
@@ -776,6 +791,7 @@ async function toggleMic() {
             for (let i = 0; i < float32.length; i++) {
               int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
             }
+            lastMicSendTime = Date.now();
             ws.send(int16.buffer);
           }
         };
@@ -783,7 +799,7 @@ async function toggleMic() {
         processor.connect(ctx.destination);
         window._geminiProcessor = { source, processor };
       } else {
-        // Cascaded pipeline için MediaRecorder kullan
+        // Use MediaRecorder for cascaded pipeline
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
                          MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
         mediaRecorder = new MediaRecorder(audioStream, mimeType ? { mimeType } : {});
