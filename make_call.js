@@ -26,20 +26,16 @@ if (!PUBLIC_URL) missing.push('PUBLIC_URL');
 
 if (missing.length) {
   console.error('Missing required .env values:', missing.join(', '));
-  console.error('\nExample:');
-  console.error('  PUBLIC_URL=https://abc123.ngrok-free.app');
-  console.error('  TWILIO_ACCOUNT_SID=AC...');
-  console.error('  TWILIO_AUTH_TOKEN=...');
-  console.error('  TWILIO_PHONE_NUMBER=+1...');
-  console.error('  TEST_PHONE_NUMBER=+1...');
+  console.error('\nAdd to .env:');
+  console.error('  PUBLIC_URL=https://abc123.ngrok-free.app  (port 3000 tunnel)');
   process.exit(1);
 }
 
 const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const webhookUrl = `${PUBLIC_URL.replace(/\/$/, '')}/incoming-call`;
 
-console.log(`Placing test call to ${TEST_PHONE_NUMBER}`);
-console.log(`Webhook: ${webhookUrl}`);
+console.log(`\nPlacing Cascaded test call to ${TEST_PHONE_NUMBER}`);
+console.log(`Webhook: ${webhookUrl} (server.js port 3000)\n`);
 
 client.calls
   .create({
@@ -47,6 +43,10 @@ client.calls
     to: TEST_PHONE_NUMBER,
     from: TWILIO_PHONE_NUMBER,
     method: 'POST',
+    record: true,
+    recordingChannels: 'dual',
+    recordingStatusCallback: `${PUBLIC_URL.replace(/\/$/, '')}/recording-status`,
+    recordingStatusCallbackMethod: 'POST',
   })
   .then((call) => {
     console.log(`Call initiated — SID: ${call.sid}`);

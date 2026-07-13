@@ -142,15 +142,226 @@
   .token-value.cost { color: var(--pipeline-tts); }
   .token-history { font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
   .token-row { display: flex; justify-content: space-between; padding: 2px 0; }
+
+  /* ── Comparison Dashboard ── */
+  .view-nav { margin-left: auto; display: flex; gap: 6px; }
+  .view-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; }
+  .view-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .view-btn:hover:not(.active) { border-color: var(--muted); color: var(--text); }
+  #view-demo { display: grid; }
+  #view-compare { display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px; gap: 16px; }
+  #view-compare.active { display: flex; }
+  #view-demo.hidden { display: none; }
+  .cmp-config { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; position: sticky; top: 0; z-index: 5; }
+  .cmp-config-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .cmp-field { display: flex; flex-direction: column; gap: 4px; }
+  .cmp-field label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .cmp-field textarea { width: 420px; min-height: 64px; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical; }
+  .cmp-field textarea:focus, .cmp-field select:focus, .cmp-field input:focus { outline: none; border-color: var(--accent); }
+  .cmp-field select, .cmp-field input[type=number] { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 10px; font-size: 12px; }
+  .cmp-field input[type=number] { width: 70px; }
+  .cmp-models { display: flex; gap: 8px; flex-wrap: wrap; }
+  .cmp-model-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--surface2); font-size: 12px; user-select: none; }
+  .cmp-model-check.checked { border-color: var(--accent); background: rgba(29,158,117,0.08); }
+  .cmp-model-check input { display: none; }
+  .cmp-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .cmp-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .cmp-actions .btn.primary { min-width: 140px; }
+  .cmp-summary { background: linear-gradient(135deg, rgba(29,158,117,0.08), rgba(88,166,255,0.06)); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: none; }
+  .cmp-summary.show { display: block; }
+  .cmp-summary-title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .cmp-summary-lines { display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.5; }
+  .cmp-summary-lines strong { color: var(--accent); }
+  .cmp-table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: none; }
+  .cmp-table-wrap.show { display: block; }
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .cmp-table th { text-align: left; padding: 10px 12px; background: var(--surface2); color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
+  .cmp-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .cmp-table tr:last-child td { border-bottom: none; }
+  .cmp-table tr.clickable { cursor: pointer; }
+  .cmp-table tr.clickable:hover { background: rgba(255,255,255,0.02); }
+  .cmp-table tr.loading td { color: var(--muted); }
+  .cmp-table tr.error-row td { color: var(--danger); }
+  .cmp-intent { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .cmp-intent.SAFE_CONFIRMATION { background: rgba(63,185,80,0.12); color: #3fb950; }
+  .cmp-intent.DELAYED_CHECKIN { background: rgba(227,179,65,0.12); color: var(--warn); }
+  .cmp-intent.REQUEST_HUMAN { background: rgba(248,81,73,0.12); color: var(--danger); }
+  .cmp-intent.UNRECOGNISED { background: rgba(125,133,144,0.12); color: var(--muted); }
+  .cmp-correct { font-weight: 700; }
+  .cmp-correct.yes { color: #3fb950; }
+  .cmp-correct.no { color: var(--danger); }
+  .cmp-detail { display: none; background: var(--surface2); }
+  .cmp-detail.open { display: table-row; }
+  .cmp-detail td { padding: 0; }
+  .cmp-detail-inner { padding: 10px 16px 14px; }
+  .cmp-run-row { display: grid; grid-template-columns: 50px 80px 140px 70px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+  .cmp-run-row:last-child { border-bottom: none; }
+  .cmp-run-row .intent { color: var(--text); font-weight: 600; }
+  .latency-breakdown {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: var(--surface2);
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .breakdown-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .breakdown-label {
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .breakdown-label-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .breakdown-tip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    font-size: 9px;
+    color: var(--muted);
+    cursor: help;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .breakdown-tip:hover { color: var(--text); border-color: var(--muted); }
+  .breakdown-tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 220px;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.4;
+    text-transform: none;
+    letter-spacing: 0;
+    white-space: normal;
+    text-align: left;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 20;
+  }
+  .breakdown-tip:hover::after {
+    opacity: 1;
+    visibility: visible;
+  }
+  .breakdown-value {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .breakdown-sep {
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .cmp-charts { display: none; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .cmp-charts.show { display: grid; }
+  .cmp-chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .cmp-chart-title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+  .cmp-chart-card canvas { width: 100% !important; max-height: 240px; }
+  .cmp-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .cmp-empty { text-align: center; color: var(--muted); padding: 40px; font-size: 13px; }
+  .cmp-presets { display: flex; gap: 6px; }
+  .cmp-preset { font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); cursor: pointer; }
+  .cmp-preset:hover { border-color: var(--accent); color: var(--accent); }
+  .mode-toggle { display: flex; gap: 8px; margin-bottom: 4px; }
+  .mode-btn {
+    flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface2); color: var(--muted); cursor: pointer; text-align: center;
+    font-size: 13px; font-weight: 500; transition: all 0.15s; display: flex; flex-direction: column; gap: 2px;
+  }
+  .mode-btn:hover { border-color: var(--muted); color: var(--text); }
+  .mode-btn.active { border-color: var(--accent); color: var(--text); background: rgba(29,158,117,0.12); }
+  .mode-sub { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .cmp-split-wrap { display: none; flex-direction: column; gap: 12px; }
+  .cmp-split-wrap.show { display: flex; }
+  .cmp-split-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .cmp-split-card-header { padding: 10px 14px; background: var(--surface2); border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .cmp-split-card-body { padding: 12px 14px; }
+  .split-result { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .split-panel { padding: 12px; border-radius: 6px; background: var(--surface2); min-height: 120px; }
+  .split-panel-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .split-panel.intent .split-panel-label { color: #3fb950; }
+  .split-panel.freeform .split-panel-label { color: #4285f4; }
+  .split-panel-meta { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .split-panel-intent { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-bottom: 8px; }
+  .split-panel-response { font-size: 13px; line-height: 1.5; color: var(--text); font-style: italic; }
+  .split-panel-error { font-size: 12px; color: var(--danger); }
+  .cmp-freeform-table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: none; }
+  .cmp-freeform-table-wrap.show { display: block; }
+  .cmp-quota { display: none; background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.35); color: var(--danger); border-radius: 8px; padding: 10px 14px; font-size: 12px; }
+  .cmp-quota.show { display: block; }
+  .cmp-metrics { display: none; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .cmp-metrics.show { display: grid; }
+  .cmp-metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .cmp-metric-card .m-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px; }
+  .cmp-metric-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; gap: 8px; }
+  .cmp-metric-row .m-name { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmp-metric-row .m-val { font-weight: 700; }
+  .cmp-metric-row .m-val.good { color: #3fb950; }
+  .cmp-metric-row .m-val.warn { color: var(--warn); }
+  .cmp-metric-row .m-val.bad { color: var(--danger); }
+  .cmp-progress { display: none; font-size: 12px; color: var(--muted); }
+  .cmp-progress.show { display: block; }
+  .cmp-progress-bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .cmp-progress-bar > div { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s; }
+  .cmp-toolbar { display: none; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cmp-toolbar.show { display: flex; }
+  .cmp-history { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: none; }
+  .cmp-history.show { display: block; }
+  .cmp-history-title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .cmp-history-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; cursor: pointer; font-size: 12px; background: var(--surface2); }
+  .cmp-history-item:hover { border-color: var(--accent); }
+  .cmp-history-item .h-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .cmp-batch-table-wrap { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: auto; max-height: 420px; }
+  .cmp-batch-table-wrap.show { display: block; }
+  .cmp-batch-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .cmp-batch-table th, .cmp-batch-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  .cmp-batch-table th { position: sticky; top: 0; background: var(--surface2); color: var(--muted); font-size: 10px; text-transform: uppercase; z-index: 1; }
+  .cmp-batch-table .cell-ok { color: #3fb950; }
+  .cmp-batch-table .cell-bad { color: var(--danger); }
+  .cmp-batch-table .cell-err { color: var(--muted); }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <header>
   <div class="logo-dot"></div>
-  <h1>Aware360 Voice AI <span>— Cascaded Pipeline Demo</span></h1>
-  <div class="badge">Deepgram Nova-3 · Claude · ElevenLabs</div>
+  <h1>Aware360 Voice AI <span id="headerSubtitle">— Cascaded Pipeline Demo</span></h1>
+  <div class="view-nav">
+    <a href="/calls.html" class="view-btn" style="text-decoration:none;display:inline-flex;align-items:center">Call History</a>
+    <button class="view-btn active" id="nav-demo" onclick="switchView('demo')">Demo</button>
+    <button class="view-btn" id="nav-compare" onclick="switchView('compare')">Comparison</button>
+  </div>
+  <div class="badge" id="headerBadge">Deepgram Nova-3 · Claude · ElevenLabs</div>
 </header>
-<div class="main">
+<div class="main" id="view-demo">
   <div class="left">
     <div class="alert-card">
       <div class="alert-header">
@@ -255,6 +466,16 @@
         <button class="mock-btn" onclick="sendMock('I am fine ya')">🌐 Mixed language</button>
         <button class="mock-btn" onclick="sendMock('HELP ME PLEASE SOS')">🆘 SOS / Help</button>
       </div>
+
+      <div class="mock-title" style="margin-top:14px">Upload audio file (MP3):</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+        <input type="file" id="audioFileInput" accept=".mp3,audio/*"
+          style="font-size:13px;padding:4px 8px;border:1px solid #444;border-radius:6px;background:#1a1a2e;color:#e0e0e0;cursor:pointer">
+        <button class="mock-btn" onclick="sendAudioFile()" style="background:#2e5bff">
+          📤 Send Audio
+        </button>
+        <span id="audioFileStatus" style="font-size:12px;color:#aaa"></span>
+      </div>
     </div>
 
     <div class="token-card" id="tokenCard" style="display:none">
@@ -343,6 +564,181 @@
     </div>
   </div>
 </div>
+
+<div id="view-compare">
+  <div class="cmp-config">
+    <div class="cmp-config-row">
+      <div class="cmp-field">
+        <label>Transcript</label>
+        <textarea id="cmpTranscript" placeholder="Worker said: I'm fine, just a bit late" oninput="cmpLastSttMs=null"></textarea>
+      </div>
+      <div class="cmp-field">
+        <label>Hazır senaryolar</label>
+        <select id="cmpScenario" style="min-width:280px" onchange="onScenarioSelect()">
+          <option value="">— Senaryo seç —</option>
+        </select>
+      </div>
+      <div class="cmp-field">
+        <label>Run count</label>
+        <input type="number" id="cmpRuns" value="5" min="1" max="10">
+        <div class="cmp-presets" style="margin-top:6px">
+          <button type="button" class="cmp-preset" onclick="setCmpRuns(2)">Hızlı (2)</button>
+          <button type="button" class="cmp-preset" onclick="setCmpRuns(5)">Standart (5)</button>
+          <button type="button" class="cmp-preset" onclick="setCmpRuns(10)">Stabilite (10)</button>
+        </div>
+      </div>
+    </div>
+    <div class="cmp-config-row">
+      <div class="cmp-field" style="flex:1">
+        <label>Modeller</label>
+        <div class="cmp-models" id="cmpModels">
+          <label class="cmp-model-check checked" data-model="claude-haiku-4-5" onclick="toggleCmpModel(this)">
+            <input type="checkbox" checked>
+            <span class="cmp-dot" style="background:#3fb950"></span>
+            Claude Haiku 4.5
+          </label>
+          <label class="cmp-model-check checked" data-model="claude-sonnet-4-6" onclick="toggleCmpModel(this)">
+            <input type="checkbox" checked>
+            <span class="cmp-dot" style="background:#a371f7"></span>
+            Claude Sonnet 4.6
+          </label>
+          <label class="cmp-model-check checked" data-model="gemini-2.0-flash-live-001" onclick="toggleCmpModel(this)">
+            <input type="checkbox" checked>
+            <span class="cmp-dot" style="background:#4285f4"></span>
+            Gemini 2.0 Flash Live
+          </label>
+          <label class="cmp-model-check checked" data-model="gemini-3.1-flash-live-preview" onclick="toggleCmpModel(this)">
+            <input type="checkbox" checked>
+            <span class="cmp-dot" style="background:#fbbc04"></span>
+            Gemini 3.1 Flash Live
+          </label>
+        </div>
+      </div>
+      <div class="cmp-actions">
+        <button class="btn" id="cmpMicBtn" onclick="cmpToggleMic()">🎤 Mic</button>
+        <label class="btn" style="cursor:pointer;margin:0">
+          📁 Audio
+          <input type="file" id="cmpAudioFile" accept="audio/*,.mp3,.wav,.m4a" style="display:none" onchange="cmpTranscribeFile(this)">
+        </label>
+        <button class="btn primary" id="cmpRunBtn" onclick="runComparison()">▶ Run Comparison</button>
+        <button class="btn" id="cmpBatchBtn" onclick="runBatchScenarios()" title="Tüm hazır senaryoları çalıştır">📋 Batch All</button>
+        <button class="btn danger" id="cmpStopBtn" onclick="stopCmpRun()" disabled>■ Stop</button>
+      </div>
+    </div>
+    <div id="cmpMicStatus" style="font-size:11px;color:var(--muted)"></div>
+    <div class="mode-toggle">
+      <button type="button" class="mode-btn active" id="mode-intent" onclick="setCompareMode('intent')">
+        Intent Mode
+        <span class="mode-sub">JSON → hazır cevap</span>
+      </button>
+      <button type="button" class="mode-btn" id="mode-freeform" onclick="setCompareMode('freeform')">
+        Free-Form Mode
+        <span class="mode-sub">AI kendi cevabını üretiyor</span>
+      </button>
+      <button type="button" class="mode-btn" id="mode-both" onclick="setCompareMode('both')">
+        Her İkisi
+        <span class="mode-sub">Yan yana karşılaştır</span>
+      </button>
+    </div>
+    <div class="cmp-progress" id="cmpProgress">
+      <div id="cmpProgressLabel">—</div>
+      <div class="cmp-progress-bar"><div id="cmpProgressBar"></div></div>
+    </div>
+  </div>
+
+  <div class="cmp-quota" id="cmpQuotaBanner"></div>
+
+  <div class="cmp-toolbar" id="cmpToolbar">
+    <button class="btn" onclick="exportCmpJSON()">↓ JSON</button>
+    <button class="btn" onclick="exportCmpCSV()">↓ CSV</button>
+    <span style="font-size:11px;color:var(--muted);margin-left:4px" id="cmpToolbarMeta"></span>
+  </div>
+
+  <div class="cmp-metrics" id="cmpMetrics"></div>
+
+  <div class="cmp-summary" id="cmpSummaryBox">
+    <div class="cmp-summary-title">Karşılaştırma özeti</div>
+    <div class="cmp-summary-lines" id="cmpSummaryLines"></div>
+  </div>
+
+  <div class="cmp-table-wrap" id="cmpTableWrap">
+    <table class="cmp-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Intent (son run)</th>
+          <th>Avg Confidence</th>
+          <th>Avg Latency</th>
+          <th>Min</th>
+          <th>Max</th>
+          <th>Avg Tokens</th>
+          <th>Est. Cost</th>
+          <th>Correct?</th>
+        </tr>
+      </thead>
+      <tbody id="cmpTableBody"></tbody>
+    </table>
+  </div>
+
+  <div class="cmp-freeform-table-wrap" id="cmpFreeformTableWrap">
+    <table class="cmp-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Response (son run)</th>
+          <th>Avg Latency</th>
+          <th>Min</th>
+          <th>Max</th>
+          <th>Avg Tokens</th>
+          <th>Est. Cost</th>
+        </tr>
+      </thead>
+      <tbody id="cmpFreeformBody"></tbody>
+    </table>
+  </div>
+
+  <div class="cmp-split-wrap" id="cmpSplitWrap">
+    <div id="cmpSplitBody"></div>
+  </div>
+
+  <div class="cmp-batch-table-wrap" id="cmpBatchTableWrap">
+    <table class="cmp-batch-table" id="cmpBatchTable">
+      <thead id="cmpBatchHead"></thead>
+      <tbody id="cmpBatchBody"></tbody>
+    </table>
+  </div>
+
+  <div class="cmp-charts" id="cmpCharts">
+    <div class="cmp-chart-card">
+      <div class="cmp-chart-title">Latency (avg ± min/max)</div>
+      <canvas id="chartLatency"></canvas>
+    </div>
+    <div class="cmp-chart-card">
+      <div class="cmp-chart-title">Token usage (input / output)</div>
+      <canvas id="chartTokens"></canvas>
+    </div>
+    <div class="cmp-chart-card">
+      <div class="cmp-chart-title">Avg confidence</div>
+      <canvas id="chartConfidence"></canvas>
+    </div>
+    <div class="cmp-chart-card">
+      <div class="cmp-chart-title">Estimated cost ($ / run)</div>
+      <canvas id="chartCost"></canvas>
+    </div>
+  </div>
+
+  <div class="cmp-history show" id="cmpHistory">
+    <div class="cmp-history-title">
+      Session History
+      <span id="cmpHistoryCount" style="font-weight:400"></span>
+      <button class="btn" style="margin-left:auto;font-size:11px;padding:3px 8px" onclick="clearCmpHistory()">Clear</button>
+    </div>
+    <div id="cmpHistoryList"></div>
+  </div>
+
+  <div class="cmp-empty" id="cmpEmpty">Transcript girin veya <b>Batch All</b> ile tüm senaryoları çalıştırın. Accuracy, False SAFE ve distress metrikleri batch sonrası görünür.</div>
+</div>
+
 <audio id="audioPlayer"></audio>
 <script>
 let ws = null, mediaRecorder = null, audioStream = null;
@@ -573,6 +969,8 @@ async function playAllChunks() {
   // PCM path for Gemini
   if (audioChunkMimeType && audioChunkMimeType.startsWith('audio/pcm')) {
     await playPCMChunks(audioChunks);
+    aiSpeaking = false;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'playback_done' }));
     return;
   }
 
@@ -592,6 +990,10 @@ async function playAllChunks() {
     const src = ctx.createBufferSource();
     src.buffer = decoded;
     src.connect(ctx.destination);
+    src.onended = function() {
+      aiSpeaking = false;
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'playback_done' }));
+    };
     src.start();
   } catch(e) { console.warn('[Audio] Decode error:', e.message); }
 }
@@ -640,17 +1042,37 @@ function connectWS() {
     if (msg.type === 'stt_latency') updateLatency('stt', msg.ms);
     if (msg.type === 'gemini_turn_latency') updateLatency('gemini', msg.ms);
     if (msg.type === 'greeting') {
-  addConversationEntry('ai', msg.text);
-}
+      addConversationEntry('ai', msg.text);
+      if (msg.audio) {
+        try {
+          const binary = atob(msg.audio);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          const blob = new Blob([bytes], { type: 'audio/mpeg' });
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.play().catch(e => console.warn('Greeting audio play failed:', e));
+        } catch (e) { console.warn('Greeting audio decode failed:', e); }
+      }
+    }
     if (msg.type === 'interim_transcript') {
       let ex = document.getElementById('interimEntry');
       if (!ex) { const d = document.createElement('div'); d.className='log-entry worker'; d.id='interimEntry'; d.innerHTML='<div class="log-label">Worker (live)</div><span id="interimText"></span>'; document.getElementById('tab-conversation').appendChild(d); }
       document.getElementById('interimText').textContent = msg.text;
     }
     if (msg.type === 'transcript') {
-  const ex=document.getElementById('interimEntry'); if(ex)ex.remove();
-  addConversationEntry(msg.role === 'ai' ? 'ai' : 'worker', msg.text);
-}
+      const ex = document.getElementById('interimEntry'); if (ex) ex.remove();
+      stopSNRMonitor();
+      const badSNR = (msg.role !== 'ai') ? checkSNRAndWarn() : false;
+      if (!badSNR) {
+        addConversationEntry(msg.role === 'ai' ? 'ai' : 'worker', msg.text);
+      } else {
+        // SNR bad — tell server to cancel this transcript
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'snr_block' }));
+        }
+      }
+    }
     if (msg.type === 'intent') {
       const d = msg.data;
       document.getElementById('intentCard').classList.add('show');
@@ -744,8 +1166,9 @@ function connectWS() {
 if (msg.type === 'audio_stream_end') {
   if (audioChunks.length > 0) {
     playAllChunks();
+  } else {
+    aiSpeaking = false;
   }
-  setTimeout(() => { aiSpeaking = false; }, 800);
 }
   };
   ws.onclose = () => { if (sessionActive) addConversationEntry('system', 'Connection closed.', 'system'); };
@@ -774,6 +1197,30 @@ async function toggleMic() {
       audioStream = await navigator.mediaDevices.getUserMedia({ 
         audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true } 
       });
+
+      // SNR Analyser — shared for both pipelines
+      const snrCtx = getAudioContext();
+      const snrSource = snrCtx.createMediaStreamSource(audioStream);
+      const analyser = snrCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      snrSource.connect(analyser);
+      window._snrAnalyser = analyser;
+      window._snrActive = true;
+
+      // Collect noise floor during first 500ms (before speech)
+      const noiseData = new Float32Array(analyser.fftSize);
+      let noiseSamples = [];
+      const noiseCapture = setInterval(() => {
+        analyser.getFloatTimeDomainData(noiseData);
+        const rms = Math.sqrt(noiseData.reduce((s, v) => s + v*v, 0) / noiseData.length);
+        noiseSamples.push(rms);
+      }, 100);
+      setTimeout(() => {
+        clearInterval(noiseCapture);
+        const noiseFloor = noiseSamples.reduce((a, b) => a + b, 0) / noiseSamples.length || 0.001;
+        window._noiseFloor = noiseFloor;
+        console.log('[SNR] Noise floor RMS:', noiseFloor.toFixed(5));
+      }, 500);
 
       if (pipelineMode === 'gemini') {
   const ctx = getAudioContext();
@@ -815,8 +1262,10 @@ async function toggleMic() {
       document.getElementById('micDot').classList.add('active');
       document.getElementById('micLabel').textContent = 'Recording...';
       document.getElementById('micBtn').textContent = '⏹ Stop Mic';
+      if (pipelineMode !== 'gemini') startSNRMonitor();
     } catch (err) { alert('Mic access denied: ' + err.message); }
   } else {
+    if (pipelineMode !== 'gemini') stopSNRMonitor();
     if (window._geminiProcessor) {
       window._geminiProcessor.source.disconnect();
       window._geminiProcessor.processor.disconnect();
@@ -841,13 +1290,1486 @@ function stopSession() {
   ['stt','llm','tts'].forEach(s => setStageState(s, 'disconnected'));
 }
 
+function calculateSNR() {
+  if (!window._snrAnalyser || !window._noiseFloor) return null;
+  const data = new Float32Array(window._snrAnalyser.fftSize);
+  window._snrAnalyser.getFloatTimeDomainData(data);
+  const signalRMS = Math.sqrt(data.reduce((s, v) => s + v*v, 0) / data.length);
+  const noiseFloor = window._noiseFloor || 0.001;
+  if (signalRMS < 0.001) return null;
+  const snrDb = 20 * Math.log10(signalRMS / noiseFloor);
+  return snrDb;
+}
+
+function showSNRWarning(snrDb) {
+  const existing = document.getElementById('snrWarning');
+  if (existing) existing.remove();
+  const div = document.createElement('div');
+  div.id = 'snrWarning';
+  div.style.cssText = 'background:#7c2d12;border:1px solid #f97316;color:#fed7aa;padding:10px 14px;border-radius:8px;margin:8px 0;font-size:13px;display:flex;align-items:center;gap:8px;';
+  div.innerHTML = `<span>⚠️</span><span>High background noise detected (SNR: ${snrDb.toFixed(0)}dB). Please move to a quieter location or speak closer to the microphone and try again.</span>`;
+  // Try multiple possible container IDs
+  const container = document.getElementById('tab-conversation') || document.getElementById('convLog') || document.querySelector('.conversation-log') || document.body;
+  container.appendChild(div);
+  console.log('[SNR] Warning shown, SNR:', snrDb.toFixed(1) + 'dB');
+  setTimeout(() => { if (div.parentNode) div.remove(); }, 8000);
+}
+
+// Continuously collect SNR samples while mic is active
+function startSNRMonitor() {
+  window._snrSamples = [];
+  window._snrInterval = setInterval(() => {
+    const snr = calculateSNR();
+    if (snr !== null) window._snrSamples.push(snr);
+  }, 100);
+}
+
+function stopSNRMonitor() {
+  if (window._snrInterval) { clearInterval(window._snrInterval); window._snrInterval = null; }
+}
+
+function checkSNRAndWarn() {
+  const samples = window._snrSamples || [];
+  if (samples.length === 0) return false;
+  const avgSnr = samples.reduce((a, b) => a + b, 0) / samples.length;
+  console.log('[SNR] Avg during speech:', avgSnr.toFixed(1) + 'dB | samples:', samples.length);
+  window._snrSamples = [];
+  const SNR_THRESHOLD = -3;
+  if (avgSnr < SNR_THRESHOLD) {
+    showSNRWarning(avgSnr);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'snr_retry' }));
+    }
+    return true; // bad SNR
+  }
+  return false;
+}
+
 function sendMock(text) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
   ws.send(JSON.stringify({ type: 'mock_transcript', text }));
 }
 
+async function sendAudioFile() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
+  const input = document.getElementById('audioFileInput');
+  const status = document.getElementById('audioFileStatus');
+  if (!input.files || !input.files[0]) { alert('Please select an MP3 file first'); return; }
+
+  const file = input.files[0];
+  const mode = document.getElementById('pipelineMode') ? document.getElementById('pipelineMode').value : 'cascaded';
+  status.textContent = 'Converting...';
+
+  try {
+    // Convert MP3 to PCM via AudioContext (browser-native, no ffmpeg needed)
+    const arrayBuffer = await file.arrayBuffer();
+    const audioCtx = new AudioContext({ sampleRate: 16000 });
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+    // Get mono channel, convert to 16-bit PCM
+    const channelData = decoded.getChannelData(0);
+    const pcmBuffer = new Int16Array(channelData.length);
+    for (let i = 0; i < channelData.length; i++) {
+      pcmBuffer[i] = Math.max(-32768, Math.min(32767, Math.round(channelData[i] * 32767)));
+    }
+
+    const durationSec = (channelData.length / 16000).toFixed(2);
+    status.textContent = `Sending ${durationSec}s audio...`;
+
+    // Calculate SNR from file audio — find quietest 0.2s window as noise floor
+    try {
+      const windowSize = Math.floor(16000 * 0.2); // 0.2s windows
+      let minRMS = Infinity;
+      let maxRMS = 0;
+      for (let i = 0; i < channelData.length - windowSize; i += windowSize) {
+        const window = channelData.slice(i, i + windowSize);
+        const rms = Math.sqrt(window.reduce((s, v) => s + v*v, 0) / window.length);
+        if (rms < minRMS) minRMS = rms;
+        if (rms > maxRMS) maxRMS = rms;
+      }
+      const noiseFloor = Math.max(minRMS, 0.0001);
+      const snrDb = 20 * Math.log10(maxRMS / noiseFloor);
+      console.log('[SNR] File — min RMS:', minRMS.toFixed(5), '| max RMS:', maxRMS.toFixed(5), '| SNR:', snrDb.toFixed(1) + 'dB');
+      if (snrDb < 3) showSNRWarning(snrDb);
+    } catch(e) { console.warn('[SNR] File analysis error:', e.message); }
+
+    if (pipelineMode === 'gemini') {
+      // Gemini: send as binary PCM directly
+      ws.send(pcmBuffer.buffer);
+      status.textContent = `✓ Sent ${durationSec}s to Gemini`;
+    } else {
+      // Cascaded: send as binary PCM — server.js handles Deepgram STT
+      ws.send(JSON.stringify({ type: 'audio_file_start', filename: file.name, duration: durationSec }));
+      // Send PCM in chunks
+      const CHUNK = 4096;
+      const bytes = new Uint8Array(pcmBuffer.buffer);
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        ws.send(bytes.slice(i, i + CHUNK));
+        await new Promise(r => setTimeout(r, 10));
+      }
+      ws.send(JSON.stringify({ type: 'audio_file_end' }));
+      status.textContent = `✓ Sent ${durationSec}s to Cascaded pipeline`;
+    }
+
+    await audioCtx.close();
+  } catch (e) {
+    status.textContent = '✗ Error: ' + e.message;
+    console.error('Audio file error:', e);
+  }
+}
+
 updateAlertTimes();
 setInterval(updateAlertTimes, 60000);
+
+// ─── Model Comparison Dashboard ─────────────────────────────────
+const CMP_MODEL_ORDER = [
+  'claude-haiku-4-5',
+  'claude-sonnet-4-6',
+  'gemini-2.0-flash-live-001',
+  'gemini-3.1-flash-live-preview',
+];
+
+const CMP_MODEL_META = {
+  'claude-haiku-4-5': { label: 'Claude Haiku 4.5', color: '#3fb950' },
+  'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', color: '#a371f7' },
+  'gemini-2.0-flash-live-001': { label: 'Gemini 2.0 Flash Live', color: '#4285f4' },
+  'gemini-3.1-flash-live-preview': { label: 'Gemini 3.1 Flash Live', color: '#fbbc04' },
+};
+
+function sortCmpModels(models) {
+  const order = CMP_MODEL_ORDER;
+  return [...(models || [])].sort((a, b) => {
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+}
+
+function orderedCmpResults(results) {
+  if (!results) return [];
+  const keys = sortCmpModels(Object.keys(results));
+  return keys.map(m => results[m]).filter(Boolean);
+}
+
+let cmpScenarios = [];
+let cmpExpected = null;
+let cmpResults = {};
+let cmpFreeformResults = {};
+let compareMode = 'intent';
+let cmpBatchData = null; // { mode:'batch', models, scenarios, rows, metrics, timestamp }
+let cmpLastExport = null;
+let cmpCharts = {};
+let cmpMicActive = false;
+let cmpDgWs = null;
+let cmpMicStream = null;
+let cmpMicProcessor = null;
+let cmpPostSpeechStart = null;
+let cmpLastSttMs = null; // mic Deepgram WS or audio-file STT latency (ms) for /compare-intent
+let cmpStopFlag = false;
+let cmpHistory = JSON.parse(localStorage.getItem('cmp_history') || '[]');
+
+function switchView(view) {
+  const demo = document.getElementById('view-demo');
+  const compare = document.getElementById('view-compare');
+  const navDemo = document.getElementById('nav-demo');
+  const navCmp = document.getElementById('nav-compare');
+  const sub = document.getElementById('headerSubtitle');
+  const badge = document.getElementById('headerBadge');
+
+  if (view === 'compare') {
+    demo.classList.add('hidden');
+    compare.classList.add('active');
+    navDemo.classList.remove('active');
+    navCmp.classList.add('active');
+    sub.textContent = '— Model Comparison Dashboard';
+    badge.textContent = 'Intent · Latency · Cost';
+    if (!cmpScenarios.length) loadCmpScenarios();
+    renderCmpHistory();
+  } else {
+    demo.classList.remove('hidden');
+    compare.classList.remove('active');
+    navDemo.classList.add('active');
+    navCmp.classList.remove('active');
+    sub.textContent = '— Cascaded Pipeline Demo';
+    badge.textContent = pipelineMode === 'gemini'
+      ? 'Gemini Live API — End-to-End'
+      : 'Deepgram Nova-3 · Claude · ElevenLabs';
+  }
+}
+
+function setCmpRuns(n) {
+  document.getElementById('cmpRuns').value = n;
+}
+
+function setCompareMode(mode) {
+  if (compareMode === mode) return;
+  compareMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('mode-' + mode).classList.add('active');
+  cmpResults = {};
+  cmpFreeformResults = {};
+  cmpLastExport = null;
+  cmpBatchData = null;
+  destroyCmpCharts();
+  document.getElementById('cmpTableWrap').classList.remove('show');
+  document.getElementById('cmpFreeformTableWrap').classList.remove('show');
+  document.getElementById('cmpSplitWrap').classList.remove('show');
+  document.getElementById('cmpBatchTableWrap').classList.remove('show');
+  document.getElementById('cmpCharts').classList.remove('show');
+  document.getElementById('cmpSummaryBox').classList.remove('show');
+  document.getElementById('cmpMetrics').classList.remove('show');
+  document.getElementById('cmpToolbar').classList.remove('show');
+  document.getElementById('cmpTableBody').innerHTML = '';
+  document.getElementById('cmpFreeformBody').innerHTML = '';
+  document.getElementById('cmpSplitBody').innerHTML = '';
+  document.getElementById('cmpEmpty').style.display = 'block';
+}
+
+function stopCmpRun() {
+  cmpStopFlag = true;
+  document.getElementById('cmpStopBtn').disabled = true;
+  document.getElementById('cmpProgressLabel').textContent = 'Stopping...';
+}
+
+function setCmpRunning(running) {
+  document.getElementById('cmpRunBtn').disabled = running;
+  document.getElementById('cmpBatchBtn').disabled = running;
+  document.getElementById('cmpStopBtn').disabled = !running;
+}
+
+function showCmpProgress(done, total, label) {
+  const wrap = document.getElementById('cmpProgress');
+  wrap.classList.add('show');
+  document.getElementById('cmpProgressLabel').textContent = label || '';
+  document.getElementById('cmpProgressBar').style.width = (total ? (done / total) * 100 : 0) + '%';
+}
+
+function hideCmpProgress() {
+  document.getElementById('cmpProgress').classList.remove('show');
+}
+
+function showQuotaBanner(errors) {
+  const el = document.getElementById('cmpQuotaBanner');
+  const quotaErr = errors.find(e => /quota|rate limit|limit:\s*0/i.test(e || ''));
+  if (!quotaErr) { el.classList.remove('show'); el.textContent = ''; return; }
+  el.classList.add('show');
+  el.textContent = 'Gemini free-tier kotası tükendi veya rate limit aşıldı. Claude modelleriyle devam edebilirsiniz; kota yenilenince veya billing açılınca Gemini tekrar çalışır.';
+}
+
+function toggleCmpModel(el) {
+  el.classList.toggle('checked');
+  const input = el.querySelector('input');
+  if (input) input.checked = el.classList.contains('checked');
+}
+
+function getSelectedCmpModels() {
+  return sortCmpModels(
+    [...document.querySelectorAll('.cmp-model-check.checked')].map(el => el.dataset.model)
+  );
+}
+
+async function loadCmpScenarios() {
+  try {
+    const res = await fetch('/compare-scenarios');
+    const data = await res.json();
+    cmpScenarios = data.scenarios || [];
+    const sel = document.getElementById('cmpScenario');
+    const groups = {};
+    cmpScenarios.forEach((s, i) => {
+      if (!groups[s.category]) groups[s.category] = [];
+      groups[s.category].push({ ...s, idx: i });
+    });
+    sel.innerHTML = '<option value="">— Senaryo seç —</option>';
+    Object.keys(groups).forEach(cat => {
+      const og = document.createElement('optgroup');
+      og.label = cat;
+      groups[cat].forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = String(s.idx);
+        opt.textContent = s.text.length > 60 ? s.text.slice(0, 57) + '...' : s.text;
+        og.appendChild(opt);
+      });
+      sel.appendChild(og);
+    });
+  } catch (e) {
+    console.warn('Failed to load scenarios', e);
+  }
+}
+
+function onScenarioSelect() {
+  const idx = document.getElementById('cmpScenario').value;
+  if (idx === '') { cmpExpected = null; return; }
+  const s = cmpScenarios[parseInt(idx, 10)];
+  if (!s) return;
+  document.getElementById('cmpTranscript').value = s.text;
+  cmpExpected = s.expected || null;
+  cmpLastSttMs = null;
+}
+
+function cmpStopDeepgramMic(flush) {
+  cmpMicActive = false;
+  document.getElementById('cmpMicBtn').textContent = '🎤 Mic';
+  if (cmpMicProcessor) {
+    try {
+      cmpMicProcessor.source.disconnect();
+      cmpMicProcessor.processor.disconnect();
+      if (cmpMicProcessor.ctx && cmpMicProcessor.ctx.state !== 'closed') cmpMicProcessor.ctx.close();
+    } catch (e) {}
+    cmpMicProcessor = null;
+  }
+  if (cmpMicStream) {
+    cmpMicStream.getTracks().forEach(t => t.stop());
+    cmpMicStream = null;
+  }
+  if (cmpDgWs && cmpDgWs.readyState === WebSocket.OPEN) {
+    if (flush !== false) {
+      try { cmpDgWs.send(JSON.stringify({ type: 'CloseStream' })); } catch (e) {}
+    }
+    const ws = cmpDgWs;
+    setTimeout(() => { try { ws.close(); } catch (e) {} }, flush === false ? 0 : 1500);
+  }
+  cmpDgWs = null;
+  cmpPostSpeechStart = null;
+}
+
+async function cmpToggleMic() {
+  const status = document.getElementById('cmpMicStatus');
+  if (cmpMicActive) {
+    status.textContent = 'Finishing transcript...';
+    cmpStopDeepgramMic(true);
+    return;
+  }
+  try {
+    status.textContent = 'Connecting Deepgram...';
+    const cfgRes = await fetch('/compare-stt-config');
+    const cfg = await cfgRes.json();
+    if (!cfgRes.ok) throw new Error(cfg.error || 'Deepgram not configured');
+
+    cmpLastSttMs = null;
+    cmpPostSpeechStart = null;
+
+    cmpMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const dgParams = new URLSearchParams(cfg.params);
+    dgParams.set('sample_rate', String(ctx.sampleRate));
+    const wsUrl = 'wss://api.deepgram.com/v1/listen?' + dgParams.toString();
+
+    cmpDgWs = new WebSocket(wsUrl, ['token', cfg.apiKey]);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Deepgram connection timeout')), 8000);
+      cmpDgWs.onopen = () => { clearTimeout(timer); resolve(); };
+      cmpDgWs.onerror = () => { clearTimeout(timer); reject(new Error('Deepgram WebSocket error')); };
+    });
+
+    cmpDgWs.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'UtteranceEnd') {
+          cmpPostSpeechStart = Date.now();
+        }
+        if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
+          const text = msg.channel.alternatives[0].transcript;
+          if (!text || !text.trim()) return;
+          if (msg.is_final && !msg.speech_final) {
+            status.textContent = 'Processing speech...';
+          }
+          if (msg.is_final && msg.speech_final) {
+            const sttMs = cmpPostSpeechStart != null
+              ? Math.max(0, Date.now() - cmpPostSpeechStart)
+              : null;
+            cmpLastSttMs = sttMs;
+            cmpPostSpeechStart = null;
+            document.getElementById('cmpTranscript').value = text;
+            cmpExpected = null;
+            document.getElementById('cmpScenario').value = '';
+            status.textContent = sttMs != null
+              ? `Transcript captured (STT ${sttMs}ms).`
+              : 'Transcript captured.';
+            cmpStopDeepgramMic(false);
+          }
+        }
+      } catch (e) {}
+    };
+    cmpDgWs.onclose = () => {
+      if (cmpMicActive) {
+        cmpMicActive = false;
+        document.getElementById('cmpMicBtn').textContent = '🎤 Mic';
+      }
+    };
+
+    const source = ctx.createMediaStreamSource(cmpMicStream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (e) => {
+      if (!cmpMicActive || !cmpDgWs || cmpDgWs.readyState !== WebSocket.OPEN) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+      }
+      cmpDgWs.send(int16.buffer);
+    };
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    cmpMicProcessor = { source, processor, ctx };
+
+    cmpMicActive = true;
+    document.getElementById('cmpMicBtn').textContent = '⏹ Stop';
+    status.textContent = 'Listening (Deepgram)...';
+  } catch (e) {
+    cmpLastSttMs = null;
+    cmpStopDeepgramMic(false);
+    status.textContent = 'Mic error: ' + e.message;
+  }
+}
+
+async function cmpTranscribeFile(input) {
+  const status = document.getElementById('cmpMicStatus');
+  const file = input.files && input.files[0];
+  if (!file) return;
+  status.textContent = 'Transcribing ' + file.name + '...';
+  try {
+    const buf = await file.arrayBuffer();
+    const sttStart = Date.now();
+    const res = await fetch('/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: buf,
+    });
+    const sttMs = Date.now() - sttStart;
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Transcription failed');
+    document.getElementById('cmpTranscript').value = data.transcript || '';
+    cmpExpected = null;
+    document.getElementById('cmpScenario').value = '';
+    cmpLastSttMs = data.transcript ? sttMs : null;
+    status.textContent = data.transcript
+      ? `Transcript from audio file (STT ${sttMs}ms).`
+      : 'No speech detected.';
+  } catch (e) {
+    cmpLastSttMs = null;
+    status.textContent = 'Transcribe error: ' + e.message;
+  }
+  input.value = '';
+}
+
+function fmtMs(n) { return Math.round(n) + 'ms'; }
+
+function renderLatencyBreakdown(data, model) {
+  // Gemini: total latency only — no cascaded STT/LLM/TTS strip.
+  if (model && String(model).startsWith('gemini')) return '';
+  // Breakdown is for Claude cascaded pipeline cards.
+  if (model && !String(model).startsWith('claude')) return '';
+  if (!data) return '';
+  // Show when we have any pipeline stage (STT may be null without mic).
+  if (data.avg_llm_ms == null && data.avg_tts_ms == null && data.avg_stt_ms == null) return '';
+  const fmtBreakdown = (v) => v != null ? v + 'ms' : '—';
+  return `<div class="latency-breakdown">
+    <div class="breakdown-item">
+      <span class="breakdown-label breakdown-label-row">STT<span class="breakdown-tip" data-tip="Deepgram Nova-2 ortalama STT latency tahmini (~300ms). Gerçek değer için calls.html üzerinden Twilio araması yapın.">ⓘ</span></span>
+      <span class="breakdown-value">${fmtBreakdown(data.avg_stt_ms)}</span>
+    </div>
+    <div class="breakdown-sep">→</div>
+    <div class="breakdown-item">
+      <span class="breakdown-label">LLM</span>
+      <span class="breakdown-value">${fmtBreakdown(data.avg_llm_ms)}</span>
+    </div>
+    <div class="breakdown-sep">→</div>
+    <div class="breakdown-item">
+      <span class="breakdown-label">TTS<span class="breakdown-tip" data-tip="Intent audio cache hit ≈ 1ms; cache miss = gerçek ElevenLabs süresi.">ⓘ</span></span>
+      <span class="breakdown-value">${fmtBreakdown(data.avg_tts_ms)}</span>
+    </div>
+  </div>`;
+}
+function fmtCost(n) { return '$' + (n || 0).toFixed(6); }
+function fmtPct(n) { return Math.round((n || 0) * 100) + '%'; }
+function modelDomId(model) { return String(model).replace(/[^a-zA-Z0-9_-]/g, '_'); }
+
+function renderCmpLoadingRow(model) {
+  const meta = CMP_MODEL_META[model] || { label: model, color: '#58a6ff' };
+  return `<tr class="loading" id="cmp-row-${modelDomId(model)}" data-model="${model}">
+    <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label}</td>
+    <td colspan="8"><span class="cmp-spinner"></span>Running...</td>
+  </tr>`;
+}
+
+function renderCmpFreeformRow(model, data) {
+  const meta = CMP_MODEL_META[model] || { label: model, color: '#58a6ff' };
+  if (!data.ok) {
+    return `<tr class="error-row" data-model="${model}">
+      <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label}</td>
+      <td colspan="6">Error: ${escapeHtml(data.error || 'Unknown error')}</td>
+    </tr>`;
+  }
+  const detailId = 'cmp-ff-detail-' + modelDomId(model);
+  const runsHtml = (data.runs || []).map(r => {
+    if (!r.ok) {
+      return `<div class="cmp-run-row" style="grid-template-columns:50px 80px 1fr"><span>#${r.run}</span><span>—</span><span>${escapeHtml(r.error || 'ERROR')}</span></div>`;
+    }
+    return `<div class="cmp-run-row" style="grid-template-columns:50px 80px 1fr">
+      <span>#${r.run}</span><span>${r.latency}ms</span><span>${escapeHtml(r.response || '')}</span>
+    </div>`;
+  }).join('');
+
+  return `<tr class="clickable" data-model="${model}" onclick="toggleCmpDetail('${detailId}')">
+    <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label} ▾</td>
+    <td style="max-width:360px">${escapeHtml(data.last_response || '—')}</td>
+    <td>${fmtMs(data.avg_latency)}</td>
+    <td>${fmtMs(data.min_latency)}</td>
+    <td>${fmtMs(data.max_latency)}</td>
+    <td>${data.avg_tokens} <span style="color:var(--muted);font-size:10px">(${data.avg_input_tokens}/${data.avg_output_tokens})</span></td>
+    <td>${fmtCost(data.est_cost)}</td>
+  </tr>
+  <tr class="cmp-detail" id="${detailId}">
+    <td colspan="7"><div class="cmp-detail-inner">
+      <div class="cmp-run-row" style="grid-template-columns:50px 80px 1fr;font-weight:600;color:var(--text)">
+        <span>Run</span><span>Latency</span><span>Response</span>
+      </div>
+      ${runsHtml}
+    </div></td>
+  </tr>`;
+}
+
+function renderCmpSplitCard(model, intentData, freeformData) {
+  const meta = CMP_MODEL_META[model] || { label: model, color: '#58a6ff' };
+  const intentPanel = !intentData || !intentData.ok
+    ? `<div class="split-panel-error">${escapeHtml((intentData && intentData.error) || 'Intent run failed')}</div>`
+    : (() => {
+        const lastRun = (intentData.runs || []).filter(r => r.ok).slice(-1)[0];
+        const responseText = lastRun?.response || '';
+        return `<div class="split-panel-intent cmp-intent ${intentData.intent}">${intentData.intent} (${fmtPct(intentData.avg_confidence)})</div>
+       <div class="split-panel-meta">Total: ${fmtMs(intentData.avg_latency)} · ${intentData.avg_tokens} tokens · ${fmtCost(intentData.est_cost)}</div>
+       ${renderLatencyBreakdown(intentData, model)}
+       <div class="split-panel-response">"${escapeHtml(responseText)}"</div>`;
+      })();
+
+  const freeformPanel = !freeformData || !freeformData.ok
+    ? `<div class="split-panel-error">${escapeHtml((freeformData && freeformData.error) || 'Free-form run failed')}</div>`
+    : `<div class="split-panel-meta">${fmtMs(freeformData.avg_latency)} · ${freeformData.avg_tokens} tokens · ${fmtCost(freeformData.est_cost)}</div>
+       <div class="split-panel-response">"${escapeHtml(freeformData.last_response || '')}"</div>`;
+
+  return `<div class="cmp-split-card">
+    <div class="cmp-split-card-header">
+      <span class="cmp-dot" style="background:${meta.color}"></span>${meta.label}
+    </div>
+    <div class="cmp-split-card-body">
+      <div class="split-result">
+        <div class="split-panel intent">
+          <div class="split-panel-label">Intent Mode</div>
+          ${intentPanel}
+        </div>
+        <div class="split-panel freeform">
+          <div class="split-panel-label">Free-Form Mode</div>
+          ${freeformPanel}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildFreeformSummary(results) {
+  const ok = orderedCmpResults(results).filter(r => r.ok);
+  if (!ok.length) return ['Hiçbir model başarılı free-form cevap üretemedi.'];
+  const fastest = ok.reduce((a, b) => a.avg_latency <= b.avg_latency ? a : b);
+  const cheap = ok.reduce((a, b) => a.est_cost <= b.est_cost ? a : b);
+  return [
+    `En hızlı free-form: <strong>${fastest.label}</strong> (${fmtMs(fastest.avg_latency)})`,
+    `En ucuz free-form: <strong>${cheap.label}</strong> (${fmtCost(cheap.est_cost)} / run)`,
+  ];
+}
+
+function buildBothSummary(intentResults, freeformResults) {
+  const lines = buildCmpSummary(intentResults);
+  lines.push('—');
+  buildFreeformSummary(freeformResults).forEach(l => lines.push(l));
+  return lines;
+}
+
+function renderCmpResultRow(model, data) {
+  const meta = CMP_MODEL_META[model] || { label: model, color: '#58a6ff' };
+  if (!data.ok) {
+    return `<tr class="error-row" data-model="${model}">
+      <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label}</td>
+      <td colspan="8">Error: ${escapeHtml(data.error || 'Unknown error')}</td>
+    </tr>`;
+  }
+  const correctCell = data.correct === null || data.correct === undefined
+    ? '—'
+    : (data.correct
+      ? '<span class="cmp-correct yes">✓</span>'
+      : '<span class="cmp-correct no">✗</span>');
+  const detailId = 'cmp-detail-' + modelDomId(model);
+  const runsHtml = (data.runs || []).map(r => {
+    if (!r.ok) {
+      return `<div class="cmp-run-row"><span>#${r.run}</span><span>—</span><span class="intent">ERROR</span><span>—</span><span>${escapeHtml(r.error || '')}</span></div>`;
+    }
+    return `<div class="cmp-run-row">
+      <span>#${r.run}</span>
+      <span>${r.latency}ms</span>
+      <span class="intent">${r.intent}</span>
+      <span>${fmtPct(r.confidence)}</span>
+      <span>${escapeHtml(r.response || '')}</span>
+    </div>`;
+  }).join('');
+
+  return `<tr class="clickable" data-model="${model}" onclick="toggleCmpDetail('${detailId}')">
+    <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label} ▾</td>
+    <td><span class="cmp-intent ${data.intent}">${data.intent}</span>${data.distress ? ` <span style="font-size:10px;color:var(--danger)">distress:${data.distress}</span>` : ''}</td>
+    <td>${fmtPct(data.avg_confidence)}</td>
+    <td>
+      <div>Total: ${fmtMs(data.avg_latency)}</div>
+      ${renderLatencyBreakdown(data, model)}
+    </td>
+    <td>${fmtMs(data.min_latency)}</td>
+    <td>${fmtMs(data.max_latency)}</td>
+    <td>${data.avg_tokens} <span style="color:var(--muted);font-size:10px">(${data.avg_input_tokens}/${data.avg_output_tokens})</span></td>
+    <td>${fmtCost(data.est_cost)}</td>
+    <td>${correctCell}</td>
+  </tr>
+  <tr class="cmp-detail" id="${detailId}">
+    <td colspan="9"><div class="cmp-detail-inner">
+      <div class="cmp-run-row" style="font-weight:600;color:var(--text)">
+        <span>Run</span><span>Latency</span><span>Intent</span><span>Conf.</span><span>Response</span>
+      </div>
+      ${runsHtml}
+    </div></td>
+  </tr>`;
+}
+
+function toggleCmpDetail(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function intentConsistency(runs) {
+  const ok = (runs || []).filter(r => r.ok && r.intent);
+  if (ok.length < 2) return null;
+  const counts = {};
+  ok.forEach(r => { counts[r.intent] = (counts[r.intent] || 0) + 1; });
+  const top = Math.max(...Object.values(counts));
+  return top / ok.length;
+}
+
+function buildCmpSummary(results) {
+  const ok = orderedCmpResults(results).filter(r => r.ok);
+  if (!ok.length) return ['Hiçbir model başarılı sonuç döndürmedi.'];
+  const lines = [];
+  const fastest = ok.reduce((a, b) => a.avg_latency <= b.avg_latency ? a : b);
+  const conf = ok.reduce((a, b) => a.avg_confidence >= b.avg_confidence ? a : b);
+  const cheap = ok.reduce((a, b) => a.est_cost <= b.est_cost ? a : b);
+  lines.push(`En hızlı: <strong>${fastest.label}</strong> (${fmtMs(fastest.avg_latency)})`);
+  lines.push(`En yüksek confidence: <strong>${conf.label}</strong> (${fmtPct(conf.avg_confidence)})`);
+  lines.push(`En ucuz: <strong>${cheap.label}</strong> (${fmtCost(cheap.est_cost)} / run)`);
+
+  if (ok.length >= 2) {
+    const sorted = [...ok].sort((a, b) => a.avg_latency - b.avg_latency);
+    const a = sorted[0], b = sorted[sorted.length - 1];
+    if (b.avg_latency > 0) {
+      const pct = Math.round((1 - a.avg_latency / b.avg_latency) * 100);
+      lines.push(`<strong>${a.label}</strong> bu senaryoda <strong>${b.label}</strong>'den %${pct} daha hızlı`);
+    }
+  }
+
+  const withCorrect = ok.filter(r => r.correct === true || r.correct === false);
+  if (withCorrect.length) {
+    const correctModels = withCorrect.filter(r => r.correct).map(r => r.label);
+    lines.push(correctModels.length
+      ? `Doğru intent: <strong>${correctModels.join(', ')}</strong>`
+      : 'Hiçbir model beklenen intent\'i vermedi.');
+  }
+
+  ok.forEach(r => {
+    const c = intentConsistency(r.runs);
+    if (c !== null) {
+      lines.push(`Tutarlılık <strong>${r.label}</strong>: ${fmtPct(c)} (${r.runs.filter(x => x.ok).length} run)`);
+    }
+  });
+  return lines;
+}
+
+function computeBatchMetrics(models, rows) {
+  const metrics = {};
+  models.forEach(model => {
+    const meta = CMP_MODEL_META[model] || { label: model };
+    let correct = 0, scored = 0;
+    let falseSafe = 0, humanExpected = 0;
+    let distressHit = 0, distressTotal = 0;
+    let consistencySum = 0, consistencyN = 0;
+    let latencySum = 0, latencyN = 0;
+    let errors = 0;
+
+    rows.forEach(row => {
+      const cell = row.models[model];
+      if (!cell) return;
+      const okRuns = (cell.runs || []).filter(r => r.ok);
+      const runCount = cell.success_runs != null ? cell.success_runs : okRuns.length;
+      if (!runCount) { errors++; return; }
+
+      correct += okRuns.filter(r => r.intent === row.expected).length;
+      scored += runCount;
+      latencySum += cell.avg_latency || 0;
+      latencyN++;
+
+      if (row.expected === 'REQUEST_HUMAN') {
+        humanExpected += runCount;
+        falseSafe += okRuns.filter(r => r.intent === 'SAFE_CONFIRMATION').length;
+      }
+
+      const isDistressScenario = /distress|çelişkili|celiskili/i.test(row.category || '')
+        || row.expected === 'REQUEST_HUMAN';
+      if (isDistressScenario && row.expected === 'REQUEST_HUMAN') {
+        distressTotal += runCount;
+        distressHit += okRuns.filter(r => r.intent === 'REQUEST_HUMAN').length;
+      }
+
+      const c = intentConsistency(cell.runs);
+      if (c !== null) { consistencySum += c; consistencyN++; }
+    });
+
+    metrics[model] = {
+      label: meta.label,
+      model,
+      accuracy: scored ? correct / scored : null,
+      correct,
+      scored,
+      false_safe_rate: humanExpected ? falseSafe / humanExpected : null,
+      false_safe: falseSafe,
+      human_expected: humanExpected,
+      distress_recall: distressTotal ? distressHit / distressTotal : null,
+      distress_hit: distressHit,
+      distress_total: distressTotal,
+      consistency: consistencyN ? consistencySum / consistencyN : null,
+      avg_latency: latencyN ? Math.round(latencySum / latencyN) : null,
+      errors,
+    };
+  });
+  return metrics;
+}
+
+function renderCmpMetrics(metrics, models) {
+  const el = document.getElementById('cmpMetrics');
+  if (!metrics || !models.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+
+  const cards = [
+    {
+      title: 'Accuracy',
+      render: (m) => m.accuracy === null
+        ? '—'
+        : `${m.correct}/${m.scored} (${fmtPct(m.accuracy)})`,
+      cls: (m) => m.accuracy === null ? '' : (m.accuracy >= 0.85 ? 'good' : m.accuracy >= 0.7 ? 'warn' : 'bad'),
+    },
+    {
+      title: 'False SAFE rate',
+      sub: 'REQUEST_HUMAN beklenirken SAFE',
+      render: (m) => m.false_safe_rate === null
+        ? '—'
+        : `${m.false_safe}/${m.human_expected} (${fmtPct(m.false_safe_rate)})`,
+      cls: (m) => m.false_safe_rate === null ? '' : (m.false_safe_rate === 0 ? 'good' : m.false_safe_rate <= 0.1 ? 'warn' : 'bad'),
+    },
+    {
+      title: 'Distress recall',
+      sub: 'REQUEST_HUMAN yakalama',
+      render: (m) => m.distress_recall === null
+        ? '—'
+        : `${m.distress_hit}/${m.distress_total} (${fmtPct(m.distress_recall)})`,
+      cls: (m) => m.distress_recall === null ? '' : (m.distress_recall >= 0.9 ? 'good' : m.distress_recall >= 0.75 ? 'warn' : 'bad'),
+    },
+    {
+      title: 'Intent tutarlılığı',
+      sub: 'N run içinde aynı intent',
+      render: (m) => m.consistency === null ? '—' : fmtPct(m.consistency),
+      cls: (m) => m.consistency === null ? '' : (m.consistency >= 0.9 ? 'good' : m.consistency >= 0.7 ? 'warn' : 'bad'),
+    },
+  ];
+
+  el.innerHTML = cards.map(card => `
+    <div class="cmp-metric-card">
+      <div class="m-label">${card.title}${card.sub ? `<div style="font-weight:400;text-transform:none;letter-spacing:0;margin-top:2px;opacity:0.8">${card.sub}</div>` : ''}</div>
+      ${models.map(model => {
+        const m = metrics[model];
+        if (!m) return '';
+        return `<div class="cmp-metric-row"><span class="m-name">${m.label}</span><span class="m-val ${card.cls(m)}">${card.render(m)}</span></div>`;
+      }).join('')}
+    </div>
+  `).join('');
+  el.classList.add('show');
+}
+
+function buildBatchSummary(metrics, models) {
+  const list = models.map(m => metrics[m]).filter(Boolean);
+  if (!list.length) return ['Batch tamamlandı ama skorlanabilir sonuç yok.'];
+  const lines = [];
+
+  const byAcc = list.filter(m => m.accuracy !== null).sort((a, b) => b.accuracy - a.accuracy || (a.avg_latency || 9e9) - (b.avg_latency || 9e9));
+  if (byAcc.length) {
+    lines.push(`En yüksek accuracy: <strong>${byAcc[0].label}</strong> (${byAcc[0].correct}/${byAcc[0].scored})`);
+  }
+
+  const bySafe = list.filter(m => m.false_safe_rate !== null).sort((a, b) => a.false_safe_rate - b.false_safe_rate);
+  if (bySafe.length) {
+    lines.push(`En düşük False SAFE: <strong>${bySafe[0].label}</strong> (${fmtPct(bySafe[0].false_safe_rate)})`);
+  }
+
+  const byDistress = list.filter(m => m.distress_recall !== null).sort((a, b) => b.distress_recall - a.distress_recall);
+  if (byDistress.length) {
+    lines.push(`En iyi distress recall: <strong>${byDistress[0].label}</strong> (${fmtPct(byDistress[0].distress_recall)})`);
+  }
+
+  const safeAndFast = list.filter(m => m.false_safe_rate === 0 && m.accuracy !== null)
+    .sort((a, b) => (a.avg_latency || 9e9) - (b.avg_latency || 9e9));
+  if (safeAndFast.length) {
+    lines.push(`Öneri (False SAFE=0, en hızlı): <strong>${safeAndFast[0].label}</strong> (~${fmtMs(safeAndFast[0].avg_latency)})`);
+  } else if (byAcc.length) {
+    lines.push(`Öneri: <strong>${byAcc[0].label}</strong> — en yüksek accuracy, False SAFE kontrolünü ayrıca inceleyin.`);
+  }
+
+  list.filter(m => m.errors > 0).forEach(m => {
+    lines.push(`<span style="color:var(--danger)">${m.label}: ${m.errors} senaryoda hata</span>`);
+  });
+  return lines;
+}
+
+function renderBatchTable(models, rows) {
+  const head = document.getElementById('cmpBatchHead');
+  const body = document.getElementById('cmpBatchBody');
+  head.innerHTML = `<tr><th>Scenario</th><th>Category</th><th>Expected</th>${
+    models.map(m => `<th>${(CMP_MODEL_META[m] || {}).label || m}</th>`).join('')
+  }</tr>`;
+
+  body.innerHTML = rows.map(row => {
+    const cells = models.map(model => {
+      const cell = row.models[model];
+      if (!cell) return '<td>—</td>';
+      if (!cell.ok) return `<td class="cell-err">Error</td>`;
+      const cls = cell.correct ? 'cell-ok' : 'cell-bad';
+      const mark = cell.correct ? '✓' : '✗';
+      return `<td class="${cls}"><div>${cell.intent} ${mark}</div><div style="color:var(--muted)">${cell.avg_latency}ms</div></td>`;
+    }).join('');
+    return `<tr>
+      <td title="${escapeHtml(row.text)}">${escapeHtml(row.text.length > 42 ? row.text.slice(0, 40) + '…' : row.text)}</td>
+      <td>${escapeHtml(row.category)}</td>
+      <td><span class="cmp-intent ${row.expected}">${row.expected}</span></td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  document.getElementById('cmpBatchTableWrap').classList.add('show');
+}
+
+function saveCmpHistory(entry) {
+  cmpHistory.unshift(entry);
+  if (cmpHistory.length > 10) cmpHistory = cmpHistory.slice(0, 10);
+  localStorage.setItem('cmp_history', JSON.stringify(cmpHistory));
+  renderCmpHistory();
+}
+
+function renderCmpHistory() {
+  const list = document.getElementById('cmpHistoryList');
+  document.getElementById('cmpHistoryCount').textContent = `(${cmpHistory.length})`;
+  if (!cmpHistory.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:8px 0">Henüz kayıt yok.</div>';
+    return;
+  }
+  list.innerHTML = cmpHistory.map((h, i) => {
+    const title = h.mode === 'batch'
+      ? `Batch · ${h.scenarios} senaryo`
+      : `"${(h.transcript || '').slice(0, 48)}${(h.transcript || '').length > 48 ? '…' : ''}"`;
+    const models = (h.models || []).map(m => (CMP_MODEL_META[m] || {}).label || m).join(', ');
+    return `<div class="cmp-history-item" onclick="loadCmpHistory(${i})">
+      <div>${escapeHtml(title)}</div>
+      <div class="h-meta">${new Date(h.timestamp).toLocaleString()} · ${escapeHtml(models)}</div>
+    </div>`;
+  }).join('');
+}
+
+function loadCmpHistory(idx) {
+  const h = cmpHistory[idx];
+  if (!h) return;
+  cmpLastExport = h;
+  document.getElementById('cmpEmpty').style.display = 'none';
+  document.getElementById('cmpToolbar').classList.add('show');
+
+  if (h.mode === 'batch') {
+    cmpBatchData = h;
+    cmpResults = {};
+    document.getElementById('cmpTableWrap').classList.remove('show');
+    document.getElementById('cmpFreeformTableWrap').classList.remove('show');
+    document.getElementById('cmpSplitWrap').classList.remove('show');
+    document.getElementById('cmpCharts').classList.remove('show');
+    renderCmpMetrics(h.metrics, sortCmpModels(h.models));
+    renderBatchTable(sortCmpModels(h.models), h.rows);
+    document.getElementById('cmpSummaryLines').innerHTML = buildBatchSummary(h.metrics, sortCmpModels(h.models)).map(l => `<div>${l}</div>`).join('');
+    document.getElementById('cmpSummaryBox').classList.add('show');
+    document.getElementById('cmpToolbarMeta').textContent = `Batch history · ${h.scenarios} scenarios`;
+    showQuotaBanner(h.errors || []);
+  } else {
+    cmpBatchData = null;
+    const mode = h.compareMode || 'intent';
+    compareMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    const modeBtn = document.getElementById('mode-' + mode);
+    if (modeBtn) modeBtn.classList.add('active');
+
+    cmpResults = h.results || {};
+    cmpFreeformResults = h.freeformResults || {};
+    document.getElementById('cmpBatchTableWrap').classList.remove('show');
+    document.getElementById('cmpMetrics').classList.remove('show');
+    document.getElementById('cmpTableWrap').classList.remove('show');
+    document.getElementById('cmpFreeformTableWrap').classList.remove('show');
+    document.getElementById('cmpSplitWrap').classList.remove('show');
+
+    const historyModels = sortCmpModels(h.models || Object.keys(cmpResults).concat(Object.keys(cmpFreeformResults)));
+    if (mode === 'freeform') {
+      document.getElementById('cmpFreeformTableWrap').classList.add('show');
+      document.getElementById('cmpFreeformBody').innerHTML = historyModels.map(m =>
+        renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: '—' })
+      ).join('');
+      document.getElementById('cmpSummaryLines').innerHTML = buildFreeformSummary(cmpFreeformResults).map(l => `<div>${l}</div>`).join('');
+      document.getElementById('cmpCharts').classList.add('show');
+      renderCmpCharts(cmpFreeformResults, { showConfidence: false });
+    } else if (mode === 'both') {
+      document.getElementById('cmpSplitWrap').classList.add('show');
+      document.getElementById('cmpSplitBody').innerHTML = historyModels.map(m =>
+        renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
+      ).join('');
+      document.getElementById('cmpSummaryLines').innerHTML = buildBothSummary(cmpResults, cmpFreeformResults).map(l => `<div>${l}</div>`).join('');
+      document.getElementById('cmpCharts').classList.add('show');
+      renderCmpCharts(cmpResults);
+    } else {
+      document.getElementById('cmpTableWrap').classList.add('show');
+      document.getElementById('cmpTableBody').innerHTML = historyModels.map(m => renderCmpResultRow(m, cmpResults[m] || { ok: false, error: '—' })).join('');
+      document.getElementById('cmpSummaryLines').innerHTML = buildCmpSummary(cmpResults).map(l => `<div>${l}</div>`).join('');
+      document.getElementById('cmpCharts').classList.add('show');
+      renderCmpCharts(cmpResults);
+    }
+
+    document.getElementById('cmpSummaryBox').classList.add('show');
+    document.getElementById('cmpToolbarMeta').textContent = `History · ${mode}`;
+    const errs = [
+      ...Object.values(cmpResults).filter(r => r && !r.ok).map(r => r.error),
+      ...Object.values(cmpFreeformResults).filter(r => r && !r.ok).map(r => r.error),
+    ];
+    showQuotaBanner(errs);
+  }
+}
+
+function clearCmpHistory() {
+  cmpHistory = [];
+  localStorage.removeItem('cmp_history');
+  renderCmpHistory();
+}
+
+function exportCmpJSON() {
+  const payload = cmpLastExport || (cmpBatchData ? cmpBatchData : { mode: 'single', results: cmpResults, timestamp: new Date().toISOString() });
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `compare_${payload.mode || 'single'}_${Date.now()}.json`;
+  a.click();
+}
+
+function exportCmpCSV() {
+  const payload = cmpLastExport || cmpBatchData;
+  let csv = '';
+  if (payload && payload.mode === 'batch') {
+    const models = payload.models || [];
+    const header = ['transcript', 'category', 'expected', ...models.flatMap(m => [`${m}_intent`, `${m}_correct`, `${m}_latency_ms`, `${m}_error`])];
+    const lines = [header.join(',')];
+    (payload.rows || []).forEach(row => {
+      const cols = [
+        JSON.stringify(row.text),
+        JSON.stringify(row.category),
+        row.expected,
+      ];
+      models.forEach(m => {
+        const c = row.models[m] || {};
+        cols.push(c.intent || '', c.correct === true ? '1' : c.correct === false ? '0' : '', c.avg_latency || '', JSON.stringify(c.error || ''));
+      });
+      lines.push(cols.join(','));
+    });
+    csv = lines.join('\n');
+  } else {
+    const results = (payload && payload.results) || cmpResults;
+    const lines = [['model', 'run', 'ok', 'intent', 'confidence', 'latency_ms', 'input_tokens', 'output_tokens', 'cost', 'correct', 'error'].join(',')];
+    Object.keys(results).forEach(model => {
+      const r = results[model];
+      (r.runs || [{ run: 1, ok: r.ok, intent: r.intent, confidence: r.avg_confidence, latency: r.avg_latency, input_tokens: r.avg_input_tokens, output_tokens: r.avg_output_tokens, cost: r.est_cost, error: r.error }]).forEach(run => {
+        lines.push([
+          model, run.run, run.ok ? 1 : 0, run.intent || '', run.confidence ?? '', run.latency || 0,
+          run.input_tokens || 0, run.output_tokens || 0, run.cost || 0,
+          r.correct === true ? 1 : r.correct === false ? 0 : '',
+          JSON.stringify(run.error || r.error || ''),
+        ].join(','));
+      });
+    });
+    csv = lines.join('\n');
+  }
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `compare_${Date.now()}.csv`;
+  a.click();
+}
+
+function applyCompareSttMs(results, sttMs) {
+  if (sttMs == null || !results) return results;
+  Object.keys(results).forEach(model => {
+    const r = results[model];
+    if (!r || !r.ok || !String(model).startsWith('claude')) return;
+    if (r.avg_stt_ms == null) r.avg_stt_ms = sttMs;
+    (r.runs || []).forEach(run => {
+      if (run.ok && run.stt_ms == null) run.stt_ms = sttMs;
+    });
+  });
+  return results;
+}
+
+async function fetchModelCompare(transcript, model, runs, expected) {
+  const payload = { transcript, models: [model], runs, expected };
+  if (typeof cmpLastSttMs === 'number') payload.stt_ms = cmpLastSttMs;
+  const res = await fetch('/compare-intent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  const result = (data.results && data.results[model]) || { ok: false, error: data.error || 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model };
+  return applyCompareSttMs({ [model]: result }, data.stt_ms ?? cmpLastSttMs)[model];
+}
+
+async function fetchCompareIntentBatch(transcript, models, runs, expected) {
+  const payload = { transcript, models, runs, expected };
+  if (typeof cmpLastSttMs === 'number') payload.stt_ms = cmpLastSttMs;
+  const res = await fetch('/compare-intent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'compare-intent failed');
+  return applyCompareSttMs(data.results || {}, data.stt_ms ?? cmpLastSttMs);
+}
+
+async function fetchCompareFreeformBatch(transcript, models, runs) {
+  const res = await fetch('/compare-freeform', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transcript, models, runs }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'compare-freeform failed');
+  return data.results || {};
+}
+
+function destroyCmpCharts() {
+  Object.values(cmpCharts).forEach(c => { try { c.destroy(); } catch (e) {} });
+  cmpCharts = {};
+}
+
+function renderCmpCharts(results, opts) {
+  opts = opts || {};
+  const showConfidence = opts.showConfidence !== false;
+  destroyCmpCharts();
+  const ok = orderedCmpResults(results).filter(r => r.ok);
+  if (!ok.length || typeof Chart === 'undefined') return;
+
+  const confCard = document.getElementById('chartConfidence')?.closest('.cmp-chart-card');
+  if (confCard) confCard.style.display = showConfidence ? '' : 'none';
+
+  const labels = ok.map(r => r.label);
+  const colors = ok.map(r => (CMP_MODEL_META[r.model] || {}).color || '#58a6ff');
+
+  cmpCharts.latency = new Chart(document.getElementById('chartLatency'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Avg latency (ms)',
+        data: ok.map(r => r.avg_latency),
+        backgroundColor: colors.map(c => c + '99'),
+        borderColor: colors,
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterBody: (items) => {
+              const r = ok[items[0].dataIndex];
+              return [`Min: ${r.min_latency}ms`, `Max: ${r.max_latency}ms`];
+            }
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true, ticks: { color: '#7d8590' }, grid: { color: '#30363d' } },
+        x: { ticks: { color: '#7d8590' }, grid: { display: false } }
+      }
+    },
+    plugins: [{
+      id: 'errorBars',
+      afterDatasetsDraw(chart) {
+        const { ctx } = chart;
+        const meta = chart.getDatasetMeta(0);
+        meta.data.forEach((bar, i) => {
+          const r = ok[i];
+          const yScale = chart.scales.y;
+          const x = bar.x;
+          const yMin = yScale.getPixelForValue(r.min_latency);
+          const yMax = yScale.getPixelForValue(r.max_latency);
+          ctx.save();
+          ctx.strokeStyle = colors[i];
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x, yMin);
+          ctx.lineTo(x, yMax);
+          ctx.moveTo(x - 5, yMin);
+          ctx.lineTo(x + 5, yMin);
+          ctx.moveTo(x - 5, yMax);
+          ctx.lineTo(x + 5, yMax);
+          ctx.stroke();
+          ctx.restore();
+        });
+      }
+    }]
+  });
+
+  cmpCharts.tokens = new Chart(document.getElementById('chartTokens'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Input', data: ok.map(r => r.avg_input_tokens), backgroundColor: '#58a6ff99', borderColor: '#58a6ff', borderWidth: 1 },
+        { label: 'Output', data: ok.map(r => r.avg_output_tokens), backgroundColor: '#a371f799', borderColor: '#a371f7', borderWidth: 1 },
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { stacked: true, ticks: { color: '#7d8590' }, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { color: '#7d8590' }, grid: { color: '#30363d' } }
+      },
+      plugins: { legend: { labels: { color: '#7d8590' } } }
+    }
+  });
+
+  if (showConfidence) {
+    cmpCharts.confidence = new Chart(document.getElementById('chartConfidence'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Avg confidence',
+          data: ok.map(r => Math.round((r.avg_confidence || 0) * 100)),
+          backgroundColor: colors.map(c => c + '99'),
+          borderColor: colors,
+          borderWidth: 1,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, max: 100, ticks: { color: '#7d8590', callback: v => v + '%' }, grid: { color: '#30363d' } },
+          x: { ticks: { color: '#7d8590' }, grid: { display: false } }
+        }
+      }
+    });
+  }
+
+  cmpCharts.cost = new Chart(document.getElementById('chartCost'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Est. cost ($)',
+        data: ok.map(r => r.est_cost),
+        backgroundColor: colors.map(c => c + '99'),
+        borderColor: colors,
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => fmtCost(ctx.raw) } }
+      },
+      scales: {
+        y: { beginAtZero: true, ticks: { color: '#7d8590', callback: v => '$' + Number(v).toFixed(5) }, grid: { color: '#30363d' } },
+        x: { ticks: { color: '#7d8590' }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+async function runComparison() {
+  const transcript = document.getElementById('cmpTranscript').value.trim();
+  const models = getSelectedCmpModels();
+  let runs = parseInt(document.getElementById('cmpRuns').value, 10);
+  if (!transcript) { alert('Transcript girin'); return; }
+  if (!models.length) { alert('En az bir model seçin'); return; }
+  if (!Number.isFinite(runs) || runs < 1) runs = 5;
+  if (compareMode === 'freeform' && runs > 5) runs = 5;
+  else if (runs > 10) runs = 10;
+
+  const matched = cmpScenarios.find(s => s.text === transcript);
+  const expected = matched ? matched.expected : null;
+  cmpExpected = expected;
+  cmpStopFlag = false;
+  cmpBatchData = null;
+  cmpResults = {};
+  cmpFreeformResults = {};
+
+  setCmpRunning(true);
+  document.getElementById('cmpEmpty').style.display = 'none';
+  document.getElementById('cmpTableWrap').classList.remove('show');
+  document.getElementById('cmpFreeformTableWrap').classList.remove('show');
+  document.getElementById('cmpSplitWrap').classList.remove('show');
+  document.getElementById('cmpBatchTableWrap').classList.remove('show');
+  document.getElementById('cmpCharts').classList.remove('show');
+  document.getElementById('cmpSummaryBox').classList.remove('show');
+  document.getElementById('cmpMetrics').classList.remove('show');
+  document.getElementById('cmpToolbar').classList.add('show');
+  document.getElementById('cmpToolbarMeta').textContent =
+    compareMode === 'both' ? 'Intent + Free-Form comparison' :
+    compareMode === 'freeform' ? 'Free-Form comparison' : 'Intent comparison';
+  showQuotaBanner([]);
+  showCmpProgress(0, 1, 'Starting...');
+
+  let summaryLines = [];
+  let chartResults = {};
+  let chartOpts = { showConfidence: compareMode !== 'freeform' };
+
+  try {
+    if (compareMode === 'intent') {
+      document.getElementById('cmpTableWrap').classList.add('show');
+      const tbody = document.getElementById('cmpTableBody');
+      tbody.innerHTML = models.map(renderCmpLoadingRow).join('');
+
+      let done = 0;
+      await Promise.all(models.map(async (model) => {
+        if (cmpStopFlag) return;
+        try {
+          cmpResults[model] = await fetchModelCompare(transcript, model, runs, expected);
+        } catch (e) {
+          cmpResults[model] = { ok: false, error: e.message, model, label: (CMP_MODEL_META[model] || {}).label || model };
+        }
+        done++;
+        showCmpProgress(done, models.length, `${(CMP_MODEL_META[model] || {}).label || model} done (${done}/${models.length})`);
+        const loadingRow = document.getElementById('cmp-row-' + modelDomId(model));
+        if (loadingRow) {
+          const tmp = document.createElement('tbody');
+          tmp.innerHTML = renderCmpResultRow(model, cmpResults[model]);
+          loadingRow.replaceWith(...tmp.children);
+        }
+      }));
+      tbody.innerHTML = models.map(m => renderCmpResultRow(m, cmpResults[m] || { ok: false, error: 'Stopped', model: m, label: (CMP_MODEL_META[m] || {}).label || m })).join('');
+      chartResults = cmpResults;
+      summaryLines = buildCmpSummary(cmpResults);
+
+      if (expected) {
+        const row = { text: transcript, category: matched ? matched.category : '', expected, models: {} };
+        models.forEach(m => { row.models[m] = cmpResults[m]; });
+        renderCmpMetrics(computeBatchMetrics(models, [row]), models);
+      }
+    } else if (compareMode === 'freeform') {
+      document.getElementById('cmpFreeformTableWrap').classList.add('show');
+      document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
+        `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — running...</td></tr>`
+      ).join('');
+      showCmpProgress(0, 1, 'Free-form models running...');
+      cmpFreeformResults = await fetchCompareFreeformBatch(transcript, models, runs);
+      document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
+        renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: 'No result', model: m, label: (CMP_MODEL_META[m] || {}).label || m })
+      ).join('');
+      chartResults = cmpFreeformResults;
+      summaryLines = buildFreeformSummary(cmpFreeformResults);
+    } else {
+      document.getElementById('cmpSplitWrap').classList.add('show');
+      document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
+        `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — running...</div></div>`
+      ).join('');
+      showCmpProgress(0, 1, 'Intent + Free-Form running...');
+
+      const [intentMap, freeformMap] = await Promise.all([
+        fetchCompareIntentBatch(transcript, models, runs, expected),
+        fetchCompareFreeformBatch(transcript, models, runs),
+      ]);
+      cmpResults = intentMap;
+      cmpFreeformResults = freeformMap;
+
+      document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
+        renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
+      ).join('');
+      chartResults = cmpResults;
+      summaryLines = buildBothSummary(cmpResults, cmpFreeformResults);
+
+      if (expected) {
+        const row = { text: transcript, category: matched ? matched.category : '', expected, models: {} };
+        models.forEach(m => { row.models[m] = cmpResults[m]; });
+        renderCmpMetrics(computeBatchMetrics(models, [row]), models);
+      }
+    }
+  } catch (e) {
+    alert('Comparison failed: ' + e.message);
+    hideCmpProgress();
+    setCmpRunning(false);
+    return;
+  }
+
+  document.getElementById('cmpSummaryLines').innerHTML = summaryLines.map(l => `<div>${l}</div>`).join('');
+  document.getElementById('cmpSummaryBox').classList.add('show');
+  document.getElementById('cmpCharts').classList.add('show');
+  renderCmpCharts(chartResults, chartOpts);
+
+  const errs = [
+    ...Object.values(cmpResults).filter(r => r && !r.ok).map(r => r.error),
+    ...Object.values(cmpFreeformResults).filter(r => r && !r.ok).map(r => r.error),
+  ];
+  showQuotaBanner(errs);
+
+  const entry = {
+    mode: 'single',
+    compareMode,
+    transcript,
+    expected,
+    models,
+    runs,
+    results: cmpResults,
+    freeformResults: cmpFreeformResults,
+    timestamp: new Date().toISOString(),
+    errors: errs,
+  };
+  cmpLastExport = entry;
+  saveCmpHistory(entry);
+
+  hideCmpProgress();
+  setCmpRunning(false);
+}
+
+async function runBatchScenarios() {
+  const models = getSelectedCmpModels();
+  if (!models.length) { alert('En az bir model seçin'); return; }
+  if (!cmpScenarios.length) await loadCmpScenarios();
+  if (!cmpScenarios.length) { alert('Senaryolar yüklenemedi'); return; }
+
+  // Batch = accuracy sweep: 1 run per scenario (fast). Use single Run Comparison + Stabilite for consistency.
+  const runs = 1;
+
+  cmpStopFlag = false;
+  cmpResults = {};
+  setCmpRunning(true);
+  document.getElementById('cmpEmpty').style.display = 'none';
+  document.getElementById('cmpTableWrap').classList.remove('show');
+  document.getElementById('cmpCharts').classList.remove('show');
+  document.getElementById('cmpBatchTableWrap').classList.add('show');
+  document.getElementById('cmpToolbar').classList.add('show');
+  document.getElementById('cmpToolbarMeta').textContent = `Batch · ${cmpScenarios.length} scenarios · ${runs} run(s)`;
+  document.getElementById('cmpSummaryBox').classList.remove('show');
+  document.getElementById('cmpMetrics').classList.remove('show');
+  showQuotaBanner([]);
+
+  const rows = [];
+  const allErrors = [];
+  const total = cmpScenarios.length;
+
+  // Prepare empty batch table
+  renderBatchTable(models, []);
+
+  for (let i = 0; i < cmpScenarios.length; i++) {
+    if (cmpStopFlag) break;
+    const s = cmpScenarios[i];
+    showCmpProgress(i, total, `Scenario ${i + 1}/${total}: "${s.text.slice(0, 40)}${s.text.length > 40 ? '…' : ''}"`);
+
+    const row = { text: s.text, category: s.category, expected: s.expected, models: {} };
+
+    // Models in parallel per scenario; backend Gemini queue serializes Gemini calls.
+    await Promise.all(models.map(async (model) => {
+      if (cmpStopFlag) {
+        row.models[model] = { ok: false, error: 'Stopped', model, label: (CMP_MODEL_META[model] || {}).label || model };
+        return;
+      }
+      try {
+        const r = await fetchModelCompare(s.text, model, runs, s.expected);
+        row.models[model] = r;
+        if (!r.ok) allErrors.push(r.error);
+      } catch (e) {
+        row.models[model] = { ok: false, error: e.message, model, label: (CMP_MODEL_META[model] || {}).label || model };
+        allErrors.push(e.message);
+      }
+    }));
+
+    rows.push(row);
+    renderBatchTable(models, rows);
+
+    const metricsLive = computeBatchMetrics(models, rows);
+    renderCmpMetrics(metricsLive, models);
+    document.getElementById('cmpSummaryLines').innerHTML = buildBatchSummary(metricsLive, models).map(l => `<div>${l}</div>`).join('');
+    document.getElementById('cmpSummaryBox').classList.add('show');
+  }
+
+  const metrics = computeBatchMetrics(models, rows);
+  renderCmpMetrics(metrics, models);
+  renderBatchTable(models, rows);
+  document.getElementById('cmpSummaryLines').innerHTML = buildBatchSummary(metrics, models).map(l => `<div>${l}</div>`).join('');
+  document.getElementById('cmpSummaryBox').classList.add('show');
+  showQuotaBanner(allErrors);
+
+  // Charts from batch avg latency / cost per model
+  const chartResults = {};
+  models.forEach(model => {
+    const m = metrics[model];
+    const okRows = rows.map(r => r.models[model]).filter(c => c && c.ok);
+    if (!okRows.length) {
+      chartResults[model] = { ok: false, error: 'No successful scenarios', model, label: (CMP_MODEL_META[model] || {}).label || model };
+      return;
+    }
+    const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    chartResults[model] = {
+      ok: true,
+      model,
+      label: (CMP_MODEL_META[model] || {}).label || model,
+      avg_latency: m.avg_latency,
+      min_latency: Math.min(...okRows.map(r => r.min_latency ?? r.avg_latency)),
+      max_latency: Math.max(...okRows.map(r => r.max_latency ?? r.avg_latency)),
+      avg_confidence: avg(okRows.map(r => r.avg_confidence || 0)),
+      avg_input_tokens: Math.round(avg(okRows.map(r => r.avg_input_tokens || 0))),
+      avg_output_tokens: Math.round(avg(okRows.map(r => r.avg_output_tokens || 0))),
+      avg_tokens: Math.round(avg(okRows.map(r => r.avg_tokens || 0))),
+      est_cost: avg(okRows.map(r => r.est_cost || 0)),
+    };
+  });
+  document.getElementById('cmpCharts').classList.add('show');
+  renderCmpCharts(chartResults);
+
+  const entry = {
+    mode: 'batch',
+    models,
+    runs,
+    scenarios: rows.length,
+    rows,
+    metrics,
+    timestamp: new Date().toISOString(),
+    errors: allErrors,
+  };
+  cmpBatchData = entry;
+  cmpLastExport = entry;
+  saveCmpHistory(entry);
+
+  showCmpProgress(rows.length, total, cmpStopFlag ? `Stopped after ${rows.length}/${total}` : `Done · ${rows.length} scenarios`);
+  setCmpRunning(false);
+}
+
+renderCmpHistory();
 </script>
 </body>
 </html>

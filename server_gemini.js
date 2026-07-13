@@ -7,20 +7,29 @@ const express = require('express');
 const WebSocket = require('ws');
 const http = require('http');
 const axios = require('axios');
+const twilio = require('twilio');
+const { insertCallStart, updateCallEnd, updateRecordingUrl, updateCallSessionState, listCalls, getCallBySid } = require('./db');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ noServer: true });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = 'gemini-3.1-flash-live-preview';
 
-const SYSTEM_PROMPT = `You are an automated safety monitoring system for Aware360...
+const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+  : null;
 
-LANGUAGE RULE: The worker speaks English. Always interpret their speech as English, even if audio quality is poor or words are unclear. Never respond in any language other than English.
+const amdRedirectedCalls = new Set();
+
+const SYSTEM_PROMPT = `SYSTEM: language=en-US. All input and output in English only.
+
+You are an automated safety monitoring system for Aware360...
 
 Your persona: "Aware360 Monitoring Center" — efficient, neutral, direct.
 
@@ -39,7 +48,8 @@ CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or
 
 Keep responses short (under 15 words). Be direct and professional.
 
-IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.`;
+IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
+CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
@@ -57,6 +67,11 @@ wss.on('connection', function(ws) {
   let greetingSent = false;
   let isCachingGreeting = false;
   let workerSpeechEndTime = null; let turnStartTime = null;
+  let workerSpeechActive = false;
+  let workerSilenceTimer = null;
+  let lastAudioSentTime = null;
+  let setupTime = null;
+  let firstAudioTime = null;
 
   function send(obj) {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -89,6 +104,7 @@ wss.on('connection', function(ws) {
       }
     },
     input_audio_transcription: {},
+    output_audio_transcription: {},
     system_instruction: {
       parts: [{ text: SYSTEM_PROMPT }]
     }
@@ -105,6 +121,7 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
         // Setup complete
         if (msg.setupComplete) {
   console.log('[Gemini] Setup complete at', Date.now());
+  setupTime = Date.now();
   send({ type: 'stage', stage: 'stt', status: 'connected' });
   send({ type: 'stage', stage: 'llm', status: 'connected' });
   send({ type: 'stage', stage: 'tts', status: 'connected' });
@@ -120,17 +137,6 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     send({ type: 'audio_stream_end' });
     send({ type: 'greeting', text: WORKER_INTRO, audio: null });
     sessionState = 'LISTENING';
-    // Tell Gemini the greeting was already played — wait for worker to speak
-    const silentMsg = {
-      client_content: {
-        turns: [{
-          role: 'user',
-          parts: [{ text: '[SYSTEM] The greeting has already been delivered to the worker. Do NOT speak again. Wait silently for the worker\'s response.' }]
-        }],
-        turn_complete: true
-      }
-    };
-    geminiWs.send(JSON.stringify(silentMsg));
   } else {
     console.log('[Gemini] No cache, generating greeting fresh');
     cachedGreetingChunks = [];
@@ -157,6 +163,14 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
   if (content.modelTurn && content.modelTurn.parts) {
     for (const part of content.modelTurn.parts) {
       if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.startsWith('audio/')) {
+  if (turnStartTime && !firstAudioTime) {
+    firstAudioTime = Date.now();
+    const ttfa = firstAudioTime - turnStartTime;
+    console.log('[Gemini] TTFA (end-of-speech → first audio chunk):', ttfa + 'ms');
+    send({ type: 'gemini_turn_latency', ms: ttfa });
+    turnStartTime = null;
+    lastAudioSentTime = null;
+  }
   console.log('[Gemini] Audio chunk received, mimeType:', part.inlineData.mimeType, 'size:', part.inlineData.data.length);
   if (isCachingGreeting) {
     cachedGreetingChunks.push(part.inlineData.data);
@@ -183,9 +197,8 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
             send({ type: 'audio_stream_end' });
             if (sessionState === 'GREETING') {
               send({ type: 'greeting', text: WORKER_INTRO, audio: null });
-              sessionState = 'LISTENING';
               isCachingGreeting = false;
-              console.log('[Gemini] Greeting cached,', cachedGreetingChunks.length, 'chunks');
+              console.log('[Gemini] Greeting audio done, waiting for playback_done');
             }
           }
         }
@@ -194,14 +207,16 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
 if (msg.serverContent && msg.serverContent.inputTranscription) {
   console.log('[Gemini] Worker said:', msg.serverContent.inputTranscription.text);
   send({ type: 'transcript', text: msg.serverContent.inputTranscription.text, role: 'worker' });
-  if (!turnStartTime) turnStartTime = Date.now();
+  if (sessionState === 'LISTENING') {
+    // inputTranscription fires when Gemini detects end-of-speech — use this as turn start
+    turnStartTime = Date.now();
+    firstAudioTime = null;
+  }
 }
 
         if (msg.usageMetadata && turnStartTime) {
           const totalTurnMs = Date.now() - turnStartTime;
-          console.log('[Gemini] Total turn duration:', totalTurnMs + 'ms');
-          send({ type: 'gemini_turn_latency', ms: totalTurnMs });
-          turnStartTime = null;
+          console.log('[Gemini] Full turn duration:', totalTurnMs + 'ms (not shown in UI — using TTFA instead)');
         }
 
         if (msg.usageMetadata) {
@@ -267,15 +282,21 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
           }
         }
 
+        if (msg.type === 'playback_done' && sessionState === 'GREETING') {
+          console.log('[Gemini] Greeting playback done — now listening');
+          sessionState = 'LISTENING';
+        }
+
         if (msg.type === 'stop') {
           if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
           sessionState = 'ENDED';
         }
 
       } else {
-        // Binary audio — send to Gemini as realtime input
-        console.log('[Gemini] Binary audio received, size:', data.length, 'state:', sessionState);
-        if (geminiWs && geminiWs.readyState === WebSocket.OPEN && sessionState === 'LISTENING') {
+        // Binary audio — only send to Gemini when actively listening
+        // Drop audio completely during GREETING to prevent spurious responses
+        if (sessionState !== 'LISTENING') return;
+        if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
           const audioMsg = {
             realtime_input: {
               audio: {
@@ -285,6 +306,7 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
             }
           };
           geminiWs.send(JSON.stringify(audioMsg));
+          lastAudioSentTime = Date.now(); // track last audio chunk sent
         }
       }
     } catch(e) {
@@ -294,6 +316,7 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
 
   ws.on('close', function() {
     console.log('[Gemini WS] Client disconnected');
+    if (workerSilenceTimer) clearTimeout(workerSilenceTimer);
     if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
   });
 
@@ -302,18 +325,628 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
   });
 });
 
+// ─── Twilio WebSocket (Gemini pipeline) ───────────────────────────────────────
+const { spawn } = require('child_process');
+const twilioWss = new WebSocket.Server({ noServer: true });
+
+server.on('upgrade', function(request, socket, head) {
+  const pathname = new URL(request.url, 'http://localhost').pathname;
+  if (pathname === '/twilio-gemini') {
+    twilioWss.handleUpgrade(request, socket, head, function(ws) {
+      twilioWss.emit('connection', ws, request);
+    });
+  } else {
+    // Browser WebSocket (any other path)
+    wss.handleUpgrade(request, socket, head, function(ws) {
+      wss.emit('connection', ws, request);
+    });
+  }
+});
+
+// ─── Pure JS mulaw codecs (no ffmpeg — instant, ordered) ─────────────────────
+const MULAW_BIAS = 0x84;
+const MULAW_MAX = 32635;
+
+function linearToMulawSample(sample) {
+  let sign = (sample >> 8) & 0x80;
+  if (sign) sample = -sample;
+  if (sample > MULAW_MAX) sample = MULAW_MAX;
+  sample += MULAW_BIAS;
+  let exponent = 7;
+  for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; mask >>= 1) exponent--;
+  const mantissa = (sample >> (exponent + 3)) & 0x0F;
+  return ~(sign | (exponent << 4) | mantissa) & 0xFF;
+}
+
+function mulawToLinearSample(mulaw) {
+  mulaw = ~mulaw & 0xFF;
+  const sign = mulaw & 0x80;
+  const exponent = (mulaw >> 4) & 0x07;
+  const mantissa = mulaw & 0x0F;
+  let sample = ((mantissa << 3) + MULAW_BIAS) << exponent;
+  sample -= MULAW_BIAS;
+  return sign ? -sample : sample;
+}
+
+// Gemini PCM 24kHz → Twilio mulaw 8kHz (downsample 3:1 + encode)
+function pcmToMulaw(pcm24kBuffer) {
+  const samples24k = pcm24kBuffer.length >> 1;
+  const samples8k = Math.floor(samples24k / 3);
+  const out = Buffer.alloc(samples8k);
+  for (let i = 0; i < samples8k; i++) {
+    // Average 3 samples for basic anti-aliasing
+    const s0 = pcm24kBuffer.readInt16LE(i * 6);
+    const s1 = (i * 6 + 2 < pcm24kBuffer.length - 1) ? pcm24kBuffer.readInt16LE(i * 6 + 2) : s0;
+    const s2 = (i * 6 + 4 < pcm24kBuffer.length - 1) ? pcm24kBuffer.readInt16LE(i * 6 + 4) : s1;
+    const avg = Math.round((s0 + s1 + s2) / 3);
+    out[i] = linearToMulawSample(avg);
+  }
+  return out;
+}
+
+// Twilio mulaw 8kHz → Gemini PCM 16kHz (decode + upsample 1:2)
+function mulawToPcm(mulawBuffer) {
+  const out = Buffer.alloc(mulawBuffer.length * 4); // each mulaw byte → 2 samples × 2 bytes
+  for (let i = 0; i < mulawBuffer.length; i++) {
+    const sample = mulawToLinearSample(mulawBuffer[i]);
+    const next = (i + 1 < mulawBuffer.length) ? mulawToLinearSample(mulawBuffer[i + 1]) : sample;
+    const mid = Math.round((sample + next) / 2); // linear interpolation
+    out.writeInt16LE(sample, i * 4);
+    out.writeInt16LE(mid, i * 4 + 2);
+  }
+  return out;
+}
+
+const TWILIO_WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay?`;
+
+twilioWss.on('connection', function(ws) {
+  console.log('[Twilio-Gemini WS] Connected');
+  let streamSid = null;
+  let callLog = {
+    callSid: null,
+    streamSid: null,
+    workerPhone: null,
+    startTime: new Date().toISOString(),
+    transcript: [],
+    finalState: null,
+    finalIntent: null,
+    recordingUrl: null,
+    silencePromptCount: 0,
+    ttfa_ms: null,
+  };
+  let geminiWs = null;
+  let sessionState = 'GREETING';
+  let pcmBuffer = Buffer.alloc(0);
+  let flushInterval = null;
+  let silenceInterval = null;
+  let twilioAiTranscript = '';
+  let workerSilenceTimer = null;
+  let silencePromptCount = 0;
+  let twilioSetupTime = null;
+  let twilioFirstAudioTime = null;
+
+  function isSpuriousUnclearResponse(text) {
+    const t = (text || '').toLowerCase();
+    return t.includes('sorry') && t.includes('repeat')
+      && !t.includes('aware360') && !t.includes('monitoring center');
+  }
+
+  function startAudioFlush() {
+    if (flushInterval) return;
+    flushInterval = setInterval(function() {
+      if (pcmBuffer.length > 0
+        && geminiWs && geminiWs.readyState === WebSocket.OPEN
+        && sessionState === 'LISTENING') {
+        const toSend = pcmBuffer;
+        pcmBuffer = Buffer.alloc(0);
+        geminiWs.send(JSON.stringify({
+          realtime_input: {
+            audio: {
+              data: toSend.toString('base64'),
+              mimeType: 'audio/pcm;rate=16000'
+            }
+          }
+        }));
+      }
+    }, 100);
+  }
+
+  function setCallOutcome(state, intent) {
+    callLog.finalState = state;
+    if (intent) callLog.finalIntent = intent;
+  }
+
+  function startWorkerSilenceTimer() {
+    clearWorkerSilenceTimer();
+    workerSilenceTimer = setTimeout(() => {
+      if (sessionState !== 'LISTENING') return;
+      silencePromptCount++;
+      if (silencePromptCount === 1) {
+        console.log('[Twilio-Gemini] 8s silence — prompting worker');
+        if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+          geminiWs.send(JSON.stringify({
+            client_content: {
+              turns: [{ role: 'user', parts: [{ text: '[SYSTEM] The worker has been silent for 8 seconds. Say exactly: "Are you still there? Please respond if you can hear me."' }] }],
+              turn_complete: true
+            }
+          }));
+        }
+        startWorkerSilenceTimer();
+      } else {
+        console.log('[Twilio-Gemini] 16s total silence — likely voicemail/unreachable, ending call');
+        sessionState = 'ENDED';
+        setCallOutcome('NO_ANSWER', callLog.finalIntent || 'UNRECOGNISED');
+        clearWorkerSilenceTimer();
+        if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+          geminiWs.send(JSON.stringify({
+            client_content: {
+              turns: [{ role: 'user', parts: [{ text: '[SYSTEM] No response received. Say exactly: "We could not reach you. A monitoring agent will follow up shortly. Goodbye."' }] }],
+              turn_complete: true
+            }
+          }));
+        }
+        // Wait for farewell to play before closing
+        setTimeout(() => {
+          console.log('[Twilio-Gemini] Closing call (no response)');
+          if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+          if (ws.readyState === WebSocket.OPEN) ws.close();
+        }, 8000);
+      }
+    }, 8000);
+  }
+
+  function clearWorkerSilenceTimer() {
+    if (workerSilenceTimer) { clearTimeout(workerSilenceTimer); workerSilenceTimer = null; }
+  }
+
+  const MULAW_SILENCE = Buffer.alloc(160, 0x7F);
+
+  function startSilenceKeepalive() {
+    silenceInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN && streamSid && sessionState === 'GREETING') {
+        ws.send(JSON.stringify({
+          event: 'media',
+          streamSid: streamSid,
+          media: { payload: MULAW_SILENCE.toString('base64') }
+        }));
+      } else {
+        clearInterval(silenceInterval);
+        silenceInterval = null;
+      }
+    }, 20);
+  }
+
+  function sendAudioToTwilio(mulawBuffer) {
+    if (ws.readyState !== WebSocket.OPEN || !streamSid) return;
+    ws.send(JSON.stringify({
+      event: 'media',
+      streamSid: streamSid,
+      media: { payload: mulawBuffer.toString('base64') }
+    }));
+  }
+
+  function connectGeminiTwilio() {
+    const geminiUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
+    geminiWs = new WebSocket(geminiUrl);
+
+    geminiWs.on('open', function() {
+      console.log('[Twilio-Gemini] Gemini connected');
+      geminiWs.send(JSON.stringify({
+        setup: {
+          model: `models/${GEMINI_MODEL}`,
+          generation_config: {
+            response_modalities: ['AUDIO'],
+            speech_config: {
+              voice_config: { prebuilt_voice_config: { voice_name: 'Charon' } },
+            }
+          },
+          realtime_input_config: {
+            automatic_activity_detection: { disabled: false }
+          },
+          input_audio_transcription: {},
+          output_audio_transcription: {},
+          system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
+        }
+      }));
+    });
+
+    geminiWs.on('message', async function(data) {
+      try {
+        const msg = JSON.parse(data.toString());
+
+        if (msg.error) {
+          console.error('[Twilio-Gemini] API ERROR:', JSON.stringify(msg.error));
+        }
+
+        if (msg.setupComplete) {
+          console.log('[Twilio-Gemini] Setup complete — sending greeting');
+          twilioSetupTime = Date.now();
+          pcmBuffer = Buffer.alloc(0);
+          twilioAiTranscript = '';
+          sessionState = 'GREETING';
+          geminiWs.send(JSON.stringify({
+            client_content: {
+              turns: [{ role: 'user', parts: [{ text: `[SYSTEM] Say this exact greeting word for word and nothing else: "${TWILIO_WORKER_INTRO}"` }] }],
+              turn_complete: true
+            }
+          }));
+        }
+
+        if (msg.serverContent) {
+          const content = msg.serverContent;
+
+          // Worker spoke — reset silence timer (only after greeting)
+          if (content.inputTranscription && content.inputTranscription.text) {
+            if (sessionState !== 'LISTENING') {
+              console.log('[Twilio-Gemini] Ignoring worker audio during GREETING:', content.inputTranscription.text);
+            } else {
+            console.log('[Twilio-Gemini] Worker said:', content.inputTranscription.text);
+            const workerText = content.inputTranscription.text;
+            callLog.transcript.push({ role: 'worker', text: workerText, time: new Date().toISOString() });
+            const wt = workerText.toLowerCase();
+            if (/\bhuman\b|\bagent\b|connect me|need help|sos\b|help me/.test(wt)) {
+              setCallOutcome('ESCALATED', 'REQUEST_HUMAN');
+            } else if (/\bi'?m fine\b|\bi am fine\b|\ball good\b|\bsafe\b/.test(wt) && !/\bbut\b|\bnot\b|\bworried\b|\bhurt\b/.test(wt)) {
+              callLog.finalIntent = callLog.finalIntent || 'SAFE_CONFIRMATION';
+            } else if (/\blate\b|\bmore time\b|\bminutes?\b|\bdelay\b/.test(wt)) {
+              callLog.finalIntent = callLog.finalIntent || 'DELAYED_CHECKIN';
+            }
+            silencePromptCount = 0;
+            callLog.silencePromptCount = silencePromptCount;
+            startWorkerSilenceTimer();
+            }
+          }
+
+          // Collect AI transcript for resolution detection
+          if (content.outputTranscription && content.outputTranscription.text) {
+            twilioAiTranscript += content.outputTranscription.text;
+          }
+
+          if (content.modelTurn && content.modelTurn.parts) {
+            for (const part of content.modelTurn.parts) {
+              if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.startsWith('audio/')) {
+                if (sessionState === 'GREETING' && isSpuriousUnclearResponse(twilioAiTranscript)) {
+                  continue;
+                }
+                try {
+                  if (!twilioFirstAudioTime) {
+                    twilioFirstAudioTime = Date.now();
+                    const ttfa = twilioFirstAudioTime - twilioSetupTime;
+                    console.log('[Twilio-Gemini] FIRST AUDIO CHUNK | Time-to-first-audio (TTFA):', ttfa + 'ms');
+                    callLog.ttfa_ms = ttfa;
+                  }
+                  if (silenceInterval) { clearInterval(silenceInterval); silenceInterval = null; }
+                  const audioBuf = Buffer.from(part.inlineData.data, 'base64');
+                  const mulawBuf = pcmToMulaw(audioBuf);
+                  sendAudioToTwilio(mulawBuf);
+                } catch(e) { console.error('[Twilio-Gemini] PCM→mulaw error:', e.message); }
+              }
+            }
+          }
+          if (content.turnComplete) {
+            // Check for resolution phrases after each AI turn (post-greeting)
+            if (sessionState === 'LISTENING' && twilioAiTranscript) {
+              const t = twilioAiTranscript.toLowerCase();
+              console.log('[Twilio-Gemini] AI said:', twilioAiTranscript.trim());
+              callLog.transcript.push({ role: 'ai', text: twilioAiTranscript.trim(), time: new Date().toISOString() });
+              twilioAiTranscript = '';
+              const resolutionPhrases = [
+                'reset your safety timer',
+                'extended your check-in timer',
+                'flagging this for a live agent',
+                'someone will call you back',
+                'monitoring agent will follow up',
+                'could not reach you'
+              ];
+              if (resolutionPhrases.some(p => t.includes(p))) {
+                console.log('[Twilio-Gemini] Resolution detected — ending call in 4s');
+                if (t.includes('could not reach you') || t.includes('monitoring agent will follow up')) {
+                  setCallOutcome('NO_ANSWER', callLog.finalIntent || 'UNRECOGNISED');
+                } else if (t.includes('flagging this for a live agent') || t.includes('someone will call you back')) {
+                  setCallOutcome('ESCALATED', 'REQUEST_HUMAN');
+                } else if (t.includes('extended your check-in timer')) {
+                  setCallOutcome('RESOLVED', 'DELAYED_CHECKIN');
+                } else if (t.includes('reset your safety timer')) {
+                  setCallOutcome('RESOLVED', 'SAFE_CONFIRMATION');
+                } else if (!callLog.finalState) {
+                  setCallOutcome('RESOLVED', callLog.finalIntent || null);
+                }
+                clearWorkerSilenceTimer();
+                setTimeout(() => {
+                  console.log('[Twilio-Gemini] Closing call');
+                  if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+                  if (ws.readyState === WebSocket.OPEN) ws.close();
+                }, 4000);
+              }
+            }
+            if (sessionState === 'GREETING') {
+              if (isSpuriousUnclearResponse(twilioAiTranscript)) {
+                console.log('[Twilio-Gemini] Ignoring spurious pre-greeting response, re-sending intro');
+                twilioAiTranscript = '';
+                geminiWs.send(JSON.stringify({
+                  client_content: {
+                    turns: [{ role: 'user', parts: [{ text: `[SYSTEM] Say this exact greeting word for word and nothing else: "${TWILIO_WORKER_INTRO}"` }] }],
+                    turn_complete: true
+                  }
+                }));
+                return;
+              }
+              console.log('[Twilio-Gemini] Greeting audio done, waiting 2s before listening...');
+              setTimeout(() => {
+                pcmBuffer = Buffer.alloc(0);
+                twilioAiTranscript = '';
+                sessionState = 'LISTENING';
+                console.log('[Twilio-Gemini] Now listening');
+                startAudioFlush();
+                startWorkerSilenceTimer();
+              }, 2000);
+            }
+          }
+        }
+      } catch(e) { console.error('[Twilio-Gemini] Message error:', e.message); }
+    });
+
+    geminiWs.on('error', function(e) { console.error('[Twilio-Gemini] Error:', e.message); });
+    geminiWs.on('close', function(code, reason) { console.log('[Twilio-Gemini] Gemini closed | code:', code, '| reason:', reason ? reason.toString() : 'none'); });
+  }
+
+  ws.on('message', async function(data) {
+    try {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.event === 'connected') { console.log('[Twilio-Gemini] Stream connected'); }
+
+      if (msg.event === 'start') {
+        streamSid = msg.start.streamSid;
+        callLog.callSid = msg.start.callSid || streamSid;
+        callLog.streamSid = streamSid;
+        callLog.workerPhone = (msg.start.customParameters && msg.start.customParameters.caller)
+          || msg.start.to
+          || null;
+        console.log('[Twilio-Gemini] Stream started | SID:', streamSid, '| Call:', callLog.callSid);
+
+        try {
+          insertCallStart({
+            callSid: callLog.callSid,
+            streamSid: streamSid,
+            workerPhone: callLog.workerPhone,
+            startTime: callLog.startTime,
+            modelUsed: GEMINI_MODEL,
+          });
+        } catch (e) {
+          console.error('[Twilio-Gemini] DB insert error:', e.message);
+        }
+
+        connectGeminiTwilio();
+        startSilenceKeepalive();
+      }
+
+      if (msg.event === 'media' && sessionState === 'LISTENING') {
+        const mulawChunk = Buffer.from(msg.media.payload, 'base64');
+        try {
+          const pcmChunk = mulawToPcm(mulawChunk);
+          pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
+        } catch (e) {
+          console.error('[DEBUG] mulawToPcm error:', e.message);
+        }
+      }
+
+      if (msg.event === 'stop') {
+        console.log('[Twilio-Gemini] Stream stopped');
+        if (flushInterval) { clearInterval(flushInterval); flushInterval = null; }
+        if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+      }
+    } catch(e) { console.error('[Twilio-Gemini WS Error]', e.message); }
+  });
+
+  ws.on('close', function() {
+    console.log('[Twilio-Gemini WS] Disconnected');
+    if (callLog.callSid) amdRedirectedCalls.delete(callLog.callSid);
+    clearWorkerSilenceTimer();
+    if (silenceInterval) { clearInterval(silenceInterval); silenceInterval = null; }
+    if (flushInterval) { clearInterval(flushInterval); flushInterval = null; }
+    if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+
+    // Save call log to file + database
+    try {
+      const logsDir = path.join(__dirname, 'call_logs');
+      if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
+      callLog.endTime = new Date().toISOString();
+      callLog.silencePromptCount = silencePromptCount;
+      const duration = Math.round((new Date(callLog.endTime) - new Date(callLog.startTime)) / 1000);
+      let finalSessionState = callLog.finalState || (silencePromptCount >= 2 ? 'NO_ANSWER' : 'UNKNOWN');
+      if (callLog.callSid) {
+        const existing = getCallBySid(callLog.callSid);
+        if (existing && existing.session_state === 'VOICEMAIL') {
+          finalSessionState = 'VOICEMAIL';
+        }
+      }
+
+      const filename = path.join(logsDir, `call_${callLog.callSid || Date.now()}.json`);
+      fs.writeFileSync(filename, JSON.stringify(callLog, null, 2));
+      console.log('[Twilio-Gemini] Call log saved:', filename);
+
+      if (callLog.callSid) {
+        updateCallEnd({
+          callSid: callLog.callSid,
+          streamSid: callLog.streamSid,
+          workerPhone: callLog.workerPhone,
+          endTime: callLog.endTime,
+          durationSeconds: duration,
+          sessionState: finalSessionState,
+          finalIntent: callLog.finalIntent,
+          recordingUrl: callLog.recordingUrl,
+          transcript: callLog.transcript,
+          silenceCount: callLog.silencePromptCount,
+          ttfaMs: callLog.ttfa_ms,
+        });
+        console.log('[Twilio-Gemini] Call saved to DB:', callLog.callSid, '|', finalSessionState);
+      }
+    } catch(e) {
+      console.error('[Twilio-Gemini] Log save error:', e.message);
+    }
+  });
+});
+
+// ─── Twilio TwiML endpoint ────────────────────────────────────────────────────
+app.post('/outbound-gemini', function(req, res) {
+  const baseUrl = process.env.GEMINI_PUBLIC_URL || process.env.PUBLIC_URL || '';
+  const wsUrl = baseUrl.replace('https://', 'wss://').replace(/\/$/, '') + '/twilio-gemini';
+  const workerPhone = (req.body && (req.body.To || req.body.to)) || '';
+  console.log('[TwiML] Stream URL:', wsUrl, '| To:', workerPhone);
+  res.set('Content-Type', 'text/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${wsUrl}">
+      <Parameter name="caller" value="${workerPhone}"/>
+    </Stream>
+  </Connect>
+  <Pause length="30"/>
+</Response>`);
+});
+
+app.post('/call-status', function(req, res) {
+  console.log('[Call Status]', req.body.CallStatus, '| SID:', req.body.CallSid);
+  res.sendStatus(200);
+});
+
+app.post('/recording-status', function(req, res) {
+  const { RecordingUrl, RecordingDuration, RecordingSid, CallSid, RecordingStatus } = req.body || {};
+  console.log('[Recording] Status:', RecordingStatus, '| Duration:', RecordingDuration + 's', '| SID:', RecordingSid);
+  if (RecordingStatus === 'completed' && RecordingUrl && CallSid) {
+    const url = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
+    try {
+      updateRecordingUrl(CallSid, url);
+      console.log('[Recording] Saved URL for call:', CallSid);
+      console.log('[Recording] URL:', url);
+    } catch (e) {
+      console.error('[Recording] DB update error:', e.message);
+    }
+  }
+  res.sendStatus(200);
+});
+
+app.post('/amd-status', function(req, res) {
+  const { CallSid, AnsweredBy } = req.body || {};
+  console.log('[AMD] Call:', CallSid, '| Answered by:', AnsweredBy);
+
+  if (AnsweredBy && AnsweredBy.startsWith('machine') && CallSid) {
+    if (amdRedirectedCalls.has(CallSid)) {
+      return res.sendStatus(200);
+    }
+    amdRedirectedCalls.add(CallSid);
+
+    console.log('[AMD] Voicemail detected — will leave message');
+    try {
+      updateCallSessionState(CallSid, 'VOICEMAIL');
+      console.log('[AMD] DB updated: VOICEMAIL for', CallSid);
+    } catch (e) {
+      console.error('[AMD] DB error:', e.message);
+    }
+
+    if (twilioClient) {
+      const baseUrl = process.env.GEMINI_PUBLIC_URL || process.env.PUBLIC_URL || '';
+      twilioClient.calls(CallSid).update({
+        url: `${baseUrl.replace(/\/$/, '')}/voicemail-twiml`,
+        method: 'POST',
+      }).then(() => {
+        console.log('[AMD] Redirected to voicemail TwiML for call:', CallSid);
+      }).catch((err) => {
+        console.error('[AMD] Redirect error:', err.message);
+        amdRedirectedCalls.delete(CallSid);
+      });
+    } else {
+      console.error('[AMD] Twilio client not configured');
+    }
+  } else if (AnsweredBy === 'unknown') {
+    console.log('[AMD] Unknown — not redirecting, Gemini flow continues');
+  } else if (AnsweredBy === 'human') {
+    console.log('[AMD] Human answered — Gemini flow continues');
+  }
+
+  res.sendStatus(200);
+});
+
+app.post('/voicemail-twiml', function(req, res) {
+  const voicemailMessage = 'Hello, this is an automated safety check from Aware360. ' +
+    'We noticed you missed your scheduled check-in. ' +
+    'Please call back or check in through the app as soon as possible. ' +
+    'If this is an emergency, please contact your supervisor. Thank you.';
+
+  res.set('Content-Type', 'text/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Pause length="2"/>
+  <Say voice="Polly.Joanna" language="en-US">${voicemailMessage}</Say>
+  <Pause length="1"/>
+  <Hangup/>
+</Response>`);
+});
+
+app.get('/api/calls', function(req, res) {
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 20;
+  try {
+    res.json(listCalls(page, limit));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/calls/:callSid', function(req, res) {
+  try {
+    const call = getCallBySid(req.params.callSid);
+    if (!call) return res.status(404).json({ error: 'Call not found' });
+    call.transcript = call.transcript ? JSON.parse(call.transcript) : [];
+    res.json(call);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/recordings/proxy', async function(req, res) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const recordingUrl = req.query.url ? decodeURIComponent(req.query.url) : '';
+
+  if (!accountSid || !authToken) {
+    return res.status(500).json({ error: 'Twilio credentials not configured' });
+  }
+  if (!recordingUrl || !recordingUrl.startsWith('https://api.twilio.com/')) {
+    return res.status(400).json({ error: 'Invalid recording URL' });
+  }
+
+  console.log('[Recording Proxy] URL:', recordingUrl);
+
+  try {
+    const response = await axios.get(recordingUrl, {
+      auth: { username: accountSid, password: authToken },
+      responseType: 'stream',
+    });
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    response.data.pipe(res);
+  } catch (err) {
+    console.error('[Recording Proxy] Error:', err.response?.status, err.message);
+    res.status(404).json({ error: 'Recording not found' });
+  }
+});
+
 app.get('/health', function(req, res) {
   res.json({
     status: 'ok',
     mode: 'gemini',
-    apis: {
-      gemini: !!GEMINI_API_KEY
-    }
+    apis: { gemini: !!GEMINI_API_KEY },
+    twilio_ws: (process.env.PUBLIC_URL || '').replace('https://', 'wss://') + '/twilio-gemini',
+    twilio_twiml: (process.env.PUBLIC_URL || '') + '/outbound-gemini'
   });
 });
 
 const PORT = process.env.GEMINI_PORT || 3001;
 server.listen(PORT, function() {
   console.log(`\n🤖  Gemini Live Demo running at http://localhost:${PORT}`);
-  console.log(`Model: ${GEMINI_MODEL}\n`);
+  console.log(`Model: ${GEMINI_MODEL}`);
+  console.log(`Twilio WS: ${(process.env.PUBLIC_URL || '').replace('https://', 'wss://')}/twilio-gemini`);
+  console.log(`Twilio TwiML: ${process.env.PUBLIC_URL || ''}/outbound-gemini\n`);
 });
