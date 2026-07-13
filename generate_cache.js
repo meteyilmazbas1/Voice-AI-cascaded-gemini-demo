@@ -18,10 +18,11 @@ if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR);
 const PHRASES = {
   'greeting': `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`,
   'safe_confirmation': `Got it — I've reset your safety timer. Stay safe.`,
-  'delayed_checkin_15': `Understood. I've extended your check-in timer by 15 minutes. Please check in when ready.`,
-  'request_human': `Of course. I'm flagging this for a live agent right now — someone will call you back shortly. Please keep your phone available.`,
-  'unrecognised': `I'm sorry, I didn't catch that. Could you say if you're safe, need more time, or need a human agent?`,
+  'delayed_checkin_15': `Understood. I've extended your check-in timer. Please check in when ready.`,
+  'request_human': `Of course. I'm flagging this for a live agent — someone will call you back shortly. Keep your phone available.`,
+  'unrecognised': `I'm sorry, I didn't catch that. Are you safe, need more time, or need a human agent?`,
   'escalate_max': `I'm unable to process your response. A human agent will follow up shortly.`,
+  'voicemail': `Hello, this is the Aware360 Monitoring Center. We tried to reach you regarding a missed check-in. Please check in through your app or call back as soon as possible. If you need immediate assistance, please contact your supervisor. Thank you, stay safe.`,
 };
 
 async function generateAudio(key, text) {

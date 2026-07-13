@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aware360 — Intent Benchmark</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d1117; --surface: #161b22; --surface2: #1c2230; --border: #30363d;
+  --text: #e6edf3; --muted: #7d8590; --accent: #1d9e75; --accent-dim: #0f6e56;
+  --warn: #e3b341; --danger: #f85149; --info: #58a6ff;
+  --haiku: #3fb950; --sonnet: #a371f7; --opus: #f78166;
+}
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
+
+/* ── Header ── */
+header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+.logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); flex-shrink: 0; }
+header h1 { font-size: 15px; font-weight: 600; }
+header span { font-size: 12px; color: var(--muted); margin-left: 4px; }
+.header-links { margin-left: auto; display: flex; gap: 12px; }
+.header-link { font-size: 12px; color: var(--muted); text-decoration: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; transition: all 0.15s; }
+.header-link:hover { color: var(--text); border-color: var(--muted); }
+
+/* ── Layout ── */
+.layout { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 49px); }
+.sidebar { background: var(--surface); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+.main { padding: 20px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+
+/* ── Cards ── */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.card-title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; }
+
+/* ── Forms ── */
+label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 10px 12px; font-size: 13px; font-family: inherit; resize: vertical; min-height: 80px; transition: border-color 0.15s; }
+textarea:focus { outline: none; border-color: var(--accent); }
+input[type=number] { width: 70px; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+select { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
+
+/* ── Checkboxes (model selection) ── */
+.model-checks { display: flex; flex-direction: column; gap: 8px; }
+.model-check { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; transition: all 0.15s; }
+.model-check:hover { border-color: var(--muted); }
+.model-check input { display: none; }
+.model-check-dot { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--border); flex-shrink: 0; transition: all 0.15s; display: flex; align-items: center; justify-content: center; }
+.model-check.checked .model-check-dot { background: var(--accent); border-color: var(--accent); }
+.model-check.checked .model-check-dot::after { content: '✓'; font-size: 10px; color: white; }
+.model-check-info { flex: 1; }
+.model-check-name { font-size: 12px; font-weight: 500; }
+.model-check-sub { font-size: 10px; color: var(--muted); }
+.model-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-haiku { background: var(--haiku); }
+.dot-sonnet { background: var(--sonnet); }
+.dot-opus { background: var(--opus); }
+.dot-gemini { background: #4285f4; }
+
+/* ── Quick inputs ── */
+.quick-inputs { display: flex; flex-direction: column; gap: 6px; }
+.quick-btn { text-align: left; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface2); color: var(--text); font-size: 12px; cursor: pointer; transition: all 0.15s; }
+.quick-btn:hover { border-color: var(--accent); color: var(--accent); }
+.quick-label { font-size: 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; margin-top: 8px; }
+
+/* ── Run controls ── */
+.run-controls { display: flex; flex-direction: column; gap: 8px; }
+.run-row { display: flex; align-items: center; gap: 8px; }
+.run-label { font-size: 12px; color: var(--muted); }
+.btn { padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; background: var(--surface2); color: var(--text); }
+.btn:hover { border-color: var(--muted); }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: white; width: 100%; margin-top: 4px; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-dim); border-color: var(--accent-dim); }
+.btn.danger { border-color: rgba(248,81,73,0.4); color: var(--danger); }
+
+/* ── Progress ── */
+.progress-bar-wrap { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.progress-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; width: 0%; }
+.progress-label { font-size: 11px; color: var(--muted); margin-top: 4px; min-height: 16px; }
+
+/* ── Results header ── */
+.results-header { display: flex; align-items: center; gap: 12px; }
+.results-title { font-size: 16px; font-weight: 700; }
+.results-sub { font-size: 12px; color: var(--muted); }
+.results-actions { margin-left: auto; display: flex; gap: 8px; }
+
+/* ── Summary stats ── */
+.summary-grid { display: grid; gap: 12px; }
+.stat-row { display: grid; gap: 8px; }
+
+.model-stat-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.model-stat-head { padding: 10px 14px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); }
+.model-stat-name { font-size: 13px; font-weight: 600; }
+.model-stat-body { display: grid; grid-template-columns: repeat(4, 1fr); }
+.model-stat-item { padding: 10px 14px; border-right: 1px solid var(--border); }
+.model-stat-item:last-child { border-right: none; }
+.stat-label { font-size: 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+.stat-val { font-size: 18px; font-weight: 700; }
+.stat-val.good { color: var(--haiku); }
+.stat-val.warn { color: var(--warn); }
+.stat-val.bad { color: var(--danger); }
+.stat-val.purple { color: var(--sonnet); }
+
+/* ── Results table ── */
+.results-table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+thead th { background: var(--surface2); padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
+tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+tbody tr:hover { background: var(--surface2); }
+tbody td { padding: 9px 12px; vertical-align: top; }
+.td-transcript { max-width: 200px; }
+.td-transcript-text { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
+.td-transcript-cat { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* Intent badges */
+.intent-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; white-space: nowrap; }
+.intent-SAFE_CONFIRMATION { background: rgba(63,185,80,0.12); color: #3fb950; border: 1px solid rgba(63,185,80,0.3); }
+.intent-DELAYED_CHECKIN { background: rgba(227,179,65,0.12); color: var(--warn); border: 1px solid rgba(227,179,65,0.3); }
+.intent-REQUEST_HUMAN { background: rgba(248,81,73,0.12); color: var(--danger); border: 1px solid rgba(248,81,73,0.3); }
+.intent-UNRECOGNISED { background: rgba(125,133,144,0.12); color: var(--muted); border: 1px solid var(--border); }
+.intent-ERROR { background: rgba(248,81,73,0.08); color: var(--danger); border: 1px dashed rgba(248,81,73,0.3); }
+
+/* Distress badges */
+.distress-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+.distress-high { background: rgba(248,81,73,0.15); color: var(--danger); }
+.distress-medium { background: rgba(227,179,65,0.15); color: var(--warn); }
+.distress-low { background: rgba(88,166,255,0.1); color: var(--info); }
+
+/* Conf bar */
+.conf-wrap { display: flex; align-items: center; gap: 6px; }
+.conf-bar-bg { flex: 1; height: 4px; background: var(--border); border-radius: 2px; min-width: 50px; }
+.conf-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+.conf-num { font-size: 11px; font-weight: 600; width: 36px; text-align: right; }
+
+/* Latency bar */
+.lat-wrap { display: flex; align-items: center; gap: 6px; }
+.lat-num { font-size: 12px; font-weight: 600; width: 50px; }
+.lat-bar-bg { flex: 1; height: 4px; background: var(--border); border-radius: 2px; min-width: 40px; }
+.lat-bar-fill { height: 100%; border-radius: 2px; }
+.lat-good { color: var(--haiku); } .lat-warn { color: var(--warn); } .lat-bad { color: var(--danger); }
+
+/* Tokens */
+.token-cell { font-size: 11px; color: var(--muted); }
+.token-cell span { color: var(--text); font-weight: 500; }
+
+/* Match indicator */
+.match-yes { color: var(--haiku); font-weight: 700; }
+.match-no  { color: var(--danger); font-weight: 700; }
+
+/* Model column header with dot */
+.model-th { display: flex; align-items: center; gap: 6px; }
+
+/* ── Charts section ── */
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.chart-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 14px; }
+
+/* Bar chart */
+.bar-chart { display: flex; flex-direction: column; gap: 8px; }
+.bar-row { display: flex; align-items: center; gap: 10px; }
+.bar-label { font-size: 11px; color: var(--muted); width: 80px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-track { flex: 1; height: 22px; background: var(--surface2); border-radius: 4px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; font-size: 11px; font-weight: 600; color: white; transition: width 0.5s cubic-bezier(.4,0,.2,1); white-space: nowrap; }
+.bar-val { font-size: 11px; color: var(--muted); width: 50px; }
+
+/* Scatter / dot intent distribution */
+.intent-dist { display: flex; flex-direction: column; gap: 6px; }
+.intent-dist-row { display: flex; align-items: center; gap: 8px; }
+.intent-dist-label { width: 140px; font-size: 11px; }
+.intent-dist-bars { flex: 1; display: flex; gap: 3px; }
+.intent-dist-seg { height: 18px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: white; transition: width 0.5s; white-space: nowrap; overflow: hidden; min-width: 0; }
+
+/* Empty/loading states */
+.empty { padding: 48px; text-align: center; color: var(--muted); font-size: 13px; }
+.empty-icon { font-size: 36px; margin-bottom: 12px; }
+.running-state { display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--surface2); border-radius: 8px; border: 1px solid var(--border); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+
+/* Tabs */
+.tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tab { padding: 8px 16px; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab-pane { display: none; } .tab-pane.active { display: block; }
+
+/* Session history */
+.history-list { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; }
+.history-item { padding: 10px 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.history-item:hover { border-color: var(--muted); }
+.history-item-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.history-item-time { color: var(--muted); font-size: 11px; margin-left: auto; }
+.history-item-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* Responsive */
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .charts-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo-dot"></div>
+  <h1>Aware360 — Intent Benchmark <span>Model Karşılaştırma Aracı</span></h1>
+  <div class="header-links">
+    <a href="/" class="header-link">← Demo</a>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- ── Sidebar ── -->
+  <div class="sidebar">
+
+    <!-- Transcript input -->
+    <div class="card">
+      <div class="card-title">Test Input</div>
+      <label>Transcript</label>
+      <textarea id="transcriptInput" placeholder="Worker said: 'I'm fine, just a bit late'">"I'm fine, got caught up"</textarea>
+    </div>
+
+    <!-- Quick inputs -->
+    <div class="card">
+      <div class="card-title">Quick Scenarios</div>
+      <div class="quick-inputs">
+        <div class="quick-label">✅ Safe</div>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="I'm fine">✅ "I'm fine"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="Yes, all good here">✅ "Yes, all good here"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="Yep safe, got caught up">✅ "Yep safe, got caught up"</button>
+
+        <div class="quick-label">⏱ Delayed</div>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="Running late, give me 15 minutes">⏱ "Running late, 15 min"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="Almost done, need a bit more time">⏱ "Almost done, bit more time"</button>
+
+        <div class="quick-label">👤 Human Agent</div>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="I need a human agent please">👤 "I need a human agent"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="Get me someone">👤 "Get me someone"</button>
+
+        <div class="quick-label">⚠ Distress</div>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="I'm fine but I'm a bit worried">⚠ "Fine but worried"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="I just fell down but I'm okay I promise">⚠ "Fell but okay"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="HELP ME PLEASE SOS">🆘 "HELP SOS"</button>
+
+        <div class="quick-label">❓ Ambiguous</div>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="I think I'm okay maybe">❓ "I think I'm okay maybe"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="blah blah something unclear xyzzy">❓ "Unclear noise"</button>
+        <button class="quick-btn" onclick="setTranscript(this.dataset.t)" data-t="ye">❓ "ye" (too short)</button>
+      </div>
+    </div>
+
+    <!-- Model selection -->
+    <div class="card">
+      <div class="card-title">Models</div>
+      <div class="model-checks" id="modelChecks">
+        <label class="model-check checked" onclick="toggleModel(this, 'claude-haiku-4-5')">
+          <input type="checkbox" checked>
+          <div class="model-check-dot"></div>
+          <div class="model-dot dot-haiku"></div>
+          <div class="model-check-info">
+            <div class="model-check-name">Claude Haiku 4.5</div>
+            <div class="model-check-sub">Fastest · $0.80/1M in</div>
+          </div>
+        </label>
+        <label class="model-check checked" onclick="toggleModel(this, 'claude-sonnet-4-6')">
+          <input type="checkbox" checked>
+          <div class="model-check-dot"></div>
+          <div class="model-dot dot-sonnet"></div>
+          <div class="model-check-info">
+            <div class="model-check-name">Claude Sonnet 4.6</div>
+            <div class="model-check-sub">Balanced · $3.00/1M in</div>
+          </div>
+        </label>
+        <label class="model-check" onclick="toggleModel(this, 'claude-opus-4-6')">
+          <input type="checkbox">
+          <div class="model-check-dot"></div>
+          <div class="model-dot dot-opus"></div>
+          <div class="model-check-info">
+            <div class="model-check-name">Claude Opus 4.6</div>
+            <div class="model-check-sub">Most powerful · $15/1M in</div>
+          </div>
+        </label>
+        <label class="model-check" onclick="toggleModel(this, 'claude-opus-4-7')">
+          <input type="checkbox">
+          <div class="model-check-dot"></div>
+          <div class="model-dot dot-opus"></div>
+          <div class="model-check-info">
+            <div class="model-check-name">Claude Opus 4.7</div>
+            <div class="model-check-sub">Most powerful · $15/1M in</div>
+          </div>
+        </label>
+        <label class="model-check" onclick="toggleModel(this, 'claude-opus-4-8')">
+          <input type="checkbox">
+          <div class="model-check-dot"></div>
+          <div class="model-dot dot-opus"></div>
+          <div class="model-check-info">
+            <div class="model-check-name">Claude Opus 4.8</div>
+            <div class="model-check-sub">Most powerful · $15/1M in</div>
+          </div>
+        </label>
+        <label class="model-check" onclick="toggleModel(this, 'gemini-3.1-flash-live-preview')">
+          <input type="checkbox">
+          <div class="model-check-dot"></div>
+          <div class="model-dot dot-gemini"></div>
+          <div class="model-check-info">
+            <div class="model-check-name">Gemini 3.1 Flash Live</div>
+            <div class="model-check-sub">Twilio voice · streaming audio</div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Run settings -->
+    <div class="card">
+      <div class="card-title">Run Settings</div>
+      <div class="run-controls">
+        <div class="run-row">
+          <span class="run-label">Runs per model:</span>
+          <input type="number" id="runsInput" value="3" min="1" max="10">
+        </div>
+        <div class="run-row">
+          <span class="run-label">Delay between runs:</span>
+          <select id="delaySelect">
+            <option value="300">300ms</option>
+            <option value="500" selected>500ms</option>
+            <option value="1000">1s</option>
+          </select>
+        </div>
+        <button class="btn primary" id="runBtn" onclick="runBenchmark()">▶ Run Benchmark</button>
+        <button class="btn danger" id="stopBtn" onclick="stopBenchmark()" disabled>■ Stop</button>
+        <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="progress-label" id="progressLabel">—</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Main content ── -->
+  <div class="main">
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('results')">Results</div>
+      <div class="tab" onclick="switchTab('charts')">Charts</div>
+      <div class="tab" onclick="switchTab('history')">Session History</div>
+    </div>
+
+    <!-- Results tab -->
+    <div class="tab-pane active" id="tab-results">
+
+      <!-- Real call TTFA banner -->
+      <div id="realTtfaBanner" class="card" style="display:none;margin-bottom:12px;padding:12px 16px;font-size:12px;color:var(--muted)">
+        <span id="realTtfaBannerText">—</span>
+      </div>
+
+      <!-- Empty state -->
+      <div id="emptyState" class="card empty">
+        <div class="empty-icon">⚗️</div>
+        <div>Henüz test çalıştırılmadı.</div>
+        <div style="font-size:12px;margin-top:6px">Sol taraftan transcript gir, modelleri seç ve "Run Benchmark" butonuna bas.</div>
+      </div>
+
+      <!-- Running state -->
+      <div id="runningState" style="display:none" class="running-state">
+        <div class="spinner"></div>
+        <span id="runningLabel" style="font-size:13px">Running...</span>
+      </div>
+
+      <!-- Summary cards -->
+      <div id="summarySection" style="display:none">
+        <div class="results-header" style="margin-bottom:12px">
+          <div>
+            <div class="results-title" id="summaryTitle">—</div>
+            <div class="results-sub" id="summarySub">—</div>
+          </div>
+          <div class="results-actions">
+            <button class="btn" onclick="exportJSON()">↓ JSON</button>
+            <button class="btn" onclick="exportCSV()">↓ CSV</button>
+          </div>
+        </div>
+        <div id="modelSummaryCards" class="stat-row"></div>
+      </div>
+
+      <!-- Detailed results table -->
+      <div id="tableSection" class="card" style="display:none">
+        <div class="card-title" id="tableTitle">Run Details</div>
+        <div class="results-table-wrap">
+          <table id="resultsTable">
+            <thead id="resultsTableHead"></thead>
+            <tbody id="resultsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Charts tab -->
+    <div class="tab-pane" id="tab-charts">
+      <div id="chartsEmpty" class="card empty">
+        <div class="empty-icon">📊</div>
+        <div>Grafik için önce bir benchmark çalıştır.</div>
+      </div>
+      <div id="chartsContent" style="display:none">
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title">Avg Latency — Model Karşılaştırması</div>
+            <div class="bar-chart" id="latencyChart"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Avg Confidence — Model Karşılaştırması</div>
+            <div class="bar-chart" id="confidenceChart"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Token Kullanımı (Avg / run)</div>
+            <div class="bar-chart" id="tokenChart"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Intent Dağılımı</div>
+            <div class="intent-dist" id="intentDistChart"></div>
+          </div>
+        </div>
+        <div class="chart-card" style="margin-top:16px">
+          <div class="chart-title">Run-by-Run Latency (tüm modeller)</div>
+          <div id="runChart" class="bar-chart"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- History tab -->
+    <div class="tab-pane" id="tab-history">
+      <div class="card">
+        <div class="card-title" style="display:flex;align-items:center;gap:8px">
+          Session History
+          <span id="historyCount" style="font-size:11px;color:var(--muted);font-weight:400"></span>
+          <button class="btn" style="margin-left:auto;font-size:11px;padding:4px 10px" onclick="clearHistory()">Clear</button>
+        </div>
+        <div id="historyEmpty" class="empty" style="padding:24px">Henüz kaydedilmiş session yok.</div>
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────
+let selectedModels = new Set(['claude-haiku-4-5', 'claude-sonnet-4-6']);
+let benchmarkResults = null;
+let isStopped = false;
+let sessionHistory = JSON.parse(localStorage.getItem('bm_history') || '[]');
+let realTtfaByModel = {};
+
+const REAL_TTFA_TOOLTIP = 'Gerçek Twilio aramasından ölçülen Time-to-First-Audio. REST latency\'den çok daha düşük çünkü Gemini streaming audio üretir.';
+
+const TOKEN_COSTS = {
+  'claude-haiku-4-5':  { input: 0.80,  output: 4.00  },
+  'claude-sonnet-4-6': { input: 3.00,  output: 15.00 },
+  'claude-opus-4-6':   { input: 15.00, output: 75.00 },
+  'claude-opus-4-7':   { input: 15.00, output: 75.00 },
+  'claude-opus-4-8':   { input: 15.00, output: 75.00 },
+  'gemini-3.1-flash-live-preview': { input: 2.10, output: 8.50 },
+};
+
+const MODEL_COLORS = {
+  'claude-haiku-4-5':  '#3fb950',
+  'claude-sonnet-4-6': '#a371f7',
+  'claude-opus-4-6':   '#f78166',
+  'claude-opus-4-7':   '#f78166',
+  'claude-opus-4-8':   '#f78166',
+  'gemini-3.1-flash-live-preview': '#4285f4',
+};
+
+const MODEL_SHORT = {
+  'claude-haiku-4-5':  'Haiku 4.5',
+  'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-opus-4-6':   'Opus 4.6',
+  'claude-opus-4-7':   'Opus 4.7',
+  'claude-opus-4-8':   'Opus 4.8',
+  'gemini-3.1-flash-live-preview': 'Gemini 3.1 Live',
+};
+
+const INTENT_COLORS = {
+  SAFE_CONFIRMATION: '#3fb950',
+  DELAYED_CHECKIN:   '#e3b341',
+  REQUEST_HUMAN:     '#f85149',
+  UNRECOGNISED:      '#7d8590',
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────
+function avg(arr) { return arr.length ? arr.reduce((a,b) => a+b, 0) / arr.length : 0; }
+function calcCost(model, inp, out) {
+  const r = TOKEN_COSTS[model] || { input: 0, output: 0 };
+  return (inp / 1e6 * r.input) + (out / 1e6 * r.output);
+}
+function fmtCost(n) { return '$' + n.toFixed(6); }
+function fmtMs(n) { return Math.round(n) + 'ms'; }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function isGeminiModel(model) {
+  return model && model.includes('gemini');
+}
+
+async function fetchRecentTTFA() {
+  try {
+    const res = await fetch('/api/calls?limit=10');
+    const data = await res.json();
+    const ttfaByModel = {};
+    for (const call of data.calls || []) {
+      if (call.model_used && call.ttfa_ms && !ttfaByModel[call.model_used]) {
+        ttfaByModel[call.model_used] = call.ttfa_ms;
+      }
+    }
+    realTtfaByModel = ttfaByModel;
+    renderRealTtfaBanner();
+    return ttfaByModel;
+  } catch (e) {
+    return {};
+  }
+}
+
+function formatRealTtfa(model) {
+  if (!isGeminiModel(model)) return '—';
+  const ttfa = realTtfaByModel[model];
+  return ttfa ? `~${ttfa}ms ⚡` : '—';
+}
+
+function realTtfaCell(model, restMs) {
+  if (!isGeminiModel(model)) {
+    return '<div style="font-size:10px;color:var(--muted);margin-top:4px">Real TTFA: —</div>';
+  }
+  const ttfa = realTtfaByModel[model];
+  const restLabel = restMs != null ? `REST: ${restMs}ms` : '';
+  const realLabel = ttfa ? `Real TTFA: ~${ttfa}ms ⚡` : 'Real TTFA: —';
+  return `<div style="font-size:10px;color:var(--accent);margin-top:4px" title="${REAL_TTFA_TOOLTIP}">${restLabel}${restLabel && ttfa ? ' | ' : ''}${realLabel}</div>`;
+}
+
+function renderRealTtfaBanner() {
+  const banner = document.getElementById('realTtfaBanner');
+  const text = document.getElementById('realTtfaBannerText');
+  const entries = Object.entries(realTtfaByModel);
+  if (!entries.length) {
+    banner.style.display = 'none';
+    return;
+  }
+  banner.style.display = '';
+  text.innerHTML = entries.map(([model, ms]) =>
+    `<strong style="color:var(--text)">${MODEL_SHORT[model] || model}</strong>: latest real call TTFA <strong style="color:var(--accent)">${ms}ms ⚡</strong>`
+  ).join(' · ');
+  text.title = REAL_TTFA_TOOLTIP;
+}
+
+// ─── UI helpers ──────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', ['results','charts','history'][i] === name);
+  });
+  document.querySelectorAll('.tab-pane').forEach(p => {
+    p.classList.toggle('active', p.id === 'tab-' + name);
+  });
+}
+
+function setTranscript(text) {
+  document.getElementById('transcriptInput').value = text;
+}
+
+function toggleModel(el, model) {
+  el.classList.toggle('checked');
+  const checked = el.classList.contains('checked');
+  if (checked) selectedModels.add(model);
+  else selectedModels.delete(model);
+}
+
+function setProgress(done, total, label) {
+  const pct = total > 0 ? (done / total * 100) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = label || '';
+}
+
+function intentBadge(intent) {
+  const labels = {
+    SAFE_CONFIRMATION: '✅ SAFE',
+    DELAYED_CHECKIN:   '⏱ DELAYED',
+    REQUEST_HUMAN:     '👤 HUMAN',
+    UNRECOGNISED:      '❓ UNRECOGNISED',
+  };
+  return `<span class="intent-badge intent-${intent}">${labels[intent] || intent}</span>`;
+}
+
+function confBar(conf, color) {
+  const pct = Math.round(conf * 100);
+  const cls = conf >= 0.85 ? color : conf >= 0.60 ? '#e3b341' : '#f85149';
+  return `<div class="conf-wrap">
+    <div class="conf-bar-bg"><div class="conf-bar-fill" style="width:${pct}%;background:${cls}"></div></div>
+    <span class="conf-num" style="color:${cls}">${pct}%</span>
+  </div>`;
+}
+
+function latBar(ms, maxMs) {
+  const pct = Math.min(100, (ms / maxMs) * 100);
+  const cls = ms <= 200 ? 'good' : ms <= 500 ? 'warn' : 'bad';
+  const col = ms <= 200 ? '#3fb950' : ms <= 500 ? '#e3b341' : '#f85149';
+  return `<div class="lat-wrap">
+    <span class="lat-num lat-${cls}">${ms}ms</span>
+    <div class="lat-bar-bg"><div class="lat-bar-fill" style="width:${pct}%;background:${col}"></div></div>
+  </div>`;
+}
+
+// ─── Run benchmark ───────────────────────────────────────────────
+async function runBenchmark() {
+  const transcript = document.getElementById('transcriptInput').value.trim();
+  if (!transcript) { alert('Transcript gir'); return; }
+  if (selectedModels.size === 0) { alert('En az bir model seç'); return; }
+
+  const runs = parseInt(document.getElementById('runsInput').value) || 3;
+  const delay = parseInt(document.getElementById('delaySelect').value) || 500;
+  const models = [...selectedModels];
+  const totalSteps = models.length * runs;
+  let stepsDone = 0;
+  isStopped = false;
+
+  // UI: start
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('summarySection').style.display = 'none';
+  document.getElementById('tableSection').style.display = 'none';
+  document.getElementById('runningState').style.display = 'flex';
+  setProgress(0, totalSteps, 'Starting...');
+
+  const allData = {}; // model → [{latency, intent, confidence, ...}]
+  models.forEach(m => allData[m] = []);
+
+  for (const model of models) {
+    if (isStopped) break;
+    for (let r = 0; r < runs; r++) {
+      if (isStopped) break;
+      setProgress(stepsDone, totalSteps, `${MODEL_SHORT[model] || model} — run ${r+1}/${runs}`);
+      document.getElementById('runningLabel').textContent = `${MODEL_SHORT[model] || model} · run ${r+1}/${runs}`;
+
+      try {
+        const res = await fetch('/benchmark-classify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript, models: [model] })
+        });
+        const data = await res.json();
+        const r_data = data.results[model];
+        if (r_data.ok) {
+          allData[model].push({
+            run: r + 1,
+            latency: r_data.latency,
+            intent: r_data.intent,
+            confidence: r_data.confidence,
+            distress: r_data.distress,
+            distress_signals: r_data.distress_signals,
+            response: r_data.response,
+            resolved: r_data.resolved,
+            escalate: r_data.escalate,
+            input_tokens: r_data.input_tokens,
+            output_tokens: r_data.output_tokens,
+            cost: calcCost(model, r_data.input_tokens, r_data.output_tokens),
+          });
+        } else {
+          allData[model].push({ run: r+1, error: r_data.error, latency: r_data.latency || 0 });
+        }
+      } catch (e) {
+        allData[model].push({ run: r+1, error: e.message, latency: 0 });
+      }
+
+      stepsDone++;
+      setProgress(stepsDone, totalSteps, '');
+      if (r < runs - 1 || models.indexOf(model) < models.length - 1) await sleep(delay);
+    }
+  }
+
+  // UI: done
+  document.getElementById('runningState').style.display = 'none';
+  document.getElementById('runBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  setProgress(stepsDone, totalSteps, isStopped ? 'Stopped.' : '✓ Done');
+
+  benchmarkResults = { transcript, models, runs: allData, timestamp: new Date().toISOString() };
+  await fetchRecentTTFA();
+  renderResults(benchmarkResults);
+  saveToHistory(benchmarkResults);
+}
+
+function stopBenchmark() {
+  isStopped = true;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('progressLabel').textContent = 'Stopping...';
+}
+
+// ─── Render results ───────────────────────────────────────────────
+function renderResults(data) {
+  const { transcript, models, runs } = data;
+  const modelList = Object.keys(runs);
+
+  // Summary header
+  document.getElementById('summaryTitle').textContent = `"${transcript.substring(0,60)}${transcript.length > 60 ? '...' : ''}"`;
+  const totalRuns = modelList.reduce((s, m) => s + runs[m].length, 0);
+  document.getElementById('summarySub').textContent = `${totalRuns} total runs · ${modelList.length} models · ${new Date(data.timestamp).toLocaleTimeString()}`;
+
+  // Model summary cards
+  const cardsEl = document.getElementById('modelSummaryCards');
+  cardsEl.innerHTML = '';
+  cardsEl.style.gridTemplateColumns = `repeat(${Math.min(modelList.length, 3)}, 1fr)`;
+
+  modelList.forEach(model => {
+    const rows = runs[model].filter(r => !r.error);
+    if (rows.length === 0) return;
+    const avgLat = Math.round(avg(rows.map(r => r.latency)));
+    const avgConf = avg(rows.map(r => r.confidence));
+    const avgTokens = Math.round(avg(rows.map(r => r.input_tokens + r.output_tokens)));
+    const totalCost = rows.reduce((s, r) => s + r.cost, 0);
+    const dominant = rows.reduce((acc, r) => { acc[r.intent] = (acc[r.intent]||0)+1; return acc; }, {});
+    const topIntent = Object.entries(dominant).sort((a,b) => b[1]-a[1])[0]?.[0] || '—';
+    const color = MODEL_COLORS[model] || '#58a6ff';
+
+    const latCls = avgLat <= 200 ? 'good' : avgLat <= 500 ? 'warn' : 'bad';
+
+    cardsEl.innerHTML += `
+      <div class="model-stat-card">
+        <div class="model-stat-head" style="background: rgba(${hexToRgb(color)},0.06)">
+          <div class="model-dot" style="background:${color}"></div>
+          <div class="model-stat-name">${MODEL_SHORT[model] || model}</div>
+          <div style="margin-left:auto">${intentBadge(topIntent)}</div>
+        </div>
+        <div class="model-stat-body">
+          <div class="model-stat-item">
+            <div class="stat-label">Avg Latency</div>
+            <div class="stat-val ${latCls}">${fmtMs(avgLat)}</div>
+            ${isGeminiModel(model) ? `<div style="font-size:10px;color:var(--accent);margin-top:4px" title="${REAL_TTFA_TOOLTIP}">Real TTFA: ${formatRealTtfa(model)}</div>` : ''}
+          </div>
+          <div class="model-stat-item">
+            <div class="stat-label">Avg Confidence</div>
+            <div class="stat-val purple">${Math.round(avgConf*100)}%</div>
+          </div>
+          <div class="model-stat-item">
+            <div class="stat-label">Avg Tokens</div>
+            <div class="stat-val">${avgTokens}</div>
+          </div>
+          <div class="model-stat-item">
+            <div class="stat-label">Total Cost</div>
+            <div class="stat-val" style="font-size:14px">${fmtCost(totalCost)}</div>
+          </div>
+        </div>
+      </div>`;
+  });
+
+  // Table
+  const maxLat = Math.max(...modelList.flatMap(m => runs[m].filter(r=>!r.error).map(r => r.latency)), 1);
+  let thead = '<tr><th>Run</th>';
+  modelList.forEach(m => {
+    const col = MODEL_COLORS[m] || '#fff';
+    thead += `<th><div class="model-th"><div class="model-dot" style="background:${col}"></div>${MODEL_SHORT[m]}</div>${isGeminiModel(m) ? `<div style="font-size:9px;font-weight:400;color:var(--muted);margin-top:2px" title="${REAL_TTFA_TOOLTIP}">Real Call TTFA</div>` : ''}</th>`;
+  });
+  thead += '</tr>';
+  document.getElementById('resultsTableHead').innerHTML = thead;
+
+  const maxRuns = Math.max(...modelList.map(m => runs[m].length));
+  let tbody = '';
+  for (let i = 0; i < maxRuns; i++) {
+    tbody += `<tr><td style="color:var(--muted);font-weight:600">#${i+1}</td>`;
+    modelList.forEach(m => {
+      const row = runs[m][i];
+      if (!row) { tbody += '<td>—</td>'; return; }
+      if (row.error) { tbody += `<td><span class="intent-badge intent-ERROR">ERROR</span><div style="font-size:10px;color:var(--danger);margin-top:4px">${row.error}</div></td>`; return; }
+      tbody += `<td>
+        ${intentBadge(row.intent)}
+        ${row.distress ? `<span class="distress-badge distress-${row.distress}" style="margin-left:4px">${row.distress}</span>` : ''}
+        <div style="margin-top:6px">${confBar(row.confidence, MODEL_COLORS[m] || '#58a6ff')}</div>
+        <div style="margin-top:4px">${latBar(row.latency, maxLat)}</div>
+        ${realTtfaCell(m, row.latency)}
+        <div class="token-cell" style="margin-top:4px">
+          <span>${row.input_tokens}</span> in / <span>${row.output_tokens}</span> out · ${fmtCost(row.cost)}
+        </div>
+      </td>`;
+    });
+    tbody += '</tr>';
+  }
+
+  // Aggregate row
+  tbody += `<tr style="background:var(--surface2);font-weight:600"><td style="color:var(--accent);font-size:11px">AVG</td>`;
+  modelList.forEach(m => {
+    const rows = runs[m].filter(r => !r.error);
+    if (!rows.length) { tbody += '<td>—</td>'; return; }
+    const aLat = Math.round(avg(rows.map(r=>r.latency)));
+    const aConf = avg(rows.map(r=>r.confidence));
+    const aTok = Math.round(avg(rows.map(r=>r.input_tokens+r.output_tokens)));
+    const aCost = avg(rows.map(r=>r.cost));
+    const latCls = aLat<=200?'good':aLat<=500?'warn':'bad';
+    tbody += `<td>
+      <span class="lat-${latCls}" style="font-weight:700;font-size:13px">${fmtMs(aLat)}</span>
+      &nbsp; conf: <b>${Math.round(aConf*100)}%</b>
+      &nbsp; tokens: <b>${aTok}</b>
+      &nbsp; cost: <b>${fmtCost(aCost)}</b>
+      ${realTtfaCell(m, aLat)}
+    </td>`;
+  });
+  tbody += '</tr>';
+
+  document.getElementById('resultsTableBody').innerHTML = tbody;
+  document.getElementById('tableTitle').textContent = `Run Details — ${maxRuns} runs × ${modelList.length} models`;
+
+  document.getElementById('summarySection').style.display = '';
+  document.getElementById('tableSection').style.display = '';
+
+  // Render charts
+  renderCharts(data);
+}
+
+// ─── Charts ─────────────────────────────────────────────────────
+function renderCharts(data) {
+  const { runs } = data;
+  const modelList = Object.keys(runs);
+  document.getElementById('chartsEmpty').style.display = 'none';
+  document.getElementById('chartsContent').style.display = '';
+
+  // Latency bar chart
+  const maxLat = Math.max(...modelList.map(m => avg(runs[m].filter(r=>!r.error).map(r=>r.latency))), 1);
+  document.getElementById('latencyChart').innerHTML = modelList.map(m => {
+    const rows = runs[m].filter(r=>!r.error);
+    if (!rows.length) return '';
+    const a = Math.round(avg(rows.map(r=>r.latency)));
+    const pct = Math.round((a / maxLat) * 100);
+    const col = MODEL_COLORS[m] || '#58a6ff';
+    return `<div class="bar-row">
+      <div class="bar-label">${MODEL_SHORT[m]}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${col}">${a}ms</div></div>
+      <div class="bar-val">${a}ms</div>
+    </div>`;
+  }).join('');
+
+  // Confidence chart
+  document.getElementById('confidenceChart').innerHTML = modelList.map(m => {
+    const rows = runs[m].filter(r=>!r.error);
+    if (!rows.length) return '';
+    const a = avg(rows.map(r=>r.confidence));
+    const pct = Math.round(a * 100);
+    const col = pct >= 85 ? '#3fb950' : pct >= 60 ? '#e3b341' : '#f85149';
+    return `<div class="bar-row">
+      <div class="bar-label">${MODEL_SHORT[m]}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${col}">${pct}%</div></div>
+      <div class="bar-val">${pct}%</div>
+    </div>`;
+  }).join('');
+
+  // Token chart
+  const maxTok = Math.max(...modelList.map(m => avg(runs[m].filter(r=>!r.error).map(r=>r.input_tokens+r.output_tokens))), 1);
+  document.getElementById('tokenChart').innerHTML = modelList.map(m => {
+    const rows = runs[m].filter(r=>!r.error);
+    if (!rows.length) return '';
+    const a = Math.round(avg(rows.map(r=>r.input_tokens+r.output_tokens)));
+    const pct = Math.round((a / maxTok) * 100);
+    const col = MODEL_COLORS[m] || '#58a6ff';
+    return `<div class="bar-row">
+      <div class="bar-label">${MODEL_SHORT[m]}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${col}">${a} tok</div></div>
+      <div class="bar-val">${a}</div>
+    </div>`;
+  }).join('');
+
+  // Intent distribution
+  const intentDistEl = document.getElementById('intentDistChart');
+  intentDistEl.innerHTML = modelList.map(m => {
+    const rows = runs[m].filter(r=>!r.error);
+    if (!rows.length) return '';
+    const counts = {};
+    rows.forEach(r => counts[r.intent] = (counts[r.intent]||0) + 1);
+    const total = rows.length;
+    const segs = Object.entries(counts).map(([intent, cnt]) => {
+      const pct = Math.round((cnt/total)*100);
+      return `<div class="intent-dist-seg" style="width:${pct}%;background:${INTENT_COLORS[intent]||'#aaa'}" title="${intent}: ${cnt}/${total}">${pct >= 15 ? cnt : ''}</div>`;
+    }).join('');
+    return `<div class="intent-dist-row">
+      <div class="intent-dist-label">${MODEL_SHORT[m]}</div>
+      <div class="intent-dist-bars">${segs}</div>
+    </div>`;
+  }).join('');
+
+  // Run-by-run latency
+  const maxRunLat = Math.max(...modelList.flatMap(m => runs[m].filter(r=>!r.error).map(r=>r.latency)), 1);
+  document.getElementById('runChart').innerHTML = modelList.flatMap(m => {
+    return runs[m].filter(r=>!r.error).map((r,i) => {
+      const pct = Math.round((r.latency / maxRunLat) * 100);
+      const col = MODEL_COLORS[m] || '#58a6ff';
+      return `<div class="bar-row">
+        <div class="bar-label" style="color:${col}">${MODEL_SHORT[m]} #${i+1}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${col}">${r.latency}ms</div></div>
+        <div class="bar-val">${r.latency}ms</div>
+      </div>`;
+    });
+  }).join('');
+}
+
+// ─── History ─────────────────────────────────────────────────────
+function saveToHistory(data) {
+  sessionHistory.unshift({ ...data, id: Date.now() });
+  if (sessionHistory.length > 20) sessionHistory = sessionHistory.slice(0, 20);
+  localStorage.setItem('bm_history', JSON.stringify(sessionHistory));
+  renderHistory();
+}
+
+function renderHistory() {
+  const el = document.getElementById('historyList');
+  document.getElementById('historyCount').textContent = `(${sessionHistory.length})`;
+  if (!sessionHistory.length) {
+    document.getElementById('historyEmpty').style.display = '';
+    el.innerHTML = '';
+    return;
+  }
+  document.getElementById('historyEmpty').style.display = 'none';
+  el.innerHTML = sessionHistory.map((s, i) => {
+    const models = Object.keys(s.runs);
+    const totalRuns = models.reduce((acc, m) => acc + s.runs[m].length, 0);
+    return `<div class="history-item" onclick="loadHistory(${i})">
+      <div class="history-item-head">
+        <span style="font-weight:500">"${s.transcript.substring(0,50)}${s.transcript.length>50?'...':''}"</span>
+        <span class="history-item-time">${new Date(s.timestamp).toLocaleTimeString()}</span>
+      </div>
+      <div class="history-item-sub">${models.map(m => MODEL_SHORT[m]).join(' vs ')} · ${totalRuns} runs</div>
+    </div>`;
+  }).join('');
+}
+
+function loadHistory(idx) {
+  benchmarkResults = sessionHistory[idx];
+  switchTab('results');
+  renderResults(benchmarkResults);
+}
+
+function clearHistory() {
+  sessionHistory = [];
+  localStorage.removeItem('bm_history');
+  renderHistory();
+}
+
+// ─── Export ──────────────────────────────────────────────────────
+function exportJSON() {
+  if (!benchmarkResults) return;
+  const blob = new Blob([JSON.stringify(benchmarkResults, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `benchmark_${Date.now()}.json`;
+  a.click();
+}
+
+function exportCSV() {
+  if (!benchmarkResults) return;
+  const { transcript, runs } = benchmarkResults;
+  const models = Object.keys(runs);
+  const rows = [['transcript','model','run','intent','confidence','distress','latency_ms','input_tokens','output_tokens','cost_usd']];
+  models.forEach(m => {
+    runs[m].forEach(r => {
+      if (r.error) return;
+      rows.push([transcript, m, r.run, r.intent, r.confidence, r.distress||'', r.latency, r.input_tokens, r.output_tokens, r.cost]);
+    });
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `benchmark_${Date.now()}.csv`;
+  a.click();
+}
+
+// ─── Utils ───────────────────────────────────────────────────────
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `${r},${g},${b}`;
+}
+
+// ─── Init ────────────────────────────────────────────────────────
+renderHistory();
+fetchRecentTTFA();
+</script>
+</body>
+</html>

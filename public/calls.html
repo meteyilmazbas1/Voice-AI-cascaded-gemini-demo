@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aware360 — Call History</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d1117; --surface: #161b22; --surface2: #1c2230; --border: #30363d;
+  --text: #e6edf3; --muted: #7d8590; --accent: #1d9e75; --accent-dim: #0f6e56;
+  --warn: #e3b341; --danger: #f85149; --info: #58a6ff;
+}
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 14px; min-height: 100vh; display: flex; flex-direction: column; }
+header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+.logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+header h1 { font-size: 15px; font-weight: 600; }
+header span { font-size: 12px; color: var(--muted); margin-left: 4px; }
+.header-link { margin-left: auto; font-size: 12px; color: var(--muted); text-decoration: none; padding: 5px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.header-link:hover { color: var(--text); border-color: var(--muted); }
+.layout { display: grid; grid-template-columns: 380px 1fr; flex: 1; min-height: 0; }
+.panel-left { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.panel-right { display: flex; flex-direction: column; overflow: hidden; }
+.panel-head { padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.panel-head .count { font-weight: 400; text-transform: none; }
+.call-list { flex: 1; overflow-y: auto; }
+.call-item { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s; }
+.call-item:hover { background: var(--surface2); }
+.call-item.active { background: rgba(29,158,117,0.08); border-left: 3px solid var(--accent); }
+.call-item-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.call-time { font-size: 12px; font-weight: 600; }
+.call-dur { font-size: 11px; color: var(--muted); margin-left: auto; }
+.call-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.03em; }
+.badge.RESOLVED { background: rgba(63,185,80,0.12); color: #3fb950; border: 1px solid rgba(63,185,80,0.3); }
+.badge.ESCALATED { background: rgba(227,179,65,0.12); color: var(--warn); border: 1px solid rgba(227,179,65,0.3); }
+.badge.NO_ANSWER { background: rgba(248,81,73,0.12); color: var(--danger); border: 1px solid rgba(248,81,73,0.3); }
+.badge.VOICEMAIL { background: rgba(137,87,229,0.12); color: #8957e5; border: 1px solid rgba(137,87,229,0.3); }
+.badge.ACTIVE, .badge.UNKNOWN { background: rgba(125,133,144,0.12); color: var(--muted); border: 1px solid var(--border); }
+.intent-tag { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--surface2); border: 1px solid var(--border); }
+.empty { padding: 40px 20px; text-align: center; color: var(--muted); font-size: 13px; }
+.detail-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+.detail { flex: 1; overflow-y: auto; padding: 20px 24px; display: none; flex-direction: column; gap: 16px; }
+.detail.show { display: flex; }
+.meta-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.meta-item .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+.meta-item .value { font-size: 13px; font-weight: 500; word-break: break-all; }
+.section-title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+.transcript { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-y: auto; min-height: 200px; max-height: 420px; display: flex; flex-direction: column; gap: 10px; }
+.bubble { max-width: 78%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+.bubble .time { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.bubble.worker { align-self: flex-end; background: rgba(88,166,255,0.12); border: 1px solid rgba(88,166,255,0.25); border-bottom-right-radius: 4px; }
+.bubble.ai { align-self: flex-start; background: rgba(29,158,117,0.1); border: 1px solid rgba(29,158,117,0.25); border-bottom-left-radius: 4px; }
+.bubble .role { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; opacity: 0.7; }
+.recording-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.recording-card audio { width: 100%; margin-top: 8px; }
+.pagination { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; justify-content: center; }
+.btn { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 12px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo-dot"></div>
+  <h1>Aware360 <span>— Call History</span></h1>
+  <a href="/" class="header-link">← Demo</a>
+</header>
+
+<div class="layout">
+  <div class="panel-left">
+    <div class="panel-head">Calls <span class="count" id="callCount">—</span></div>
+    <div class="call-list" id="callList">
+      <div class="empty">Loading...</div>
+    </div>
+    <div class="pagination">
+      <button class="btn" id="prevBtn" onclick="changePage(-1)" disabled>← Prev</button>
+      <span id="pageInfo" style="font-size:12px;color:var(--muted)">—</span>
+      <button class="btn" id="nextBtn" onclick="changePage(1)" disabled>Next →</button>
+    </div>
+  </div>
+
+  <div class="panel-right">
+    <div class="detail-empty" id="detailEmpty">Select a call to view transcript and details</div>
+    <div class="detail" id="detailPanel">
+      <div class="meta-card">
+        <div class="meta-grid" id="metaGrid"></div>
+      </div>
+      <div>
+        <div class="section-title">Transcript</div>
+        <div class="transcript" id="transcript"></div>
+      </div>
+      <div class="recording-card">
+        <div class="section-title" style="margin-bottom:0">Recording</div>
+        <div id="recordingArea"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentPage = 1;
+let totalPages = 1;
+let selectedSid = null;
+
+function stateBadge(state) {
+  const s = state || 'UNKNOWN';
+  return `<span class="badge ${s}">${s}</span>`;
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString();
+}
+
+function fmtDur(sec) {
+  if (sec == null) return '—';
+  if (sec < 60) return sec + 's';
+  return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function loadCalls(page) {
+  currentPage = page;
+  const list = document.getElementById('callList');
+  list.innerHTML = '<div class="empty">Loading...</div>';
+
+  try {
+    const res = await fetch(`/api/calls?page=${page}&limit=20`);
+    const data = await res.json();
+    totalPages = Math.max(1, Math.ceil(data.total / data.limit));
+    document.getElementById('callCount').textContent = `(${data.total})`;
+    document.getElementById('pageInfo').textContent = `Page ${data.page} / ${totalPages}`;
+    document.getElementById('prevBtn').disabled = page <= 1;
+    document.getElementById('nextBtn').disabled = page >= totalPages;
+
+    if (!data.calls.length) {
+      list.innerHTML = '<div class="empty">No calls recorded yet.<br>Outbound Gemini calls will appear here.</div>';
+      return;
+    }
+
+    list.innerHTML = data.calls.map(c => `
+      <div class="call-item ${c.call_sid === selectedSid ? 'active' : ''}" data-sid="${escapeHtml(c.call_sid)}" onclick="selectCall('${c.call_sid}')">
+        <div class="call-item-top">
+          <span class="call-time">${fmtTime(c.start_time)}</span>
+          ${stateBadge(c.session_state)}
+          <span class="call-dur">${fmtDur(c.duration_seconds)}</span>
+        </div>
+        <div class="call-meta">
+          ${c.final_intent ? `<span class="intent-tag">${c.final_intent}</span>` : ''}
+          <span>${escapeHtml(c.model_used || '—')}</span>
+          ${c.worker_phone ? `<span>${escapeHtml(c.worker_phone)}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<div class="empty">Failed to load calls: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function changePage(delta) {
+  const next = currentPage + delta;
+  if (next < 1 || next > totalPages) return;
+  loadCalls(next);
+}
+
+async function selectCall(callSid) {
+  selectedSid = callSid;
+  document.querySelectorAll('.call-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.sid === callSid);
+  });
+
+  document.getElementById('detailEmpty').style.display = 'none';
+  document.getElementById('detailPanel').classList.add('show');
+
+  try {
+    const res = await fetch('/api/calls/' + encodeURIComponent(callSid));
+    if (!res.ok) throw new Error('Call not found');
+    const call = await res.json();
+    renderDetail(call);
+  } catch (e) {
+    document.getElementById('metaGrid').innerHTML = `<div style="color:var(--danger)">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderDetail(call) {
+  document.getElementById('metaGrid').innerHTML = `
+    <div class="meta-item"><div class="label">Call SID</div><div class="value">${escapeHtml(call.call_sid)}</div></div>
+    <div class="meta-item"><div class="label">Duration</div><div class="value">${fmtDur(call.duration_seconds)}</div></div>
+    <div class="meta-item"><div class="label">Status</div><div class="value">${stateBadge(call.session_state)}</div></div>
+    <div class="meta-item"><div class="label">Model</div><div class="value">${escapeHtml(call.model_used || '—')}</div></div>
+    <div class="meta-item"><div class="label">Worker phone</div><div class="value">${escapeHtml(call.worker_phone || '—')}</div></div>
+    <div class="meta-item"><div class="label">Intent</div><div class="value">${escapeHtml(call.final_intent || '—')}</div></div>
+    <div class="meta-item"><div class="label">Started</div><div class="value">${fmtTime(call.start_time)}</div></div>
+    <div class="meta-item"><div class="label">Ended</div><div class="value">${fmtTime(call.end_time)}</div></div>
+    <div class="meta-item"><div class="label">Silence prompts</div><div class="value">${call.silence_count ?? 0}</div></div>
+    <div class="meta-item"><div class="label">TTFA</div><div class="value">${call.ttfa_ms ? call.ttfa_ms + 'ms ⚡' : '—'}</div></div>
+    <div class="meta-item"><div class="label">STT</div><div class="value">${call.stt_ms != null ? call.stt_ms + 'ms' : '—'}</div></div>
+    <div class="meta-item"><div class="label">LLM</div><div class="value">${call.llm_ms != null ? (call.llm_ms === 0 ? 'Fast-path' : call.llm_ms + 'ms') : '—'}</div></div>
+    <div class="meta-item"><div class="label">TTS</div><div class="value">${call.tts_ms != null ? call.tts_ms + 'ms' : '—'}</div></div>
+    <div class="meta-item"><div class="label">Total Turn</div><div class="value">${(call.stt_ms != null && call.llm_ms != null && call.tts_ms != null) ? (call.stt_ms + call.llm_ms + call.tts_ms) + 'ms' : '—'}</div></div>
+  `;
+
+  const transcript = call.transcript || [];
+  const tEl = document.getElementById('transcript');
+  if (!transcript.length) {
+    tEl.innerHTML = '<div class="empty" style="padding:20px">No transcript captured.</div>';
+  } else {
+    tEl.innerHTML = transcript.map(m => `
+      <div class="bubble ${m.role === 'worker' ? 'worker' : 'ai'}">
+        <div class="role">${m.role === 'worker' ? 'Worker' : 'Aware360 AI'}</div>
+        ${escapeHtml(m.text)}
+        ${m.time ? `<div class="time">${fmtTime(m.time)}</div>` : ''}
+      </div>
+    `).join('');
+    tEl.scrollTop = tEl.scrollHeight;
+  }
+
+  const rec = document.getElementById('recordingArea');
+  const proxyUrl = call.recording_url
+    ? `/api/recordings/proxy?url=${encodeURIComponent(call.recording_url)}`
+    : null;
+  if (proxyUrl) {
+    rec.innerHTML = `<audio controls src="${escapeHtml(proxyUrl)}"></audio>`;
+  } else {
+    rec.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-top:8px">Recording not available</div>';
+  }
+}
+
+loadCalls(1);
+</script>
+</body>
+</html>
