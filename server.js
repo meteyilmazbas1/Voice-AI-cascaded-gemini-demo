@@ -8,6 +8,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const twilio = require('twilio');
 const { spawn } = require('child_process');
 
 const app = express();
@@ -37,6 +38,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl } = require('./db');
+const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
 
 const CACHE_DIR = path.join(__dirname, 'audio_cache');
 function loadAudioCache() {
@@ -111,13 +113,31 @@ const CACHE_RESPONSES = {
   unrecognised: "I'm sorry, I didn't catch that. Are you safe, need more time, or need a human agent?",
 };
 
+const INTENT_PROMPT = `You are an intent classifier for a Voice AI Safety Assistant on the Aware360 platform. A field worker triggered a missed check-in alert. Read the worker's message and classify it into exactly one intent.
+
+Intents:
+- safe = worker says they are safe/fine/ok, with NO mention of injury, pain, or danger
+- delayed = running late, needs more time, give me X minutes
+- request_human = explicitly wants a live person/agent/human
+- unsafe = ANY mention of injury, pain, hurt, bleeding, trapped, stuck, danger, fell/fall, accident, needs help, SOS — even if the worker also says they are "okay" or "fine"
+- ambiguous = silent, unclear, off-topic, or cannot tell
+
+PRIORITY: If the message contains ANY unsafe signal (injury, pain, danger, "help", "SOS"), classify as unsafe — even if the worker also says "I'm safe". request_human beats everything except unsafe.
+
+Respond with ONLY one word, nothing else, no punctuation:
+safe OR delayed OR request_human OR unsafe OR ambiguous`;
+
+const VALID_INTENTS_SET = new Set(['safe', 'delayed', 'request_human', 'unsafe', 'ambiguous']);
+const DURATION_REGEX = /(\d+)\s*(min(?:ute)?s?|hours?|hrs?|h)\b/i;
+
 const DEEPGRAM_BASE_PARAMS = {
   model: 'nova-3', language: 'en-US', punctuate: 'true',
   smart_format: 'true', interim_results: 'true',
-  utterance_end_ms: '1000', vad_events: 'true'
+  utterance_end_ms: '1000', vad_events: 'true',
+  endpointing: '800',  // 800ms silence before speech_final (avoids mid-sentence cuts)
 };
 
-const DEEPGRAM_KEYTERMS = '&keyterm=help&keyterm=SOS&keyterm=emergency&keyterm=hurt&keyterm=pain&keyterm=injured&keyterm=injury&keyterm=stuck&keyterm=trapped&keyterm=dizzy&keyterm=bleeding&keyterm=fallen&keyterm=fell&keyterm=scared&keyterm=afraid&keyterm=agent&keyterm=human&keyterm=danger&keyterm=accident';
+const DEEPGRAM_KEYTERMS = '&keyterm=help&keyterm=SOS&keyterm=emergency&keyterm=hurt&keyterm=pain&keyterm=injured&keyterm=injury&keyterm=stuck&keyterm=trapped&keyterm=dizzy&keyterm=bleeding&keyterm=fallen&keyterm=fell&keyterm=scared&keyterm=afraid&keyterm=agent&keyterm=human&keyterm=danger&keyterm=accident&keyterm=not&keyterm=no&keyterm=don%27t&keyterm=can%27t&keyterm=unsafe';
 
 function fastPathIntent(transcript) {
   const t = transcript.toLowerCase().trim();
@@ -146,8 +166,49 @@ const PUBLIC_URL = process.env.PUBLIC_URL;
 if (!PUBLIC_URL) throw new Error('PUBLIC_URL is not set in .env');
 const WS_URL = PUBLIC_URL.replace('https://', 'wss://').replace('http://', 'ws://');
 
+function buildTwilioWebhookUrl(req, pathname) {
+  // Prefer NGROK_HOST if set; otherwise PUBLIC_URL (full https://… base used by make_call.js)
+  let base;
+  if (process.env.NGROK_HOST) {
+    base = 'https://' + String(process.env.NGROK_HOST).replace(/^https?:\/\//, '');
+  } else {
+    base = PUBLIC_URL;
+  }
+  base = base.replace(/\/$/, '');
+  const qs = req.originalUrl && req.originalUrl.indexOf('?') !== -1
+    ? req.originalUrl.slice(req.originalUrl.indexOf('?'))
+    : '';
+  return base + pathname + qs;
+}
+
+function validateTwilioSignature(req, res, url) {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!authToken) {
+    console.warn('[Twilio] TWILIO_AUTH_TOKEN not set — rejecting request');
+    res.status(403).send('Forbidden');
+    return false;
+  }
+  const signature = req.headers['x-twilio-signature'];
+  if (!signature) {
+    console.warn('[Twilio] Missing signature — rejecting request');
+    res.status(403).send('Forbidden');
+    return false;
+  }
+  const params = req.body && typeof req.body === 'object' ? req.body : {};
+  const valid = twilio.validateRequest(authToken, signature, url, params);
+  if (!valid) {
+    console.warn('[Twilio] Invalid signature — rejecting request from', req.ip);
+    res.status(403).send('Forbidden');
+    return false;
+  }
+  return true;
+}
+
 // ─── TwiML webhook ───
 app.post('/incoming-call', function(req, res) {
+  const url = buildTwilioWebhookUrl(req, '/incoming-call');
+  if (!validateTwilioSignature(req, res, url)) return;
+
   const from = (req.body && req.body.From) ? req.body.From : 'unknown';
   const to = (req.body && req.body.To) ? req.body.To : 'unknown';
   const direction = (req.body && req.body.Direction) ? req.body.Direction : '';
@@ -173,35 +234,119 @@ async function classifyIntent(transcript, model, opts) {
     if (fast) return fast;
   }
 
-  const stream = anthropic.messages.stream({
+  // Non-streaming for compare/benchmark latency (Haiku + Sonnet).
+  // 200 tokens: full JSON schema (intent/confidence/response/distress/…) must fit.
+  const response = await anthropic.messages.create({
     model: model || 'claude-haiku-4-5',
     max_tokens: 200,
+    temperature: 0,
+    stream: false,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: 'Worker said: "' + transcript + '"' }]
   });
 
   let fullText = '';
-  let usage = { input_tokens: 0, output_tokens: 0 };
-
-  for await (const chunk of stream) {
-    if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
-      fullText += chunk.delta.text;
-    }
-    if (chunk.type === 'message_start' && chunk.message?.usage) {
-      usage.input_tokens = chunk.message.usage.input_tokens || 0;
-      usage.cache_read_input_tokens = chunk.message.usage.cache_read_input_tokens || 0;
-      const cacheRead = chunk.message.usage.cache_read_input_tokens || 0;
-      const cacheCreate = chunk.message.usage.cache_creation_input_tokens || 0;
-      if (cacheRead > 0) console.log('[Cache] HIT — cache_read_tokens:', cacheRead);
-      else if (cacheCreate > 0) console.log('[Cache] MISS — cache_creation_tokens:', cacheCreate);
-    }
-    if (chunk.type === 'message_delta' && chunk.usage) {
-      usage.output_tokens = chunk.usage.output_tokens || 0;
+  if (response.content) {
+    for (const block of response.content) {
+      if (block.type === 'text') fullText += block.text;
     }
   }
+
+  const usage = {
+    input_tokens: (response.usage && response.usage.input_tokens) || 0,
+    output_tokens: (response.usage && response.usage.output_tokens) || 0,
+    cache_read_input_tokens: (response.usage && response.usage.cache_read_input_tokens) || 0,
+  };
+  const cacheRead = usage.cache_read_input_tokens || 0;
+  const cacheCreate = (response.usage && response.usage.cache_creation_input_tokens) || 0;
+  if (cacheRead > 0) console.log('[Cache] HIT — cache_read_tokens:', cacheRead);
+  else if (cacheCreate > 0) console.log('[Cache] MISS — cache_creation_tokens:', cacheCreate);
+
   const parsed = parseIntentJson(fullText);
   parsed._usage = usage;
   return parsed;
+}
+
+async function classifyIntentFast(transcript) {
+  const durationMatch = transcript.match(DURATION_REGEX);
+  const duration = durationMatch ? durationMatch[1] + ' ' + durationMatch[2] : null;
+
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5',
+    max_tokens: 8,
+    temperature: 0,
+    system: INTENT_PROMPT,
+    messages: [{ role: 'user', content: transcript }],
+  });
+
+  const raw = ((response.content[0] && response.content[0].text) || '').trim().toLowerCase();
+  const word = raw.split(/[^a-z_]+/).find(function(w) { return VALID_INTENTS_SET.has(w); });
+  const intent = word || 'ambiguous';
+
+  console.log('[Intent Fast]', intent, duration ? '| duration: ' + duration : '');
+  return { intent: intent, duration: duration };
+}
+
+function intentToResult(intent, duration) {
+  const intentMap = {
+    safe: {
+      intent: 'SAFE_CONFIRMATION',
+      classifiedIntent: 'SAFE_CONFIRMATION',
+      response: CACHE_RESPONSES.safe_confirmation,
+      resolved: true,
+      escalate: false,
+      confidence: 0.95,
+      distress: null,
+      distress_signals: null,
+      delay_minutes: null,
+    },
+    delayed: {
+      intent: 'DELAYED_CHECKIN',
+      classifiedIntent: 'DELAYED_CHECKIN',
+      response: CACHE_RESPONSES.delayed_checkin_15,
+      resolved: true,
+      escalate: false,
+      confidence: 0.9,
+      distress: null,
+      distress_signals: null,
+      delay_minutes: duration ? parseInt(duration, 10) : 15,
+    },
+    request_human: {
+      intent: 'REQUEST_HUMAN',
+      classifiedIntent: 'REQUEST_HUMAN',
+      response: CACHE_RESPONSES.request_human,
+      resolved: false,
+      escalate: true,
+      confidence: 0.95,
+      distress: null,
+      distress_signals: null,
+      delay_minutes: null,
+    },
+    unsafe: {
+      intent: 'REQUEST_HUMAN',
+      classifiedIntent: 'REQUEST_HUMAN',
+      response: 'I can hear this may be urgent. I am connecting you to a live agent right now. Please stay on the line.',
+      resolved: false,
+      escalate: true,
+      confidence: 0.95,
+      distress: 'high',
+      distress_signals: 'unsafe',
+      delay_minutes: null,
+    },
+    ambiguous: {
+      intent: 'UNRECOGNISED',
+      classifiedIntent: 'UNRECOGNISED',
+      response: CACHE_RESPONSES.unrecognised,
+      resolved: false,
+      escalate: false,
+      confidence: 0.3,
+      distress: null,
+      distress_signals: null,
+      delay_minutes: null,
+    },
+  };
+
+  return intentMap[intent] || intentMap.ambiguous;
 }
 
 async function synthesizeSpeech(text) {
@@ -256,6 +401,15 @@ async function* streamTTS(text, apiKey, voiceId) {
   if (buffer.length > 0) yield buffer.toString('base64');
 }
 
+function extractSpoken(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed.response || text;
+  } catch (e) {
+    return text;
+  }
+}
+
 function applyDistressLogic(result) {
   if (result.distress === 'high') {
     result.intent = 'REQUEST_HUMAN';
@@ -281,7 +435,9 @@ twilioWss.on('connection', function(ws) {
   let deepgramWs = null;
   let sessionState = 'GREETING';
   let unrecognisedCount = 0;
-  let postSpeechStart = null;
+  let lastMediaAt = 0;
+  let callLastConfidence = null;
+  let safetyConfirmPending = false;
   let silenceTimer = null;
   let callSttMs = null;
   let callLlmMs = null;
@@ -335,25 +491,32 @@ twilioWss.on('connection', function(ws) {
     callTranscript.push({ role: 'worker', text: finalTranscript, time: new Date().toISOString() });
     sessionState = 'PROCESSING';
     try {
-      const fast = fastPathIntent(finalTranscript);
-      let result;
-      if (fast) {
-        result = fast;
-        callLlmMs = 0;
-      } else {
-        const llmStart = Date.now();
-        result = await classifyIntent(finalTranscript, 'claude-haiku-4-5', { skipFastPath: true });
-        callLlmMs = Date.now() - llmStart;
+      const llmStart = Date.now();
+      const { intent, duration } = await classifyIntentFast(finalTranscript);
+      callLlmMs = Date.now() - llmStart;
+      let result = intentToResult(intent, duration);
+
+      const CONFIDENCE_THRESHOLD = 0.6;
+      const criticalIntents = ['SAFE_CONFIRMATION', 'DELAYED_CHECKIN'];
+      if (callLastConfidence !== null && callLastConfidence < CONFIDENCE_THRESHOLD
+          && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
+        safetyConfirmPending = true;
+        const confirmText = result.intent === 'SAFE_CONFIRMATION'
+          ? "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?"
+          : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
+        console.log('[Confidence] Low confidence (' + callLastConfidence.toFixed(2) + ') for', result.intent, '— asking to confirm');
+        callLastConfidence = null;
+        await speakText(confirmText, null, false);
+        sessionState = 'LISTENING';
+        return;
       }
-      if (result.confidence < 0.45) {
-        result.intent = 'UNRECOGNISED'; result.resolved = false; result.escalate = false;
-        result.response = CACHE_RESPONSES.unrecognised;
-      }
-      result = applyDistressLogic(result);
-      applyCachedResponse(result);
+      safetyConfirmPending = false;
+      callLastConfidence = null;
+
+      if (!result.distress) applyCachedResponse(result);
       callFinalIntent = result.intent;
-      console.log('[Twilio Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none', '| LLM:', callLlmMs === 0 ? 'Fast-path' : callLlmMs + 'ms');
-      const cacheKey = INTENT_CACHE_MAP[result.intent];
+      console.log('[Twilio Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none', '| LLM:', callLlmMs + 'ms');
+      const cacheKey = result.distress ? null : INTENT_CACHE_MAP[result.intent];
       await speakText(result.response, cacheKey, true);
       if (result.intent === 'UNRECOGNISED') {
         unrecognisedCount++;
@@ -381,21 +544,16 @@ twilioWss.on('connection', function(ws) {
     deepgramWs.on('message', async function(data) {
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'SpeechStarted') {
-          postSpeechStart = Date.now();
-          console.log('[Twilio] Speech started detected');
-        }
-        if (msg.type === 'UtteranceEnd') {
-          postSpeechStart = Date.now();
-        }
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
-          const text = msg.channel.alternatives[0].transcript;
+          const alt = msg.channel.alternatives[0];
+          const text = alt.transcript;
           if (text && text.trim()) {
+            if (msg.is_final && typeof alt.confidence === 'number') {
+              callLastConfidence = alt.confidence;
+            }
             if (msg.is_final && msg.speech_final && sessionState === 'LISTENING') {
               clearSilenceTimer();
-              if (!postSpeechStart) postSpeechStart = Date.now(); // fallback: speech_final anı
-              const sttMs = Date.now() - postSpeechStart;
-              postSpeechStart = null;
+              const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
               callSttMs = sttMs;
               console.log('[Twilio STT]', sttMs + 'ms');
               await handleTwilioTranscript(text);
@@ -440,6 +598,7 @@ twilioWss.on('connection', function(ws) {
         }, 1000);
       }
       if (msg.event === 'media' && deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+        lastMediaAt = Date.now();
         deepgramWs.send(Buffer.from(msg.media.payload, 'base64'));
       }
       if (msg.event === 'stop') {
@@ -495,17 +654,49 @@ browserWss.on('connection', function(ws) {
   let unrecognisedCount = 0;
   let audioBuffer = Buffer.alloc(0);
   let silenceTimer = null;
-  let clientMimeType = 'audio/webm';
+  let clientMimeType = 'audio/pcm;rate=16000';
   let isReceivingAudioFile = false;
   let audioFileChunks = [];
   let snrBlocked = false;
   let selectedModel = 'claude-haiku-4-5';
   let ttsMode = 'elevenlabs';
-  let postSpeechStart = null;
+  let lastMediaAt = 0;
+  let lastConfidence = null;
+  let safetyConfirmPending = false;
+  let clientE2eMs = null;
+  let deepFilter = null;
+  let dfPreferred = true;  // Noise Cancel ON by default
+  let dfEnabled = true;
   const SILENCE_MS = 4000;
 
   function send(obj) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
+
+  function ensureDeepFilter() {
+    if (!isDeepFilterReady()) {
+      deepFilter = null;
+      dfEnabled = false;
+      return false;
+    }
+    if (!deepFilter) {
+      deepFilter = createDeepFilter({ inputRate: 16000, outputRate: 16000 });
+    }
+    dfEnabled = !!dfPreferred;
+    return dfEnabled;
+  }
+
+  // Activate Noise Cancel immediately on connect (no toggle required)
+  if (ensureDeepFilter()) {
+    console.log('[DeepFilter] Session filter ready (active=true)');
+  } else {
+    console.warn('[DeepFilter] Model not ready — denoise inactive until model loads');
+  }
+
+  function sendAudioToDeepgram(buf) {
+    if (!buf || !buf.length) return;
+    if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.send(buf);
+    else audioBuffer = Buffer.concat([audioBuffer, buf]);
+  }
 
   async function handleTranscript(finalTranscript, sttMs) {
     if (!finalTranscript || finalTranscript.trim() === '') return;
@@ -521,21 +712,50 @@ browserWss.on('connection', function(ws) {
     send({ type: 'stage', stage: 'llm', status: 'processing' });
     const llmStart = Date.now();
     try {
-      let result = await classifyIntent(finalTranscript, selectedModel);
+      const { intent, duration } = await classifyIntentFast(finalTranscript);
       const llmMs = Date.now() - llmStart;
-      result = applyDistressLogic(result);
-      if (result.confidence < 0.45 && !result.escalate) {
-        result.intent = 'UNRECOGNISED'; result.resolved = false; result.escalate = false;
-        result.response = CACHE_RESPONSES.unrecognised;
-      } else if (result.confidence < 0.85) {
-        result.low_confidence = true;
+      let result = intentToResult(intent, duration);
+
+      const CONFIDENCE_THRESHOLD = 0.6;
+      const criticalIntents = ['SAFE_CONFIRMATION', 'DELAYED_CHECKIN'];
+      if (lastConfidence !== null && lastConfidence < CONFIDENCE_THRESHOLD
+          && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
+        safetyConfirmPending = true;
+        const confirmText = result.intent === 'SAFE_CONFIRMATION'
+          ? "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?"
+          : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
+        console.log('[Confidence] Low confidence (' + lastConfidence.toFixed(2) + ') for', result.intent, '— asking to confirm');
+        send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
+        send({ type: 'response', text: confirmText, audio: null, resolved: false, escalate: false });
+        try {
+          const apiKey = process.env.ELEVENLABS_API_KEY;
+          const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+          send({ type: 'audio_stream_start', text: confirmText, resolved: false, escalate: false });
+          let chunkIndex = 0;
+          let firstChunkSent = false;
+          const ttsStart = Date.now();
+          for await (const chunk of streamTTS(confirmText, apiKey, voiceId)) {
+            if (!firstChunkSent) {
+              send({ type: 'stage', stage: 'tts', status: 'done', ms: Date.now() - ttsStart });
+              firstChunkSent = true;
+            }
+            send({ type: 'audio_chunk', chunk, index: chunkIndex++ });
+          }
+          send({ type: 'audio_stream_end' });
+        } catch (e) {
+          console.error('[Confirm TTS Error]', e.message);
+        }
+        sessionState = 'LISTENING';
+        lastConfidence = null;
+        return;
       }
-      applyCachedResponse(result);
+      safetyConfirmPending = false;
+      lastConfidence = null;
+
+      if (!result.distress) applyCachedResponse(result);
       console.log('[Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none', '| LLM:', llmMs + 'ms');
-      send({ type: 'intent', data: result });
-      if (result._usage) {
-        send({ type: 'token_usage', input: result._usage.input_tokens, output: result._usage.output_tokens, model: selectedModel });
-      }
+      send({ type: 'intent', data: result, client_e2e_ms: clientE2eMs });
+      clientE2eMs = null;
       send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
       send({ type: 'stage', stage: 'tts', status: 'processing' });
       const ttsStart = Date.now();
@@ -543,7 +763,7 @@ browserWss.on('connection', function(ws) {
         send({ type: 'stage', stage: 'tts', status: 'done', ms: 0 });
         send({ type: 'response', text: result.response, audio: null, resolved: result.resolved, escalate: result.escalate });
       } else {
-        const cacheKey = INTENT_CACHE_MAP[result.intent];
+        const cacheKey = result.distress ? null : INTENT_CACHE_MAP[result.intent];
         const useCache = cacheKey && audioCache[cacheKey];
         if (useCache) {
           console.log('[Cache] Hit:', cacheKey);
@@ -552,12 +772,22 @@ browserWss.on('connection', function(ws) {
         } else {
           const apiKey = process.env.ELEVENLABS_API_KEY;
           const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
-          let firstChunk = true; let chunkIndex = 0;
+          const spoken = extractSpoken(result.response);
           try {
-            send({ type: 'audio_stream_start', text: result.response, resolved: result.resolved, escalate: result.escalate });
-            for await (const chunk of streamTTS(result.response, apiKey, voiceId)) {
-              if (firstChunk) { send({ type: 'stage', stage: 'tts', status: 'done', ms: Date.now() - ttsStart }); firstChunk = false; }
-              send({ type: 'audio_chunk', chunk: chunk, index: chunkIndex++ });
+            send({ type: 'audio_stream_start', text: spoken, resolved: result.resolved, escalate: result.escalate });
+            const sentences = spoken.match(/[^.!?]+[.!?]+/g) || [spoken];
+            let chunkIndex = 0;
+            let firstChunkSent = false;
+            for (const sentence of sentences) {
+              const clean = sentence.trim();
+              if (!clean) continue;
+              for await (const chunk of streamTTS(clean, apiKey, voiceId)) {
+                if (!firstChunkSent) {
+                  send({ type: 'stage', stage: 'tts', status: 'done', ms: Date.now() - ttsStart });
+                  firstChunkSent = true;
+                }
+                send({ type: 'audio_chunk', chunk: chunk, index: chunkIndex++ });
+              }
             }
             send({ type: 'audio_stream_end' });
           } catch (e) {
@@ -586,10 +816,22 @@ browserWss.on('connection', function(ws) {
     const dgApiKey = process.env.DEEPGRAM_API_KEY;
     if (!dgApiKey || dgApiKey === 'your_deepgram_key') { send({ type: 'log', message: 'Deepgram API key not set — mock STT mode' }); return; }
     const isOgg = clientMimeType.includes('ogg');
+    const isPcm = clientMimeType.includes('pcm') || clientMimeType.includes('linear16');
     const params = new URLSearchParams({ ...DEEPGRAM_BASE_PARAMS });
-    if (isOgg) { params.set('encoding', 'opus'); params.set('container', 'ogg'); }
+    if (isPcm) {
+      params.set('encoding', 'linear16');
+      params.set('sample_rate', '16000');
+    } else if (isOgg) {
+      params.set('encoding', 'opus');
+      params.set('container', 'ogg');
+    }
     const dgUrl = 'wss://api.deepgram.com/v1/listen?' + params.toString() + DEEPGRAM_KEYTERMS;
     console.log('[Deepgram] URL:', dgUrl);
+    if (ensureDeepFilter()) {
+      console.log('[DeepFilter] Session filter ready (enabled=' + dfEnabled + ')');
+    } else {
+      console.warn('[DeepFilter] Model not ready — denoise disabled for this session');
+    }
     deepgramWs = new WebSocket(dgUrl, {
       headers: { Authorization: 'Token ' + dgApiKey }
     });
@@ -601,16 +843,17 @@ browserWss.on('connection', function(ws) {
     deepgramWs.on('message', async function(data) {
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'SpeechStarted') postSpeechStart = null;
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
-          const text = msg.channel.alternatives[0].transcript;
+          const alt = msg.channel.alternatives[0];
+          const text = alt.transcript;
           if (text && text.trim()) {
-            if (msg.is_final && !msg.speech_final) postSpeechStart = Date.now();
+            if (msg.is_final && typeof alt.confidence === 'number') {
+              lastConfidence = alt.confidence;
+            }
             send({ type: 'interim_transcript', text: text, is_final: msg.is_final });
             if (msg.is_final && msg.speech_final && sessionState === 'LISTENING') {
               clearSilenceTimer();
-              const sttMs = postSpeechStart ? Date.now() - postSpeechStart : 300;
-              postSpeechStart = null;
+              const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
               transcript = text;
               const toProcess = transcript; transcript = '';
               await handleTranscript(toProcess, sttMs);
@@ -619,8 +862,7 @@ browserWss.on('connection', function(ws) {
         }
         if (msg.type === 'UtteranceEnd' && transcript && sessionState === 'LISTENING') {
           clearSilenceTimer();
-          const sttMs = postSpeechStart ? Date.now() - postSpeechStart : 300;
-          postSpeechStart = null;
+          const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
           const toProcess = transcript; transcript = '';
           await handleTranscript(toProcess, sttMs);
         }
@@ -632,19 +874,39 @@ browserWss.on('connection', function(ws) {
 
   ws.on('error', function(e) { console.error('[WS Error]', e.message); });
 
-  ws.on('message', async function(data) {
+  ws.on('message', async function(data, isBinary) {
     try {
-      if (typeof data === 'string' || (data instanceof Buffer && data[0] === 0x7b)) {
+      // Text frames = JSON control messages. Binary frames = audio (never JSON.parse).
+      // Do NOT use data[0]===0x7b: PCM chunks can start with '{' by chance and throw Unexpected token.
+      if (!isBinary) {
         const msg = JSON.parse(data.toString());
         if (msg.type === 'mime_type') { clientMimeType = msg.mimeType; }
         if (msg.type === 'set_model') { selectedModel = msg.model; console.log('[Model]', selectedModel); }
         if (msg.type === 'tts_mode') { ttsMode = msg.mode; }
+        if (msg.type === 'toggle_denoise') {
+          dfPreferred = msg.enabled !== false; // default ON unless explicitly false
+          ensureDeepFilter();
+          if (!dfPreferred) dfEnabled = false;
+          console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
+          send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
+        }
+        if (msg.type === 'client_metrics') {
+          clientE2eMs = msg.total;
+          console.log('[Client E2E]', clientE2eMs + 'ms');
+          send({ type: 'client_e2e', ms: clientE2eMs });
+        }
         if (msg.type === 'start') {
           send({ type: 'log', message: 'Session started — Missed Check-In alert for Industrial Worker' });
           sessionState = 'GREETING';
           send({ type: 'stage', stage: 'stt', status: 'connecting' });
           send({ type: 'stage', stage: 'tts', status: 'processing' });
           startDeepgramStream();
+          send({
+            type: 'log',
+            message: dfEnabled
+              ? 'Noise cancellation enabled (DeepFilterNet3)'
+              : 'Noise cancellation unavailable — raw PCM to Deepgram',
+          });
           let introAudio = null;
           if (ttsMode === 'elevenlabs') {
             if (audioCache['greeting']) {
@@ -728,29 +990,72 @@ browserWss.on('connection', function(ws) {
             return Buffer.concat([header, pcmBuffer]);
           }
 
-          const wavBuffer = createWavBuffer(fullBuffer);
-          console.log('[Server] Audio file received, size:', fullBuffer.length, 'bytes, sending to Deepgram...');
-          send({ type: 'log', message: 'Sending to Deepgram STT...' });
+          const head4 = fullBuffer.slice(0, 4).toString('ascii');
+          const head3 = fullBuffer.slice(0, 3).toString('ascii');
+          const b0 = fullBuffer.length > 0 ? fullBuffer[0] : 0;
+          const b1 = fullBuffer.length > 1 ? fullBuffer[1] : 0;
+          const isRiff = head4 === 'RIFF';
+          // MPEG frame sync: 11 set bits — cover common mp3 sync words
+          const isMp3 = head3 === 'ID3' || (b0 === 0xff && (b1 & 0xe0) === 0xe0);
+          let contentType;
+          let uploadBuffer;
+          if (isRiff) {
+            contentType = 'audio/wav';
+            uploadBuffer = fullBuffer;
+          } else if (isMp3) {
+            contentType = 'audio/mpeg';
+            uploadBuffer = fullBuffer;
+          } else {
+            // Raw PCM16 @ 16kHz mono — wrap with WAV header
+            contentType = 'audio/wav';
+            uploadBuffer = createWavBuffer(fullBuffer);
+          }
+          console.log('[Audio Detect] First 4 ascii:', JSON.stringify(head4), '| hex:', fullBuffer.slice(0, 4).toString('hex'));
+          console.log('[Audio Detect] size:', fullBuffer.length, '| RIFF:', isRiff, '| MP3:', isMp3, '| Content-Type:', contentType);
+          if (isRiff && fullBuffer.length >= 44) {
+            console.log('[Audio Detect] WAV fmt — rate:', fullBuffer.readUInt32LE(24),
+              '| ch:', fullBuffer.readUInt16LE(22),
+              '| bits:', fullBuffer.readUInt16LE(34));
+          }
+          console.log('[Server] Audio file received — Deepgram REST (axios)');
+          send({ type: 'log', message: 'Sending to Deepgram STT (' + contentType + ')...' });
           send({ type: 'stage', stage: 'stt', status: 'processing' });
           try {
             const dgApiKey = process.env.DEEPGRAM_API_KEY;
-            const axios = require('axios');
             const response = await axios.post(
-              'https://api.deepgram.com/v1/listen?model=nova-2&language=en-US&punctuate=true&smart_format=true',
-              wavBuffer,
-              { headers: { 'Authorization': 'Token ' + dgApiKey, 'Content-Type': 'audio/wav' } }
+              'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true',
+              uploadBuffer,
+              {
+                headers: {
+                  Authorization: 'Token ' + dgApiKey,
+                  'Content-Type': contentType,
+                },
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity,
+                transformRequest: [function(data) { return data; }],
+                responseType: 'json',
+              }
             );
-            const fileTranscript = response.data?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
-            if (fileTranscript) {
+            console.log('[Deepgram File] Status:', response.status);
+            console.log('[Deepgram File] Response:', JSON.stringify(response.data).substring(0, 500));
+            const alt = response.data && response.data.results
+              && response.data.results.channels
+              && response.data.results.channels[0]
+              && response.data.results.channels[0].alternatives
+              && response.data.results.channels[0].alternatives[0];
+            const fileTranscript = alt && alt.transcript;
+            if (fileTranscript && String(fileTranscript).trim()) {
               console.log('[Deepgram] File transcript:', fileTranscript);
               send({ type: 'stage', stage: 'stt', status: 'done' });
               await handleTranscript(fileTranscript, null);
             } else {
+              console.warn('[Deepgram] Empty transcript. alt=', JSON.stringify(alt));
               send({ type: 'log', message: 'No transcript from Deepgram' });
               send({ type: 'stage', stage: 'stt', status: 'error' });
             }
           } catch (e) {
             console.error('[Deepgram File Error]', e.message);
+            if (e.response) console.error('[Deepgram File Error] body:', JSON.stringify(e.response.data).substring(0, 400));
             send({ type: 'log', message: 'Deepgram error: ' + e.message });
             send({ type: 'stage', stage: 'stt', status: 'error' });
           }
@@ -764,8 +1069,18 @@ browserWss.on('connection', function(ws) {
         if (isReceivingAudioFile) {
           audioFileChunks.push(Buffer.from(data));
         } else {
-          if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.send(data);
-          else audioBuffer = Buffer.concat([audioBuffer, data]);
+          lastMediaAt = Date.now();
+          const raw = Buffer.from(data);
+          if (dfEnabled && deepFilter) {
+            deepFilter.processPcm16(raw).then(function(cleanBuf) {
+              sendAudioToDeepgram(cleanBuf);
+            }).catch(function(e) {
+              console.error('[DeepFilter] process error:', e.message);
+              sendAudioToDeepgram(raw);
+            });
+          } else {
+            sendAudioToDeepgram(raw);
+          }
         }
       }
     } catch (e) { console.error('[WS Message Error]', e.message, e.stack); }
@@ -848,7 +1163,9 @@ function avgNum(arr) {
 }
 
 async function classifyWithClaudeOnce(transcript, model, opts) {
-  const sttMs = 300;
+  const realSttMs = opts && opts.realSttMs != null ? opts.realSttMs : null;
+  const sttMs = realSttMs != null ? realSttMs : 300;
+  const sttSource = realSttMs != null ? 'real' : 'estimated';
 
   const llmStart = Date.now();
   const result = await classifyIntent(transcript, model, { skipFastPath: true });
@@ -885,6 +1202,7 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
   return {
     latency: (sttMs || 0) + llmMs + (ttsMs || 0),
     stt_ms: sttMs,
+    stt_source: sttSource,
     llm_ms: llmMs,
     tts_ms: ttsMs,
     intent: applied.intent,
@@ -905,13 +1223,20 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
 // REST avoids WebSocket + audio synthesis overhead so latency is apples-to-apples with Claude.
 // UI still labels them as Live siblings; server_gemini.js keeps Live AUDIO for voice calls.
 // Each UI id maps to an ordered list of REST models (primary first, fallbacks for quota/availability).
+// Compare uses 2.5 Flash REST with thinkingBudget: 0 (no thinking overhead).
 const GEMINI_REST_MODEL_MAP = {
-  'gemini-2.0-flash-live-001': ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-001'],
-  'gemini-3.1-flash-live-preview': ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-001'],
-  'gemini-2.0-flash': ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-001'],
-  'gemini-2.0-flash-001': ['gemini-2.5-flash', 'gemini-2.0-flash-001', 'gemini-2.0-flash'],
-  'gemini-3-flash-preview': ['gemini-2.5-flash', 'gemini-2.0-flash'],
+  'gemini-2.0-flash-live-001': ['gemini-2.5-flash'],
+  'gemini-3.1-flash-live-preview': ['gemini-2.5-flash'],
 };
+
+const GEMINI_INTENT_PROMPT = `Classify the worker's response. Reply with ONLY valid JSON, nothing else:
+{"intent":"<safe|delayed|request_human|unsafe|ambiguous>","confidence":<0.0-1.0>}
+
+safe: clear safety confirmation ("I'm fine", "yes", "all good")
+delayed: needs more time ("give me 10 minutes", "running late")
+request_human: wants human agent ("get me someone", "human please")
+unsafe: injury/distress/danger ("I fell", "I'm hurt", "SOS")
+ambiguous: unclear or unrecognised`;
 
 // Free tier is often ~20 RPM; serialize + space requests so parallel compare runs don't 429.
 const GEMINI_MIN_INTERVAL_MS = 1000;
@@ -951,6 +1276,16 @@ function resolveGeminiRestModels(model) {
   return null;
 }
 
+function normalizeGeminiCompareIntent(raw) {
+  const t = String(raw || '').toLowerCase().trim();
+  if (t === 'safe' || t === 'safe_confirmation') return 'safe';
+  if (t === 'delayed' || t === 'delayed_checkin') return 'delayed';
+  if (t === 'request_human' || t === 'request human') return 'request_human';
+  if (t === 'unsafe') return 'unsafe';
+  if (t === 'ambiguous' || t === 'unrecognised' || t === 'unrecognized') return 'ambiguous';
+  return 'ambiguous';
+}
+
 async function classifyWithGeminiOnce(transcript, model, opts) {
   opts = opts || {};
   const apiKey = process.env.GEMINI_API_KEY;
@@ -971,13 +1306,21 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
       try {
         const result = await enqueueGeminiCall(async function() {
           const start = Date.now();
+          const generationConfig = {
+            responseMimeType: 'application/json',
+            temperature: 0,
+            maxOutputTokens: 64,
+          };
+          // 2.5/3.x think by default — disable when used as fallback.
+          if (String(restModel).indexOf('2.5') !== -1 || String(restModel).indexOf('gemini-3') === 0) {
+            generationConfig.thinkingConfig = { thinkingBudget: 0 };
+          }
           const response = await axios.post(url, {
-            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{ role: 'user', parts: [{ text: 'Worker said: "' + transcript + '"' }] }],
-            generationConfig: {
-              responseMimeType: 'application/json',
-              temperature: 0,
-            },
+            contents: [{
+              role: 'user',
+              parts: [{ text: GEMINI_INTENT_PROMPT + '\n\nWorker said: "' + transcript + '"' }],
+            }],
+            generationConfig: generationConfig,
           }, {
             headers: { 'Content-Type': 'application/json' },
             timeout: 20000,
@@ -989,17 +1332,22 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
             : '';
           const usage = data.usageMetadata || {};
           const parsed = parseIntentJson(text);
-          const applied = applyDistressLogic({ ...parsed });
+          const intentKey = normalizeGeminiCompareIntent(parsed.intent);
+          const durationMatch = transcript.match(DURATION_REGEX);
+          const duration = durationMatch ? durationMatch[1] + ' ' + durationMatch[2] : null;
+          const mapped = intentToResult(intentKey, duration);
+          if (typeof parsed.confidence === 'number') mapped.confidence = parsed.confidence;
+          console.log('[Compare] Gemini REST:', restModel, latency + 'ms', '| intent:', mapped.intent);
           return {
             latency: latency,
-            intent: applied.intent,
-            confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
-            response: applied.response,
-            resolved: !!applied.resolved,
-            escalate: !!applied.escalate,
-            delay_minutes: applied.delay_minutes ?? null,
-            distress: parsed.distress || null,
-            distress_signals: parsed.distress_signals || null,
+            intent: mapped.intent,
+            confidence: mapped.confidence,
+            response: mapped.response,
+            resolved: !!mapped.resolved,
+            escalate: !!mapped.escalate,
+            delay_minutes: mapped.delay_minutes ?? null,
+            distress: mapped.distress || null,
+            distress_signals: mapped.distress_signals || null,
             input_tokens: usage.promptTokenCount || 0,
             output_tokens: usage.candidatesTokenCount || 0,
             _rest_model: restModel,
@@ -1048,25 +1396,28 @@ function normalizeClientSttMs(value) {
   return Math.round(n);
 }
 
-async function runModelComparison(transcript, model, runs, expected) {
+async function runModelComparison(transcript, model, runs, expected, opts) {
   const meta = COMPARE_MODEL_META[model] || { label: model, type: 'unknown' };
   const runRows = [];
+  const classifyOpts = opts || {};
 
   for (let i = 0; i < runs; i++) {
     try {
-      const r = await classifyOnce(transcript, model);
+      const r = await classifyOnce(transcript, model, classifyOpts);
       const cost = calcTokenCost(model, r.input_tokens, r.output_tokens);
       const isGemini = String(model).indexOf('gemini') === 0;
       let sttMs = null;
       let llmMs = null;
       let ttsMs = null;
       let totalLatency = r.latency;
+      let sttSource = null;
 
       if (isGemini) {
         // Gemini compare is LLM-only; no cascaded STT/TTS breakdown.
         totalLatency = r.latency;
       } else {
         sttMs = r.stt_ms ?? null;
+        sttSource = r.stt_source || null;
         llmMs = r.llm_ms != null ? r.llm_ms : null;
         ttsMs = r.tts_ms ?? null;
         totalLatency = sttMs != null
@@ -1079,6 +1430,7 @@ async function runModelComparison(transcript, model, runs, expected) {
         ok: true,
         latency: totalLatency,
         stt_ms: sttMs,
+        stt_source: sttSource,
         llm_ms: llmMs,
         tts_ms: ttsMs,
         intent: r.intent,
@@ -1102,7 +1454,11 @@ async function runModelComparison(transcript, model, runs, expected) {
       });
     }
     if (i < runs - 1) {
-      await new Promise(function(r) { setTimeout(r, 500); });
+      const lastLatency = runRows[runRows.length - 1] && runRows[runRows.length - 1].latency
+        ? runRows[runRows.length - 1].latency
+        : 0;
+      const waitMs = lastLatency > 3000 ? 2000 : 500;
+      await new Promise(function(r) { setTimeout(r, waitMs); });
     }
   }
 
@@ -1119,6 +1475,7 @@ async function runModelComparison(transcript, model, runs, expected) {
 
   const lastOk = okRuns[okRuns.length - 1];
   const latencies = okRuns.map(function(r) { return r.latency; });
+  const avgLatencies = okRuns.slice(0, 3).map(function(r) { return r.latency; });
   const confidences = okRuns.map(function(r) { return r.confidence; });
   const inputTokens = okRuns.map(function(r) { return r.input_tokens; });
   const outputTokens = okRuns.map(function(r) { return r.output_tokens; });
@@ -1136,8 +1493,9 @@ async function runModelComparison(transcript, model, runs, expected) {
     label: meta.label,
     intent: lastOk.intent,
     avg_confidence: avgNum(confidences),
-    avg_latency: Math.round(avgNum(latencies)),
+    avg_latency: Math.round(avgNum(avgLatencies)),
     avg_stt_ms: isGemini ? null : (sttTimes.length ? Math.round(avgNum(sttTimes)) : null),
+    stt_source: isGemini ? null : (lastOk.stt_source || null),
     avg_llm_ms: isGemini ? null : (llmTimes.length ? Math.round(avgNum(llmTimes)) : null),
     avg_tts_ms: isGemini ? null : (ttsTimes.length ? Math.round(avgNum(ttsTimes)) : null),
     min_latency: Math.min.apply(null, latencies),
@@ -1226,6 +1584,8 @@ app.get('/compare-stt-config', function(req, res) {
   }
   const params = new URLSearchParams({
     ...DEEPGRAM_BASE_PARAMS,
+    utterance_end_ms: '1000',
+    vad_events: 'true',
     encoding: 'linear16',
     channels: '1',
   });
@@ -1240,6 +1600,11 @@ app.post('/compare-intent', async function(req, res) {
   const models = (req.body && req.body.models) || [];
   let runs = parseInt(req.body && req.body.runs, 10);
   const expected = (req.body && req.body.expected) || null;
+  // Mic/audio-file Deepgram latency from client; fall back to legacy stt_ms key
+  const realSttMs = normalizeClientSttMs(
+    (req.body && req.body.real_stt_ms != null) ? req.body.real_stt_ms : (req.body && req.body.stt_ms)
+  );
+  const compareOpts = realSttMs != null ? { realSttMs: realSttMs } : {};
 
   if (!transcript) return res.status(400).json({ error: 'transcript is required' });
   if (!Array.isArray(models) || models.length === 0) {
@@ -1257,7 +1622,7 @@ app.post('/compare-intent', async function(req, res) {
   }
 
   const settled = await Promise.all(models.map(function(model) {
-    return runModelComparison(transcript, model, runs, expected)
+    return runModelComparison(transcript, model, runs, expected, compareOpts)
       .catch(function(err) {
         return {
           ok: false,
@@ -1276,6 +1641,9 @@ app.post('/compare-intent', async function(req, res) {
     transcript: transcript,
     expected: expected,
     runs: runs,
+    real_stt_ms: realSttMs,
+    stt_ms: realSttMs != null ? realSttMs : 300,
+    stt_source: realSttMs != null ? 'real' : 'estimated',
     results: results,
   });
 });
@@ -1471,14 +1839,17 @@ app.get('/api/calls/:callSid', function(req, res) {
 });
 
 app.post('/recording-status', function(req, res) {
+  const url = buildTwilioWebhookUrl(req, '/recording-status');
+  if (!validateTwilioSignature(req, res, url)) return;
+
   const { RecordingUrl, RecordingDuration, RecordingSid, CallSid, RecordingStatus } = req.body || {};
   console.log('[Recording] Status:', RecordingStatus, '| Duration:', RecordingDuration + 's', '| SID:', RecordingSid);
   if (RecordingStatus === 'completed' && RecordingUrl && CallSid) {
-    const url = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
+    const recordingUrl = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
     try {
-      updateRecordingUrl(CallSid, url);
+      updateRecordingUrl(CallSid, recordingUrl);
       console.log('[Recording] Saved URL for call:', CallSid);
-      console.log('[Recording] URL:', url);
+      console.log('[Recording] URL:', recordingUrl);
     } catch (e) {
       console.error('[Recording] DB update error:', e.message);
     }
@@ -1532,10 +1903,14 @@ function startServer() {
     console.log('Cascaded Pipeline: Deepgram nova-2 -> Claude -> ElevenLabs\n');
   });
 }
-loadMulawCache().then(function() {
-  startServer();
-}).catch(function(e) {
-  console.error('[Mulaw Cache] Init error:', e.message);
-  // Cache başarısız olsa da server başlasın
+Promise.all([
+  loadMulawCache().catch(function(e) {
+    console.error('[Mulaw Cache] Init error:', e.message);
+  }),
+  preloadDeepFilter().catch(function(e) {
+    console.error('[DeepFilter] Model load failed:', e.message);
+    console.error('[DeepFilter] Denoise will be disabled until model is available');
+  }),
+]).then(function() {
   startServer();
 });

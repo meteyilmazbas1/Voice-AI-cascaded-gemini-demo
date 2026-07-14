@@ -27,7 +27,46 @@ const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_T
 
 const amdRedirectedCalls = new Set();
 
-const SYSTEM_PROMPT = `SYSTEM: language=en-US. All input and output in English only.
+function buildTwilioWebhookUrl(req, pathname) {
+  let base;
+  if (process.env.NGROK_HOST) {
+    base = 'https://' + String(process.env.NGROK_HOST).replace(/^https?:\/\//, '');
+  } else {
+    base = process.env.GEMINI_PUBLIC_URL || process.env.PUBLIC_URL || '';
+  }
+  base = String(base).replace(/\/$/, '');
+  const qs = req.originalUrl && req.originalUrl.indexOf('?') !== -1
+    ? req.originalUrl.slice(req.originalUrl.indexOf('?'))
+    : '';
+  return base + pathname + qs;
+}
+
+function validateTwilioSignature(req, res, url) {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!authToken) {
+    console.warn('[Twilio] TWILIO_AUTH_TOKEN not set — rejecting request');
+    res.status(403).send('Forbidden');
+    return false;
+  }
+  const signature = req.headers['x-twilio-signature'];
+  if (!signature) {
+    console.warn('[Twilio] Missing signature — rejecting request');
+    res.status(403).send('Forbidden');
+    return false;
+  }
+  const params = req.body && typeof req.body === 'object' ? req.body : {};
+  const valid = twilio.validateRequest(authToken, signature, url, params);
+  if (!valid) {
+    console.warn('[Twilio] Invalid signature — rejecting request from', req.ip);
+    res.status(403).send('Forbidden');
+    return false;
+  }
+  return true;
+}
+
+const SYSTEM_PROMPT = `CRITICAL LANGUAGE RULE: This call is in English only. The worker speaks English. Always transcribe and interpret audio as English, even if the audio quality is poor, words are unclear, or the accent is unfamiliar. Never output text in Korean, Japanese, Chinese, or any language other than English. If you cannot understand the worker's English, respond with the UNCLEAR script in English.
+
+SYSTEM: language=en-US. All input and output in English only.
 
 You are an automated safety monitoring system for Aware360...
 
@@ -72,9 +111,22 @@ wss.on('connection', function(ws) {
   let lastAudioSentTime = null;
   let setupTime = null;
   let firstAudioTime = null;
+  let listeningTransitionTimer = null;
 
   function send(obj) {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+
+  function scheduleListeningTransition(reason) {
+    if (listeningTransitionTimer) {
+      clearTimeout(listeningTransitionTimer);
+      listeningTransitionTimer = null;
+    }
+    listeningTransitionTimer = setTimeout(function() {
+      sessionState = 'LISTENING';
+      console.log('[Gemini] Auto-transition to LISTENING');
+      listeningTransitionTimer = null;
+    }, 2000);
   }
 
   function connectGemini() {
@@ -99,10 +151,15 @@ wss.on('connection', function(ws) {
       }
     },
     realtime_input_config: {
-      automatic_activity_detection: {
-        disabled: false
-      }
-    },
+  automatic_activity_detection: {
+    disabled: false,
+    end_of_speech_sensitivity: "END_SENSITIVITY_LOW",
+    start_of_speech_sensitivity: "START_SENSITIVITY_LOW",
+    silence_duration_ms: 1500,
+    prefix_padding_ms: 200,
+  }
+},
+    // language_codes removed — caused WebSocket 1007 on Gemini Live setup
     input_audio_transcription: {},
     output_audio_transcription: {},
     system_instruction: {
@@ -133,10 +190,13 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     console.log('[Gemini] Using cached greeting,', cachedGreetingChunks.length, 'chunks');
     for (const chunk of cachedGreetingChunks) {
       send({ type: 'audio_chunk', chunk, index: 0, mimeType: cachedGreetingMimeType });
+      await new Promise(r => setTimeout(r, 20));
     }
     send({ type: 'audio_stream_end' });
     send({ type: 'greeting', text: WORKER_INTRO, audio: null });
-    sessionState = 'LISTENING';
+    // Stay in GREETING until client has time to play audio — no playback_done wait
+    scheduleListeningTransition('cached greeting');
+    return; // cache hit — do not send greetingMsg to Gemini
   } else {
     console.log('[Gemini] No cache, generating greeting fresh');
     cachedGreetingChunks = [];
@@ -151,7 +211,7 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
       }
     };
     geminiWs.send(JSON.stringify(greetingMsg));
-    sessionState = 'LISTENING';
+    // Stay GREETING until turnComplete + 2s timeout
   }
 }
 }
@@ -195,10 +255,11 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     aiTranscriptBuffer = '';
   }
             send({ type: 'audio_stream_end' });
-            if (sessionState === 'GREETING') {
+            if (sessionState === 'GREETING' || isCachingGreeting) {
               send({ type: 'greeting', text: WORKER_INTRO, audio: null });
               isCachingGreeting = false;
-              console.log('[Gemini] Greeting audio done, waiting for playback_done');
+              console.log('[Gemini] Greeting audio done — auto LISTENING in 2s');
+              scheduleListeningTransition('greeting turnComplete');
             }
           }
         }
@@ -282,12 +343,11 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
           }
         }
 
-        if (msg.type === 'playback_done' && sessionState === 'GREETING') {
-          console.log('[Gemini] Greeting playback done — now listening');
-          sessionState = 'LISTENING';
-        }
-
         if (msg.type === 'stop') {
+          if (listeningTransitionTimer) {
+            clearTimeout(listeningTransitionTimer);
+            listeningTransitionTimer = null;
+          }
           if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
           sessionState = 'ENDED';
         }
@@ -316,6 +376,10 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
 
   ws.on('close', function() {
     console.log('[Gemini WS] Client disconnected');
+    if (listeningTransitionTimer) {
+      clearTimeout(listeningTransitionTimer);
+      listeningTransitionTimer = null;
+    }
     if (workerSilenceTimer) clearTimeout(workerSilenceTimer);
     if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
   });
@@ -541,8 +605,14 @@ twilioWss.on('connection', function(ws) {
             }
           },
           realtime_input_config: {
-            automatic_activity_detection: { disabled: false }
-          },
+  automatic_activity_detection: {
+    disabled: false,
+    end_of_speech_sensitivity: "END_SENSITIVITY_LOW",
+    start_of_speech_sensitivity: "START_SENSITIVITY_LOW",
+    silence_duration_ms: 1500,
+    prefix_padding_ms: 200,
+  }
+},
           input_audio_transcription: {},
           output_audio_transcription: {},
           system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
@@ -790,6 +860,9 @@ twilioWss.on('connection', function(ws) {
 
 // ─── Twilio TwiML endpoint ────────────────────────────────────────────────────
 app.post('/outbound-gemini', function(req, res) {
+  const url = buildTwilioWebhookUrl(req, '/outbound-gemini');
+  if (!validateTwilioSignature(req, res, url)) return;
+
   const baseUrl = process.env.GEMINI_PUBLIC_URL || process.env.PUBLIC_URL || '';
   const wsUrl = baseUrl.replace('https://', 'wss://').replace(/\/$/, '') + '/twilio-gemini';
   const workerPhone = (req.body && (req.body.To || req.body.to)) || '';
@@ -807,19 +880,25 @@ app.post('/outbound-gemini', function(req, res) {
 });
 
 app.post('/call-status', function(req, res) {
+  const url = buildTwilioWebhookUrl(req, '/call-status');
+  if (!validateTwilioSignature(req, res, url)) return;
+
   console.log('[Call Status]', req.body.CallStatus, '| SID:', req.body.CallSid);
   res.sendStatus(200);
 });
 
 app.post('/recording-status', function(req, res) {
+  const url = buildTwilioWebhookUrl(req, '/recording-status');
+  if (!validateTwilioSignature(req, res, url)) return;
+
   const { RecordingUrl, RecordingDuration, RecordingSid, CallSid, RecordingStatus } = req.body || {};
   console.log('[Recording] Status:', RecordingStatus, '| Duration:', RecordingDuration + 's', '| SID:', RecordingSid);
   if (RecordingStatus === 'completed' && RecordingUrl && CallSid) {
-    const url = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
+    const recordingUrl = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
     try {
-      updateRecordingUrl(CallSid, url);
+      updateRecordingUrl(CallSid, recordingUrl);
       console.log('[Recording] Saved URL for call:', CallSid);
-      console.log('[Recording] URL:', url);
+      console.log('[Recording] URL:', recordingUrl);
     } catch (e) {
       console.error('[Recording] DB update error:', e.message);
     }
@@ -828,6 +907,9 @@ app.post('/recording-status', function(req, res) {
 });
 
 app.post('/amd-status', function(req, res) {
+  const url = buildTwilioWebhookUrl(req, '/amd-status');
+  if (!validateTwilioSignature(req, res, url)) return;
+
   const { CallSid, AnsweredBy } = req.body || {};
   console.log('[AMD] Call:', CallSid, '| Answered by:', AnsweredBy);
 
@@ -869,6 +951,9 @@ app.post('/amd-status', function(req, res) {
 });
 
 app.post('/voicemail-twiml', function(req, res) {
+  const url = buildTwilioWebhookUrl(req, '/voicemail-twiml');
+  if (!validateTwilioSignature(req, res, url)) return;
+
   const voicemailMessage = 'Hello, this is an automated safety check from Aware360. ' +
     'We noticed you missed your scheduled check-in. ' +
     'Please call back or check in through the app as soon as possible. ' +
