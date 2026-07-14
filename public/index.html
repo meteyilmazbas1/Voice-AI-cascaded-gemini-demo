@@ -441,6 +441,7 @@
       <div class="controls-row">
         <button class="btn primary" id="startBtn" onclick="startSession()">▶ Start Call</button>
         <button class="btn" id="micBtn" onclick="toggleMic()" disabled>🎤 Mic</button>
+        <button class="btn" id="denoiseBtn" onclick="toggleDenoise()">🎙️ Noise Cancel: ON</button>
         <button class="btn danger" id="stopBtn" onclick="stopSession()" disabled>■ End Call</button>
         <div class="mic-indicator">
           <div class="mic-dot" id="micDot"></div>
@@ -548,6 +549,13 @@
         <div class="latency-row">
           <div><div class="latency-label">TTS (ElevenLabs)</div><div class="target-note">Target: &lt; 400ms</div></div>
           <span class="latency-val" id="lat-tts">—</span>
+        </div>
+        <div class="latency-row">
+          <div>
+            <div class="latency-label">Client E2E <span class="breakdown-tip" data-tip="Worker konuşmayı bitirdiği andan AI sesinin gerçekten duyulmaya başladığı ana kadar — network gecikmesi dahil gerçek kullanıcı deneyimi.">ⓘ</span></div>
+            <div class="target-note">Speech end → first audio heard</div>
+          </div>
+          <span class="latency-val" id="lat-client-e2e">—</span>
         </div>
         <div class="latency-row" style="border-top: 2px solid var(--border); margin-top: 4px; padding-top: 12px;">
           <div><div class="latency-label" style="font-weight:600; color: var(--text)">Total turn</div><div class="target-note">Target: &lt; 1200ms</div></div>
@@ -668,7 +676,7 @@
           <th>Model</th>
           <th>Intent (son run)</th>
           <th>Avg Confidence</th>
-          <th>Avg Latency</th>
+          <th>Avg Latency <span class="breakdown-tip" data-tip="İlk 3 run ortalaması — API throttling etkisini dışlamak için">ⓘ</span></th>
           <th>Min</th>
           <th>Max</th>
           <th>Avg Tokens</th>
@@ -686,7 +694,7 @@
         <tr>
           <th>Model</th>
           <th>Response (son run)</th>
-          <th>Avg Latency</th>
+          <th>Avg Latency <span class="breakdown-tip" data-tip="İlk 3 run ortalaması — API throttling etkisini dışlamak için">ⓘ</span></th>
           <th>Min</th>
           <th>Max</th>
           <th>Avg Tokens</th>
@@ -710,7 +718,7 @@
 
   <div class="cmp-charts" id="cmpCharts">
     <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Latency (avg ± min/max)</div>
+      <div class="cmp-chart-title">Latency (avg ± min/max) <span class="breakdown-tip" data-tip="İlk 3 run ortalaması — API throttling etkisini dışlamak için">ⓘ</span></div>
       <canvas id="chartLatency"></canvas>
     </div>
     <div class="cmp-chart-card">
@@ -742,6 +750,7 @@
 <audio id="audioPlayer"></audio>
 <script>
 let ws = null, mediaRecorder = null, audioStream = null;
+let denoiseEnabled = true;
 let sessionActive = false, micActive = false;
 let stageTimers = {};
 let currentModel = 'claude-haiku-4-5';
@@ -781,6 +790,7 @@ function switchPipeline(mode) {
 let sessionInputTokens = 0;
 let sessionOutputTokens = 0;
 let turnCount = 0;
+let speechEndClientMs = null;
 
 const TOKEN_COSTS = {
   'claude-haiku-4-5':   { input: 0.80, output: 4.00 },
@@ -852,12 +862,27 @@ function setStageState(stage, state, ms) {
 }
 
 function updateLatency(stage, ms) {
-  const targets = { stt: 500, llm: 200, tts: 400, gemini: 500 };
+  const targets = { stt: 500, llm: 200, tts: 400, gemini: 500, 'client-e2e': 1500 };
   const el = document.getElementById('lat-'+stage);
   if (!el) return;
   el.textContent = ms + 'ms';
-  el.className = 'latency-val ' + (ms <= targets[stage] ? 'good' : 'warn');
-  if (stage !== 'gemini') recalcTotal();
+  el.className = 'latency-val ' + (ms <= (targets[stage] || 1500) ? 'good' : 'warn');
+  if (stage !== 'gemini' && stage !== 'client-e2e') recalcTotal();
+}
+
+function onWorkerSpeechEnd() {
+  speechEndClientMs = Date.now();
+}
+
+function onFirstAudioPlayback() {
+  if (!speechEndClientMs) return;
+  const clientE2eMs = Date.now() - speechEndClientMs;
+  console.log('[Client E2E]', clientE2eMs + 'ms');
+  updateLatency('client-e2e', clientE2eMs);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'client_metrics', total: clientE2eMs }));
+  }
+  speechEndClientMs = null;
 }
 
 function setAudioQuality(quality) {
@@ -959,6 +984,7 @@ async function playPCMChunks(chunks) {
     src.buffer = audioBuffer;
     src.connect(ctx.destination);
     src.start();
+    onFirstAudioPlayback();
   } catch(e) { console.warn('[PCM] Decode error:', e.message); }
 }
 
@@ -995,6 +1021,7 @@ async function playAllChunks() {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'playback_done' }));
     };
     src.start();
+    onFirstAudioPlayback();
   } catch(e) { console.warn('[Audio] Decode error:', e.message); }
 }
 
@@ -1007,6 +1034,7 @@ function playAudio(base64, text) {
     window.speechSynthesis.cancel();
     const utt = new SpeechSynthesisUtterance(text);
     utt.lang = 'en-US'; utt.rate = 1.05;
+    utt.onstart = function() { onFirstAudioPlayback(); };
     window.speechSynthesis.speak(utt);
   }
 }
@@ -1027,12 +1055,45 @@ function changeTtsMode(useElevenLabs) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tts_mode', mode: ttsMode }));
 }
 
+function toggleDenoise() {
+  denoiseEnabled = !denoiseEnabled;
+  const btn = document.getElementById('denoiseBtn');
+  if (btn) btn.textContent = '🎙️ Noise Cancel: ' + (denoiseEnabled ? 'ON' : 'OFF');
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
+  }
+}
+
+function floatToPcm16Resampled(float32, fromRate, toRate) {
+  toRate = toRate || 16000;
+  if (!fromRate || fromRate === toRate) {
+    const int16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
+    }
+    return int16;
+  }
+  const ratio = fromRate / toRate;
+  const outLen = Math.floor(float32.length / ratio);
+  const int16 = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const s = float32[Math.floor(i * ratio)] || 0;
+    int16[i] = Math.max(-32768, Math.min(32767, Math.round(s * 32767)));
+  }
+  return int16;
+}
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const port = pipelineMode === 'gemini' ? '3001' : location.port || '3000';
   const host = location.hostname + ':' + port;
   ws = new WebSocket(proto + '://' + host);
+  ws.binaryType = 'arraybuffer';
   ws.onopen = () => {
+    if (pipelineMode !== 'gemini') {
+      ws.send(JSON.stringify({ type: 'mime_type', mimeType: 'audio/pcm;rate=16000' }));
+      ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
+    }
     ws.send(JSON.stringify({ type: 'set_model', model: currentModel }));
     ws.send(JSON.stringify({ type: 'start' }));
   };
@@ -1041,6 +1102,7 @@ function connectWS() {
     if (msg.type === 'stage') setStageState(msg.stage, msg.status, msg.ms);
     if (msg.type === 'stt_latency') updateLatency('stt', msg.ms);
     if (msg.type === 'gemini_turn_latency') updateLatency('gemini', msg.ms);
+    if (msg.type === 'client_e2e') updateLatency('client-e2e', msg.ms);
     if (msg.type === 'greeting') {
       addConversationEntry('ai', msg.text);
       if (msg.audio) {
@@ -1059,8 +1121,10 @@ function connectWS() {
       let ex = document.getElementById('interimEntry');
       if (!ex) { const d = document.createElement('div'); d.className='log-entry worker'; d.id='interimEntry'; d.innerHTML='<div class="log-label">Worker (live)</div><span id="interimText"></span>'; document.getElementById('tab-conversation').appendChild(d); }
       document.getElementById('interimText').textContent = msg.text;
+      if (msg.is_final && !speechEndClientMs) onWorkerSpeechEnd();
     }
     if (msg.type === 'transcript') {
+      if (!speechEndClientMs) onWorkerSpeechEnd();
       const ex = document.getElementById('interimEntry'); if (ex) ex.remove();
       stopSNRMonitor();
       const badSNR = (msg.role !== 'ai') ? checkSNRAndWarn() : false;
@@ -1074,6 +1138,7 @@ function connectWS() {
       }
     }
     if (msg.type === 'intent') {
+      if (msg.client_e2e_ms != null) updateLatency('client-e2e', msg.client_e2e_ms);
       const d = msg.data;
       document.getElementById('intentCard').classList.add('show');
       const labels = { SAFE_CONFIRMATION:'✓ Safe Confirmation', DELAYED_CHECKIN:'⏱ Delayed / Check-In', REQUEST_HUMAN:'👤 Request Human Agent', UNRECOGNISED:'? Unrecognised' };
@@ -1183,7 +1248,11 @@ function startSession() {
   document.getElementById('intentCard').classList.remove('show');
   document.getElementById('confWarning').className = 'conf-warning';
   document.getElementById('distressCard').className = 'distress-card';
-  ['lat-stt','lat-llm','lat-tts','lat-total'].forEach(id => document.getElementById(id).textContent = '—');
+  ['lat-stt','lat-llm','lat-tts','lat-total','lat-client-e2e','lat-gemini'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = '—'; el.className = 'latency-val'; }
+  });
+  speechEndClientMs = null;
   document.getElementById('workerStatus').textContent = 'Overdue';
   sessionInputTokens = 0; sessionOutputTokens = 0; turnCount = 0;
   document.getElementById('tokenCard').style.display = 'none';
@@ -1246,16 +1315,22 @@ async function toggleMic() {
         processor.connect(ctx.destination);
         window._geminiProcessor = { source, processor };
       } else {
-        // Use MediaRecorder for cascaded pipeline
-        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
-                         MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
-        mediaRecorder = new MediaRecorder(audioStream, mimeType ? { mimeType } : {});
-        mediaRecorder.ondataavailable = (e) => {
-          if (ws && ws.readyState === WebSocket.OPEN && e.data.size > 0) {
-            e.data.arrayBuffer().then(buf => ws.send(buf));
+        // Cascaded: 16 kHz PCM16 for DeepFilter → Deepgram
+        const ctx = getAudioContext();
+        console.log('[Cascaded Mic] AudioContext sampleRate:', ctx.sampleRate, '| DeepFilter target: 16000');
+        const source = ctx.createMediaStreamSource(audioStream);
+        const processor = ctx.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          if (ws && ws.readyState === WebSocket.OPEN && !aiSpeaking) {
+            const float32 = e.inputBuffer.getChannelData(0);
+            const int16 = floatToPcm16Resampled(float32, ctx.sampleRate, 16000);
+            lastMicSendTime = Date.now();
+            ws.send(int16.buffer);
           }
         };
-        mediaRecorder.start(250);
+        source.connect(processor);
+        processor.connect(ctx.destination);
+        window._cascadedProcessor = { source, processor };
       }
 
       micActive = true;
@@ -1271,9 +1346,15 @@ async function toggleMic() {
       window._geminiProcessor.processor.disconnect();
       window._geminiProcessor = null;
     }
+    if (window._cascadedProcessor) {
+      window._cascadedProcessor.source.disconnect();
+      window._cascadedProcessor.processor.disconnect();
+      window._cascadedProcessor = null;
+    }
     if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     if (audioStream) audioStream.getTracks().forEach(t => t.stop());
     micActive = false;
+    onWorkerSpeechEnd();
     document.getElementById('micDot').classList.remove('active');
     document.getElementById('micLabel').textContent = 'Not recording';
     document.getElementById('micBtn').textContent = '🎤 Mic';
@@ -1354,64 +1435,62 @@ async function sendAudioFile() {
   if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
   const input = document.getElementById('audioFileInput');
   const status = document.getElementById('audioFileStatus');
-  if (!input.files || !input.files[0]) { alert('Please select an MP3 file first'); return; }
+  if (!input.files || !input.files[0]) { alert('Please select an audio file first'); return; }
 
   const file = input.files[0];
-  const mode = document.getElementById('pipelineMode') ? document.getElementById('pipelineMode').value : 'cascaded';
-  status.textContent = 'Converting...';
+  status.textContent = 'Reading file...';
 
   try {
-    // Convert MP3 to PCM via AudioContext (browser-native, no ffmpeg needed)
     const arrayBuffer = await file.arrayBuffer();
-    const audioCtx = new AudioContext({ sampleRate: 16000 });
-    const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-
-    // Get mono channel, convert to 16-bit PCM
-    const channelData = decoded.getChannelData(0);
-    const pcmBuffer = new Int16Array(channelData.length);
-    for (let i = 0; i < channelData.length; i++) {
-      pcmBuffer[i] = Math.max(-32768, Math.min(32767, Math.round(channelData[i] * 32767)));
-    }
-
-    const durationSec = (channelData.length / 16000).toFixed(2);
-    status.textContent = `Sending ${durationSec}s audio...`;
-
-    // Calculate SNR from file audio — find quietest 0.2s window as noise floor
-    try {
-      const windowSize = Math.floor(16000 * 0.2); // 0.2s windows
-      let minRMS = Infinity;
-      let maxRMS = 0;
-      for (let i = 0; i < channelData.length - windowSize; i += windowSize) {
-        const window = channelData.slice(i, i + windowSize);
-        const rms = Math.sqrt(window.reduce((s, v) => s + v*v, 0) / window.length);
-        if (rms < minRMS) minRMS = rms;
-        if (rms > maxRMS) maxRMS = rms;
-      }
-      const noiseFloor = Math.max(minRMS, 0.0001);
-      const snrDb = 20 * Math.log10(maxRMS / noiseFloor);
-      console.log('[SNR] File — min RMS:', minRMS.toFixed(5), '| max RMS:', maxRMS.toFixed(5), '| SNR:', snrDb.toFixed(1) + 'dB');
-      if (snrDb < 3) showSNRWarning(snrDb);
-    } catch(e) { console.warn('[SNR] File analysis error:', e.message); }
+    const fileBytes = new Uint8Array(arrayBuffer);
+    const magic = String.fromCharCode(fileBytes[0] || 0, fileBytes[1] || 0, fileBytes[2] || 0, fileBytes[3] || 0);
+    console.log('[Audio File] name:', file.name, '| size:', fileBytes.length, '| magic:', JSON.stringify(magic));
 
     if (pipelineMode === 'gemini') {
-      // Gemini: send as binary PCM directly
-      ws.send(pcmBuffer.buffer);
-      status.textContent = `✓ Sent ${durationSec}s to Gemini`;
-    } else {
-      // Cascaded: send as binary PCM — server.js handles Deepgram STT
-      ws.send(JSON.stringify({ type: 'audio_file_start', filename: file.name, duration: durationSec }));
-      // Send PCM in chunks
-      const CHUNK = 4096;
-      const bytes = new Uint8Array(pcmBuffer.buffer);
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        ws.send(bytes.slice(i, i + CHUNK));
-        await new Promise(r => setTimeout(r, 10));
+      status.textContent = 'Converting to PCM...';
+      const audioCtx = new AudioContext();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+      const sourceRate = decoded.sampleRate;
+      const channelData = decoded.getChannelData(0);
+      const TARGET_RATE = 16000;
+      let mono;
+      if (sourceRate === TARGET_RATE) {
+        mono = channelData;
+      } else {
+        const ratio = sourceRate / TARGET_RATE;
+        const outLen = Math.floor(channelData.length / ratio);
+        mono = new Float32Array(outLen);
+        for (let i = 0; i < outLen; i++) mono[i] = channelData[Math.floor(i * ratio)] || 0;
       }
-      ws.send(JSON.stringify({ type: 'audio_file_end' }));
-      status.textContent = `✓ Sent ${durationSec}s to Cascaded pipeline`;
+      const pcmBuffer = new Int16Array(mono.length);
+      for (let i = 0; i < mono.length; i++) {
+        pcmBuffer[i] = Math.max(-32768, Math.min(32767, Math.round(mono[i] * 32767)));
+      }
+      const durationSec = (mono.length / TARGET_RATE).toFixed(2);
+      ws.send(pcmBuffer.buffer.slice(pcmBuffer.byteOffset, pcmBuffer.byteOffset + pcmBuffer.byteLength));
+      status.textContent = `✓ Sent ${durationSec}s to Gemini`;
+      await audioCtx.close();
+      return;
     }
 
-    await audioCtx.close();
+    // Cascaded: send ORIGINAL file bytes (WAV/MP3). Do NOT decode→PCM —
+    // that strips RIFF and breaks Deepgram when we re-wrap with a wrong header.
+    status.textContent = 'Sending original file (' + fileBytes.length + ' bytes)...';
+    ws.send(JSON.stringify({
+      type: 'audio_file_start',
+      filename: file.name,
+      duration: null,
+      size: fileBytes.length,
+      mime: file.type || '',
+    }));
+    const CHUNK = 16384;
+    for (let i = 0; i < fileBytes.length; i += CHUNK) {
+      // Copy slice so WebSocket gets a standalone ArrayBuffer
+      ws.send(fileBytes.slice(i, i + CHUNK).buffer);
+      await new Promise(r => setTimeout(r, 5));
+    }
+    ws.send(JSON.stringify({ type: 'audio_file_end' }));
+    status.textContent = '✓ Sent ' + file.name + ' (' + Math.round(fileBytes.length / 1024) + ' KB)';
   } catch (e) {
     status.textContent = '✗ Error: ' + e.message;
     console.error('Audio file error:', e);
@@ -1463,7 +1542,6 @@ let cmpMicActive = false;
 let cmpDgWs = null;
 let cmpMicStream = null;
 let cmpMicProcessor = null;
-let cmpPostSpeechStart = null;
 let cmpLastSttMs = null; // mic Deepgram WS or audio-file STT latency (ms) for /compare-intent
 let cmpStopFlag = false;
 let cmpHistory = JSON.parse(localStorage.getItem('cmp_history') || '[]');
@@ -1629,11 +1707,11 @@ function cmpStopDeepgramMic(flush) {
     setTimeout(() => { try { ws.close(); } catch (e) {} }, flush === false ? 0 : 1500);
   }
   cmpDgWs = null;
-  cmpPostSpeechStart = null;
 }
 
 async function cmpToggleMic() {
   const status = document.getElementById('cmpMicStatus');
+  let cmpLastMediaAt = 0;
   if (cmpMicActive) {
     status.textContent = 'Finishing transcript...';
     cmpStopDeepgramMic(true);
@@ -1646,7 +1724,6 @@ async function cmpToggleMic() {
     if (!cfgRes.ok) throw new Error(cfg.error || 'Deepgram not configured');
 
     cmpLastSttMs = null;
-    cmpPostSpeechStart = null;
 
     cmpMicStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
@@ -1667,27 +1744,23 @@ async function cmpToggleMic() {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'UtteranceEnd') {
-          cmpPostSpeechStart = Date.now();
+          cmpStopDeepgramMic(false);
+          return;
         }
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const text = msg.channel.alternatives[0].transcript;
           if (!text || !text.trim()) return;
-          if (msg.is_final && !msg.speech_final) {
-            status.textContent = 'Processing speech...';
-          }
-          if (msg.is_final && msg.speech_final) {
-            const sttMs = cmpPostSpeechStart != null
-              ? Math.max(0, Date.now() - cmpPostSpeechStart)
+          if (msg.is_final && msg.type === 'Results' && msg.channel) {
+            const sttMs = cmpLastMediaAt
+              ? Date.now() - cmpLastMediaAt
               : null;
             cmpLastSttMs = sttMs;
-            cmpPostSpeechStart = null;
             document.getElementById('cmpTranscript').value = text;
             cmpExpected = null;
             document.getElementById('cmpScenario').value = '';
             status.textContent = sttMs != null
               ? `Transcript captured (STT ${sttMs}ms).`
               : 'Transcript captured.';
-            cmpStopDeepgramMic(false);
           }
         }
       } catch (e) {}
@@ -1708,6 +1781,7 @@ async function cmpToggleMic() {
       for (let i = 0; i < float32.length; i++) {
         int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
       }
+      cmpLastMediaAt = Date.now();
       cmpDgWs.send(int16.buffer);
     };
     source.connect(processor);
@@ -1765,9 +1839,14 @@ function renderLatencyBreakdown(data, model) {
   // Show when we have any pipeline stage (STT may be null without mic).
   if (data.avg_llm_ms == null && data.avg_tts_ms == null && data.avg_stt_ms == null) return '';
   const fmtBreakdown = (v) => v != null ? v + 'ms' : '—';
+  const sttSource = data.stt_source || (typeof cmpLastSttMs === 'number' ? 'real' : 'estimated');
+  const sttTag = sttSource === 'real' ? '(gerçek)' : '(tahmini)';
+  const sttTip = sttSource === 'real'
+    ? 'Deepgram Nova-2 gerçek STT latency (mic veya audio dosyası).'
+    : 'Deepgram Nova-2 ortalama STT latency tahmini (~300ms). Mic ile konuşursanız gerçek değer kullanılır.';
   return `<div class="latency-breakdown">
     <div class="breakdown-item">
-      <span class="breakdown-label breakdown-label-row">STT<span class="breakdown-tip" data-tip="Deepgram Nova-2 ortalama STT latency tahmini (~300ms). Gerçek değer için calls.html üzerinden Twilio araması yapın.">ⓘ</span></span>
+      <span class="breakdown-label breakdown-label-row">STT ${sttTag}<span class="breakdown-tip" data-tip="${sttTip}">ⓘ</span></span>
       <span class="breakdown-value">${fmtBreakdown(data.avg_stt_ms)}</span>
     </div>
     <div class="breakdown-sep">→</div>
@@ -2316,14 +2395,16 @@ function exportCmpCSV() {
   a.click();
 }
 
-function applyCompareSttMs(results, sttMs) {
-  if (sttMs == null || !results) return results;
+function applyCompareSttMs(results, sttMs, sttSource) {
+  if (!results) return results;
   Object.keys(results).forEach(model => {
     const r = results[model];
     if (!r || !r.ok || !String(model).startsWith('claude')) return;
-    if (r.avg_stt_ms == null) r.avg_stt_ms = sttMs;
+    if (sttMs != null && r.avg_stt_ms == null) r.avg_stt_ms = sttMs;
+    if (sttSource && !r.stt_source) r.stt_source = sttSource;
     (r.runs || []).forEach(run => {
-      if (run.ok && run.stt_ms == null) run.stt_ms = sttMs;
+      if (run.ok && sttMs != null && run.stt_ms == null) run.stt_ms = sttMs;
+      if (run.ok && sttSource && !run.stt_source) run.stt_source = sttSource;
     });
   });
   return results;
@@ -2331,7 +2412,7 @@ function applyCompareSttMs(results, sttMs) {
 
 async function fetchModelCompare(transcript, model, runs, expected) {
   const payload = { transcript, models: [model], runs, expected };
-  if (typeof cmpLastSttMs === 'number') payload.stt_ms = cmpLastSttMs;
+  if (typeof cmpLastSttMs === 'number') payload.real_stt_ms = cmpLastSttMs;
   const res = await fetch('/compare-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2339,12 +2420,14 @@ async function fetchModelCompare(transcript, model, runs, expected) {
   });
   const data = await res.json();
   const result = (data.results && data.results[model]) || { ok: false, error: data.error || 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model };
-  return applyCompareSttMs({ [model]: result }, data.stt_ms ?? cmpLastSttMs)[model];
+  const sttMs = data.real_stt_ms ?? data.stt_ms ?? cmpLastSttMs;
+  const sttSource = data.stt_source || (typeof cmpLastSttMs === 'number' ? 'real' : 'estimated');
+  return applyCompareSttMs({ [model]: result }, sttMs, sttSource)[model];
 }
 
 async function fetchCompareIntentBatch(transcript, models, runs, expected) {
   const payload = { transcript, models, runs, expected };
-  if (typeof cmpLastSttMs === 'number') payload.stt_ms = cmpLastSttMs;
+  if (typeof cmpLastSttMs === 'number') payload.real_stt_ms = cmpLastSttMs;
   const res = await fetch('/compare-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2352,7 +2435,9 @@ async function fetchCompareIntentBatch(transcript, models, runs, expected) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'compare-intent failed');
-  return applyCompareSttMs(data.results || {}, data.stt_ms ?? cmpLastSttMs);
+  const sttMs = data.real_stt_ms ?? data.stt_ms ?? cmpLastSttMs;
+  const sttSource = data.stt_source || (typeof cmpLastSttMs === 'number' ? 'real' : 'estimated');
+  return applyCompareSttMs(data.results || {}, sttMs, sttSource);
 }
 
 async function fetchCompareFreeformBatch(transcript, models, runs) {
