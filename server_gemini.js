@@ -353,20 +353,50 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
         }
 
       } else {
-        // Binary audio — only send to Gemini when actively listening
-        // Drop audio completely during GREETING to prevent spurious responses
-        if (sessionState !== 'LISTENING') return;
+        // Binary audio — file uploads are large PCM blobs; mic chunks are small.
+        // Gate file sends on LISTENING (retry up to 3× with 500ms wait).
+        const buf = Buffer.from(data);
+        const CHUNK_SIZE = 3200; // ~100ms @ 16kHz mono 16-bit
+        const isFileUpload = buf.length > CHUNK_SIZE;
+
+        if (isFileUpload) {
+          let ready = sessionState === 'LISTENING';
+          for (let attempt = 0; !ready && attempt < 3; attempt++) {
+            console.log('[Gemini] File upload waiting for LISTENING (attempt ' + (attempt + 1) + '/3), state=' + sessionState);
+            await new Promise(function(r) { setTimeout(r, 500); });
+            ready = sessionState === 'LISTENING';
+          }
+          if (!ready) {
+            console.warn('[Gemini] Dropping file upload — not LISTENING after 3 attempts (state=' + sessionState + ')');
+            return;
+          }
+        } else if (sessionState !== 'LISTENING') {
+          // Drop live mic audio during GREETING / non-listening states
+          return;
+        }
+
         if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-          const audioMsg = {
-            realtime_input: {
-              audio: {
-                data: Buffer.from(data).toString('base64'),
-                mimeType: 'audio/pcm;rate=' + actualSampleRate
+          for (let offset = 0; offset < buf.length; offset += CHUNK_SIZE) {
+            const slice = buf.subarray(offset, Math.min(offset + CHUNK_SIZE, buf.length));
+            const audioMsg = {
+              realtime_input: {
+                audio: {
+                  data: slice.toString('base64'),
+                  mimeType: 'audio/pcm;rate=' + actualSampleRate
+                }
               }
+            };
+            geminiWs.send(JSON.stringify(audioMsg));
+            lastAudioSentTime = Date.now();
+            if (offset + CHUNK_SIZE < buf.length) {
+              await new Promise(function(r) { setTimeout(r, 20); });
             }
-          };
-          geminiWs.send(JSON.stringify(audioMsg));
-          lastAudioSentTime = Date.now(); // track last audio chunk sent
+          }
+          // Signal end of audio so Gemini commits the turn (file uploads especially)
+          if (isFileUpload) {
+            geminiWs.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+            console.log('[Gemini] File upload done — sent audioStreamEnd');
+          }
         }
       }
     } catch(e) {
