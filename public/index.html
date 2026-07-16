@@ -174,6 +174,7 @@
   .cmp-summary-lines strong { color: var(--accent); }
   .cmp-table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: none; }
   .cmp-table-wrap.show { display: block; }
+  .cmp-note { font-size: 11px; color: var(--muted); margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); line-height: 1.45; }
   .cmp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .cmp-table th { text-align: left; padding: 10px 12px; background: var(--surface2); color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
   .cmp-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
@@ -670,6 +671,7 @@
   </div>
 
   <div class="cmp-table-wrap" id="cmpTableWrap">
+    <p class="cmp-note">ⓘ Tüm modeller aynı minimal JSON şemasını kullanıyor (intent + confidence + distress) — adil latency karşılaştırması için response metni koddan map ediliyor.</p>
     <table class="cmp-table">
       <thead>
         <tr>

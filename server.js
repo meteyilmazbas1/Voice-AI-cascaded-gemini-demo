@@ -76,26 +76,24 @@ async function loadMulawCache() {
   console.log('[Mulaw Cache] Ready —', Object.keys(mulawCache).length, 'files loaded');
 }
 
-const SYSTEM_PROMPT = `Aware360 safety system. Missed check-in alert. Classify worker response.
+const COMPARE_RESPONSES = {
+  safe: "Got it — I've reset your safety timer. Stay safe.",
+  delayed: "Understood. I've extended your check-in timer. Please check in when ready.",
+  request_human: "Of course. I'm flagging this for a live agent — someone will call you back shortly.",
+  unsafe: "Of course. I'm flagging this for a live agent — someone will call you back shortly.",
+  ambiguous: "I'm sorry, I didn't catch that. Are you safe, need more time, or need a human agent?",
+};
 
-Return ONLY JSON: {"intent":"<SAFE_CONFIRMATION|DELAYED_CHECKIN|REQUEST_HUMAN|UNRECOGNISED>","confidence":<0.0-1.0>,"response":"<reply>","resolved":<bool>,"escalate":<bool>,"delay_minutes":<null|number>,"distress":<null|"low"|"medium"|"high">,"distress_signals":<null|string>}
+const COMPARE_INTENT_PROMPT = `Classify the worker's response to a safety check-in call. Reply with ONLY valid JSON, nothing else:
+{"intent":"<safe|delayed|request_human|unsafe|ambiguous>","confidence":<0.0-1.0>,"distress":<null|"low"|"medium"|"high">}
 
-INTENTS:
-SAFE_CONFIRMATION: "yes/fine/ok/safe/all good" → resolved:true, response:"Got it — I've reset your safety timer. Stay safe."
-DELAYED_CHECKIN: needs more time → resolved:true, delay_minutes:15 or stated number, response:"Understood. I've extended your check-in timer. Please check in when ready."
-REQUEST_HUMAN: wants human/help → escalate:true, response:"Of course. I'm flagging this for a live agent — someone will call you back shortly."
-UNRECOGNISED: unclear → resolved:false, response:"I'm sorry, I didn't catch that. Are you safe, need more time, or need a human agent?"
+safe: clear safety confirmation ("I'm fine", "yes", "all good")
+delayed: needs more time ("give me 10 minutes", "running late")
+request_human: wants human agent ("get me someone", "human please")
+unsafe: injury/distress/danger ("I fell", "I'm hurt", "SOS") — always escalate even if worker also claims to be safe
+ambiguous: unclear, contradictory, or unrecognised
 
-DISTRESS:
-low: "I think/maybe/not sure" only
-medium: "worried/scared/afraid/nervous/something wrong" → escalate:true, REQUEST_HUMAN
-high: "help/hurt/pain/fell/fall/broke/bleeding/dizzy/injured/stuck/trapped/SOS/emergency" → REQUEST_HUMAN
-
-CRITICAL: ANY physical indicator (fell, broke, hurt, pain, dizzy) = REQUEST_HUMAN regardless of reassurance like "I'm okay I promise". "worried/scared/afraid" even with "I'm fine" = distress:medium = REQUEST_HUMAN.
-
-Examples:
-"I think I'm fine but I'm a bit worried" → REQUEST_HUMAN, distress:medium
-"I just fell down but I'm okay I promise" → REQUEST_HUMAN, distress:high`;
+Confidence: >0.90 clear | <0.60 hesitation/unclear.`;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
@@ -234,36 +232,42 @@ async function classifyIntent(transcript, model, opts) {
     if (fast) return fast;
   }
 
-  // Non-streaming for compare/benchmark latency (Haiku + Sonnet).
-  // 200 tokens: full JSON schema (intent/confidence/response/distress/…) must fit.
-  const response = await anthropic.messages.create({
+  // Streaming: measure TTFT (first text chunk), return only after full JSON accumulates.
+  const started = Date.now();
+  let firstChunkAt = null;
+  let fullText = '';
+  let usage = { input_tokens: 0, output_tokens: 0 };
+
+  const stream = anthropic.messages.stream({
     model: model || 'claude-haiku-4-5',
-    max_tokens: 200,
+    max_tokens: 100,
     temperature: 0,
-    stream: false,
-    system: SYSTEM_PROMPT,
+    system: COMPARE_INTENT_PROMPT,
     messages: [{ role: 'user', content: 'Worker said: "' + transcript + '"' }]
   });
 
-  let fullText = '';
-  if (response.content) {
-    for (const block of response.content) {
-      if (block.type === 'text') fullText += block.text;
+  for await (const chunk of stream) {
+    if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
+      if (firstChunkAt == null) firstChunkAt = Date.now();
+      fullText += chunk.delta.text;
+    }
+    if (chunk.type === 'message_start' && chunk.message?.usage) {
+      usage.input_tokens = chunk.message.usage.input_tokens || 0;
+      usage.cache_read_input_tokens = chunk.message.usage.cache_read_input_tokens || 0;
+      const cacheRead = chunk.message.usage.cache_read_input_tokens || 0;
+      const cacheCreate = chunk.message.usage.cache_creation_input_tokens || 0;
+      if (cacheRead > 0) console.log('[Cache] HIT — cache_read_tokens:', cacheRead);
+      else if (cacheCreate > 0) console.log('[Cache] MISS — cache_creation_tokens:', cacheCreate);
+    }
+    if (chunk.type === 'message_delta' && chunk.usage) {
+      usage.output_tokens = chunk.usage.output_tokens || 0;
     }
   }
 
-  const usage = {
-    input_tokens: (response.usage && response.usage.input_tokens) || 0,
-    output_tokens: (response.usage && response.usage.output_tokens) || 0,
-    cache_read_input_tokens: (response.usage && response.usage.cache_read_input_tokens) || 0,
-  };
-  const cacheRead = usage.cache_read_input_tokens || 0;
-  const cacheCreate = (response.usage && response.usage.cache_creation_input_tokens) || 0;
-  if (cacheRead > 0) console.log('[Cache] HIT — cache_read_tokens:', cacheRead);
-  else if (cacheCreate > 0) console.log('[Cache] MISS — cache_creation_tokens:', cacheCreate);
-
   const parsed = parseIntentJson(fullText);
   parsed._usage = usage;
+  parsed._ttft_ms = firstChunkAt != null ? firstChunkAt - started : Date.now() - started;
+  parsed._total_ms = Date.now() - started;
   return parsed;
 }
 
@@ -1169,12 +1173,17 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
 
   const llmStart = Date.now();
   const result = await classifyIntent(transcript, model, { skipFastPath: true });
-  const llmMs = Date.now() - llmStart;
-  console.log('[Compare LLM]', model, llmMs + 'ms', result._usage?.cache_read_input_tokens ? '(cache hit)' : '(cache miss)');
+  // Prefer TTFT (first stream chunk); fall back to wall clock if no chunk seen.
+  const llmMs = result._ttft_ms != null ? result._ttft_ms : (Date.now() - llmStart);
+  console.log('[Compare LLM]', model, 'TTFT', llmMs + 'ms',
+    result._total_ms != null ? '(total ' + result._total_ms + 'ms)' : '',
+    result._usage?.cache_read_input_tokens ? '(cache hit)' : '(cache miss)');
 
   const usage = result._usage || { input_tokens: 0, output_tokens: 0 };
   delete result._usage;
-  const applied = applyDistressLogic({ ...result });
+  delete result._ttft_ms;
+  delete result._total_ms;
+  const applied = applyCompareDistress(enrichCompareFromMinimal(result, transcript));
 
   let ttsMs = null;
   try {
@@ -1206,13 +1215,13 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
     llm_ms: llmMs,
     tts_ms: ttsMs,
     intent: applied.intent,
-    confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+    confidence: applied.confidence,
     response: applied.response,
     resolved: !!applied.resolved,
     escalate: !!applied.escalate,
     delay_minutes: applied.delay_minutes ?? null,
-    distress: result.distress || null,
-    distress_signals: result.distress_signals || null,
+    distress: applied.distress || null,
+    distress_signals: applied.distress_signals || null,
     input_tokens: usage.input_tokens || 0,
     output_tokens: usage.output_tokens || 0,
   };
@@ -1229,14 +1238,7 @@ const GEMINI_REST_MODEL_MAP = {
   'gemini-3.1-flash-live-preview': ['gemini-2.5-flash'],
 };
 
-const GEMINI_INTENT_PROMPT = `Classify the worker's response. Reply with ONLY valid JSON, nothing else:
-{"intent":"<safe|delayed|request_human|unsafe|ambiguous>","confidence":<0.0-1.0>}
-
-safe: clear safety confirmation ("I'm fine", "yes", "all good")
-delayed: needs more time ("give me 10 minutes", "running late")
-request_human: wants human agent ("get me someone", "human please")
-unsafe: injury/distress/danger ("I fell", "I'm hurt", "SOS")
-ambiguous: unclear or unrecognised`;
+const GEMINI_INTENT_PROMPT = COMPARE_INTENT_PROMPT;
 
 // Free tier is often ~20 RPM; serialize + space requests so parallel compare runs don't 429.
 const GEMINI_MIN_INTERVAL_MS = 1000;
@@ -1286,6 +1288,41 @@ function normalizeGeminiCompareIntent(raw) {
   return 'ambiguous';
 }
 
+function enrichCompareFromMinimal(parsed, transcript) {
+  const intentKey = normalizeGeminiCompareIntent(parsed.intent);
+  const durationMatch = transcript.match(DURATION_REGEX);
+  const duration = durationMatch ? durationMatch[1] + ' ' + durationMatch[2] : null;
+  let distress = parsed.distress || null;
+  if (intentKey === 'unsafe' && !distress) distress = 'high';
+
+  const base = intentToResult(intentKey, duration);
+  return {
+    intent: base.intent,
+    confidence: typeof parsed.confidence === 'number' ? parsed.confidence : base.confidence,
+    response: COMPARE_RESPONSES[intentKey] || COMPARE_RESPONSES.ambiguous,
+    resolved: ['safe', 'delayed'].includes(intentKey),
+    escalate: ['request_human', 'unsafe'].includes(intentKey),
+    delay_minutes: intentKey === 'delayed' ? (base.delay_minutes ?? 15) : null,
+    distress: distress,
+    distress_signals: parsed.distress_signals || (distress === 'high' ? 'unsafe' : null),
+  };
+}
+
+function applyCompareDistress(result) {
+  if (result.distress === 'high') {
+    result.intent = 'REQUEST_HUMAN';
+    result.escalate = true;
+    result.resolved = false;
+    result.response = COMPARE_RESPONSES.request_human;
+  } else if (result.distress === 'medium' && !(result.intent === 'SAFE_CONFIRMATION' && result.confidence > 0.85)) {
+    result.intent = 'REQUEST_HUMAN';
+    result.escalate = true;
+    result.resolved = false;
+    result.response = COMPARE_RESPONSES.request_human;
+  }
+  return result;
+}
+
 async function classifyWithGeminiOnce(transcript, model, opts) {
   opts = opts || {};
   const apiKey = process.env.GEMINI_API_KEY;
@@ -1309,7 +1346,7 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
           const generationConfig = {
             responseMimeType: 'application/json',
             temperature: 0,
-            maxOutputTokens: 64,
+            maxOutputTokens: 100,
           };
           // 2.5/3.x think by default — disable when used as fallback.
           if (String(restModel).indexOf('2.5') !== -1 || String(restModel).indexOf('gemini-3') === 0) {
@@ -1332,11 +1369,7 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
             : '';
           const usage = data.usageMetadata || {};
           const parsed = parseIntentJson(text);
-          const intentKey = normalizeGeminiCompareIntent(parsed.intent);
-          const durationMatch = transcript.match(DURATION_REGEX);
-          const duration = durationMatch ? durationMatch[1] + ' ' + durationMatch[2] : null;
-          const mapped = intentToResult(intentKey, duration);
-          if (typeof parsed.confidence === 'number') mapped.confidence = parsed.confidence;
+          const mapped = applyCompareDistress(enrichCompareFromMinimal(parsed, transcript));
           console.log('[Compare] Gemini REST:', restModel, latency + 'ms', '| intent:', mapped.intent);
           return {
             latency: latency,
@@ -1457,7 +1490,7 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
       const lastLatency = runRows[runRows.length - 1] && runRows[runRows.length - 1].latency
         ? runRows[runRows.length - 1].latency
         : 0;
-      const waitMs = lastLatency > 3000 ? 2000 : 500;
+      const waitMs = lastLatency > 3000 ? 3000 : 2000;
       await new Promise(function(r) { setTimeout(r, waitMs); });
     }
   }

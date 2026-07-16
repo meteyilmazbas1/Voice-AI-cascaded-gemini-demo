@@ -19,7 +19,7 @@ const {
 } = process.env;
 
 const geminiUrl = GEMINI_PUBLIC_URL || PUBLIC_URL;
-const TWIML_APP_SID = 'APcb8e96e499ec201f3ac9e11832e14079';
+const TWIML_APP_SID = 'APa7acda21ab05c3c66d765b2751b315bf';
 
 const missing = [];
 if (!TWILIO_ACCOUNT_SID || TWILIO_ACCOUNT_SID === 'your_twilio_sid') missing.push('TWILIO_ACCOUNT_SID');
