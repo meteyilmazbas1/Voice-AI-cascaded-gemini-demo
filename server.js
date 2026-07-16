@@ -264,6 +264,21 @@ async function classifyIntent(transcript, model, opts) {
     }
   }
 
+  // Prefer final message usage (authoritative input_tokens + output_tokens)
+  try {
+    const finalMsg = await stream.finalMessage();
+    if (finalMsg && finalMsg.usage) {
+      usage = parseClaudeUsage(finalMsg.usage);
+      if (finalMsg.usage.cache_read_input_tokens) {
+        usage.cache_read_input_tokens = finalMsg.usage.cache_read_input_tokens;
+      }
+    } else {
+      usage = parseClaudeUsage(usage);
+    }
+  } catch (e) {
+    usage = parseClaudeUsage(usage);
+  }
+
   const parsed = parseIntentJson(fullText);
   parsed._usage = usage;
   parsed._ttft_ms = firstChunkAt != null ? firstChunkAt - started : Date.now() - started;
@@ -1148,6 +1163,37 @@ function calcTokenCost(model, inputTokens, outputTokens) {
   return (inputTokens / 1e6) * rates.input + (outputTokens / 1e6) * rates.output;
 }
 
+/** Normalize Gemini usageMetadata — do not subtract modality details (e.g. audio). */
+function parseGeminiUsageMetadata(usageMetadata) {
+  const u = usageMetadata || {};
+  const input = Number(u.promptTokenCount) || 0;
+  const output = Number(u.candidatesTokenCount) || 0;
+  const total = (typeof u.totalTokenCount === 'number' && Number.isFinite(u.totalTokenCount))
+    ? u.totalTokenCount
+    : (input + output);
+  // Log details for debugging but never subtract them from the totals we report
+  if (Array.isArray(u.promptTokensDetails) && u.promptTokensDetails.length) {
+    console.log('[Compare] Gemini promptTokensDetails:', JSON.stringify(u.promptTokensDetails));
+  }
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: total,
+  };
+}
+
+function parseClaudeUsage(usage) {
+  const u = usage || {};
+  const input = Number(u.input_tokens) || 0;
+  const output = Number(u.output_tokens) || 0;
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: input + output,
+    cache_read_input_tokens: Number(u.cache_read_input_tokens) || 0,
+  };
+}
+
 function parseIntentJson(text) {
   let clean = (text || '').trim();
   if (!clean) throw new Error('Empty model response');
@@ -1179,11 +1225,15 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
     result._total_ms != null ? '(total ' + result._total_ms + 'ms)' : '',
     result._usage?.cache_read_input_tokens ? '(cache hit)' : '(cache miss)');
 
-  const usage = result._usage || { input_tokens: 0, output_tokens: 0 };
+  const usage = result._usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
   delete result._usage;
   delete result._ttft_ms;
   delete result._total_ms;
   const applied = applyCompareDistress(enrichCompareFromMinimal(result, transcript));
+
+  const inputTokens = usage.input_tokens || 0;
+  const outputTokens = usage.output_tokens || 0;
+  const totalTokens = usage.total_tokens != null ? usage.total_tokens : (inputTokens + outputTokens);
 
   let ttsMs = null;
   try {
@@ -1222,8 +1272,9 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
     delay_minutes: applied.delay_minutes ?? null,
     distress: applied.distress || null,
     distress_signals: applied.distress_signals || null,
-    input_tokens: usage.input_tokens || 0,
-    output_tokens: usage.output_tokens || 0,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
   };
 }
 
@@ -1367,10 +1418,11 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
           const text = (((data.candidates || [])[0] || {}).content || {}).parts
             ? data.candidates[0].content.parts.map(function(p) { return p.text || ''; }).join('')
             : '';
-          const usage = data.usageMetadata || {};
+          const usage = parseGeminiUsageMetadata(data.usageMetadata);
           const parsed = parseIntentJson(text);
           const mapped = applyCompareDistress(enrichCompareFromMinimal(parsed, transcript));
-          console.log('[Compare] Gemini REST:', restModel, latency + 'ms', '| intent:', mapped.intent);
+          console.log('[Compare] Gemini REST:', restModel, latency + 'ms', '| intent:', mapped.intent,
+            '| tokens in/out/total:', usage.input_tokens + '/' + usage.output_tokens + '/' + usage.total_tokens);
           return {
             latency: latency,
             intent: mapped.intent,
@@ -1381,8 +1433,9 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
             delay_minutes: mapped.delay_minutes ?? null,
             distress: mapped.distress || null,
             distress_signals: mapped.distress_signals || null,
-            input_tokens: usage.promptTokenCount || 0,
-            output_tokens: usage.candidatesTokenCount || 0,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
             _rest_model: restModel,
           };
         });
@@ -1476,6 +1529,7 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
         distress_signals: r.distress_signals,
         input_tokens: r.input_tokens,
         output_tokens: r.output_tokens,
+        total_tokens: r.total_tokens != null ? r.total_tokens : ((r.input_tokens || 0) + (r.output_tokens || 0)),
         cost: cost,
       });
     } catch (err) {
@@ -1487,11 +1541,7 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
       });
     }
     if (i < runs - 1) {
-      const lastLatency = runRows[runRows.length - 1] && runRows[runRows.length - 1].latency
-        ? runRows[runRows.length - 1].latency
-        : 0;
-      const waitMs = lastLatency > 3000 ? 3000 : 2000;
-      await new Promise(function(r) { setTimeout(r, waitMs); });
+      await new Promise(function(r) { setTimeout(r, 3000); });
     }
   }
 
@@ -1512,6 +1562,9 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
   const confidences = okRuns.map(function(r) { return r.confidence; });
   const inputTokens = okRuns.map(function(r) { return r.input_tokens; });
   const outputTokens = okRuns.map(function(r) { return r.output_tokens; });
+  const totalTokens = okRuns.map(function(r) {
+    return r.total_tokens != null ? r.total_tokens : ((r.input_tokens || 0) + (r.output_tokens || 0));
+  });
   const costs = okRuns.map(function(r) { return r.cost; });
   const sttTimes = okRuns.map(function(r) { return r.stt_ms; }).filter(function(v) { return v !== null && v !== undefined; });
   const llmTimes = okRuns.map(function(r) { return r.llm_ms; }).filter(function(v) { return v !== null && v !== undefined; });
@@ -1519,6 +1572,7 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
   const isGemini = String(model).indexOf('gemini') === 0;
   const avgInput = avgNum(inputTokens);
   const avgOutput = avgNum(outputTokens);
+  const avgTotal = avgNum(totalTokens);
 
   return {
     ok: true,
@@ -1535,7 +1589,7 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
     max_latency: Math.max.apply(null, latencies),
     avg_input_tokens: Math.round(avgInput),
     avg_output_tokens: Math.round(avgOutput),
-    avg_tokens: Math.round(avgInput + avgOutput),
+    avg_tokens: Math.round(avgTotal),
     est_cost: avgNum(costs),
     distress: lastOk.distress,
     distress_signals: lastOk.distress_signals,
@@ -1644,7 +1698,7 @@ app.post('/compare-intent', async function(req, res) {
     return res.status(400).json({ error: 'models[] is required' });
   }
 
-  if (!Number.isFinite(runs) || runs < 1) runs = 5;
+  if (!Number.isFinite(runs) || runs < 1) runs = 1;
   if (runs > 10) runs = 10;
 
   const invalid = models.filter(function(m) {
@@ -1654,7 +1708,11 @@ app.post('/compare-intent', async function(req, res) {
     return res.status(400).json({ error: 'Unsupported models: ' + invalid.join(', ') });
   }
 
-  const settled = await Promise.all(models.map(function(model) {
+  // Claude models run serially (Haiku then Sonnet); Gemini can stay parallel.
+  const claudeModels = models.filter(function(m) { return String(m).indexOf('claude-') === 0; });
+  const otherModels = models.filter(function(m) { return String(m).indexOf('claude-') !== 0; });
+
+  function runOne(model) {
     return runModelComparison(transcript, model, runs, expected, compareOpts)
       .catch(function(err) {
         return {
@@ -1665,7 +1723,15 @@ app.post('/compare-intent', async function(req, res) {
           runs: [],
         };
       });
-  }));
+  }
+
+  const otherSettled = await Promise.all(otherModels.map(runOne));
+  const claudeSettled = [];
+  for (let i = 0; i < claudeModels.length; i++) {
+    claudeSettled.push(await runOne(claudeModels[i]));
+  }
+
+  const settled = otherSettled.concat(claudeSettled);
 
   const results = {};
   for (const row of settled) results[row.model] = row;
@@ -1700,12 +1766,15 @@ async function classifyFreeformOnce(transcript, model) {
       if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
         response += chunk.delta.text;
       }
-      if (chunk.type === 'message_start' && chunk.message?.usage) {
-        inputTokens = chunk.message.usage.input_tokens || 0;
-      }
-      if (chunk.type === 'message_delta' && chunk.usage) {
-        outputTokens = chunk.usage.output_tokens || 0;
-      }
+    }
+    try {
+      const finalMsg = await stream.finalMessage();
+      const usage = parseClaudeUsage(finalMsg && finalMsg.usage);
+      inputTokens = usage.input_tokens;
+      outputTokens = usage.output_tokens;
+    } catch (e) {
+      inputTokens = 0;
+      outputTokens = 0;
     }
   } else {
     const candidates = resolveGeminiRestModels(model);
@@ -1729,9 +1798,9 @@ async function classifyFreeformOnce(transcript, model) {
         response = (((data.candidates || [])[0] || {}).content || {}).parts
           ? data.candidates[0].content.parts.map(function(p) { return p.text || ''; }).join('')
           : '';
-        const usage = data.usageMetadata || {};
-        inputTokens = usage.promptTokenCount || 0;
-        outputTokens = usage.candidatesTokenCount || 0;
+        const usage = parseGeminiUsageMetadata(data.usageMetadata);
+        inputTokens = usage.input_tokens;
+        outputTokens = usage.output_tokens;
         break;
       } catch (err) {
         const apiMsg = err.response && err.response.data && err.response.data.error && err.response.data.error.message;
@@ -1746,6 +1815,7 @@ async function classifyFreeformOnce(transcript, model) {
     response: response.trim(),
     input_tokens: inputTokens,
     output_tokens: outputTokens,
+    total_tokens: inputTokens + outputTokens,
     cost: calcTokenCost(model, inputTokens, outputTokens),
   };
 }
@@ -1764,6 +1834,7 @@ async function runFreeformComparison(transcript, model, runs) {
         response: r.response,
         input_tokens: r.input_tokens,
         output_tokens: r.output_tokens,
+        total_tokens: r.total_tokens != null ? r.total_tokens : ((r.input_tokens || 0) + (r.output_tokens || 0)),
         cost: r.cost,
       });
     } catch (err) {
@@ -1792,6 +1863,9 @@ async function runFreeformComparison(transcript, model, runs) {
   const costs = okRuns.map(function(r) { return r.cost; });
   const inputTokens = okRuns.map(function(r) { return r.input_tokens; });
   const outputTokens = okRuns.map(function(r) { return r.output_tokens; });
+  const totalTokens = okRuns.map(function(r) {
+    return r.total_tokens != null ? r.total_tokens : ((r.input_tokens || 0) + (r.output_tokens || 0));
+  });
   const avgInput = avgNum(inputTokens);
   const avgOutput = avgNum(outputTokens);
 
@@ -1803,7 +1877,7 @@ async function runFreeformComparison(transcript, model, runs) {
     avg_latency: Math.round(avgNum(latencies)),
     min_latency: Math.min.apply(null, latencies),
     max_latency: Math.max.apply(null, latencies),
-    avg_tokens: Math.round(avgInput + avgOutput),
+    avg_tokens: Math.round(avgNum(totalTokens)),
     avg_input_tokens: Math.round(avgInput),
     avg_output_tokens: Math.round(avgOutput),
     est_cost: avgNum(costs),
@@ -1821,8 +1895,8 @@ app.post('/compare-freeform', async function(req, res) {
     return res.status(400).json({ error: 'models[] is required' });
   }
 
-  if (!Number.isFinite(runs) || runs < 1) runs = 3;
-  if (runs > 5) runs = 5;
+  if (!Number.isFinite(runs) || runs < 1) runs = 1;
+  if (runs > 10) runs = 10;
 
   const invalid = models.filter(function(m) {
     return !(COMPARE_MODEL_META[m] || m.indexOf('claude-') === 0 || resolveGeminiRestModels(m));

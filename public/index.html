@@ -579,7 +579,7 @@
     <div class="cmp-config-row">
       <div class="cmp-field">
         <label>Transcript</label>
-        <textarea id="cmpTranscript" placeholder="Worker said: I'm fine, just a bit late" oninput="cmpLastSttMs=null"></textarea>
+        <textarea id="cmpTranscript" placeholder="Worker said: I'm fine, just a bit late" oninput="onCmpTranscriptInput()"></textarea>
       </div>
       <div class="cmp-field">
         <label>Hazır senaryolar</label>
@@ -591,10 +591,14 @@
         <label>Run count</label>
         <input type="number" id="cmpRuns" value="5" min="1" max="10">
         <div class="cmp-presets" style="margin-top:6px">
-          <button type="button" class="cmp-preset" onclick="setCmpRuns(2)">Hızlı (2)</button>
+          <button type="button" class="cmp-preset" onclick="setCmpRuns(1)">Tek (1)</button>
           <button type="button" class="cmp-preset" onclick="setCmpRuns(5)">Standart (5)</button>
           <button type="button" class="cmp-preset" onclick="setCmpRuns(10)">Stabilite (10)</button>
         </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.35;margin-top:6px">
+          Run'lar <strong>seri</strong> çalışır. Claude ve Gemini istekleri arası 3s throttle. Stop ile durdurulabilir.
+        </div>
+        <button type="button" class="btn" style="margin-top:8px" onclick="clearCmpAccumulated()">🗑 Clear results</button>
       </div>
     </div>
     <div class="cmp-config-row">
@@ -629,7 +633,7 @@
           📁 Audio
           <input type="file" id="cmpAudioFile" accept="audio/*,.mp3,.wav,.m4a" style="display:none" onchange="cmpTranscribeFile(this)">
         </label>
-        <button class="btn primary" id="cmpRunBtn" onclick="runComparison()">▶ Run Comparison</button>
+        <button class="btn primary" id="cmpRunBtn" onclick="runComparison()">▶ Run</button>
         <button class="btn" id="cmpBatchBtn" onclick="runBatchScenarios()" title="Tüm hazır senaryoları çalıştır">📋 Batch All</button>
         <button class="btn danger" id="cmpStopBtn" onclick="stopCmpRun()" disabled>■ Stop</button>
       </div>
@@ -1536,6 +1540,7 @@ let cmpScenarios = [];
 let cmpExpected = null;
 let cmpResults = {};
 let cmpFreeformResults = {};
+let cmpAccumTranscript = null; // accumulate runs while transcript unchanged
 let compareMode = 'intent';
 let cmpBatchData = null; // { mode:'batch', models, scenarios, rows, metrics, timestamp }
 let cmpLastExport = null;
@@ -1577,17 +1582,18 @@ function switchView(view) {
   }
 }
 
-function setCmpRuns(n) {
-  document.getElementById('cmpRuns').value = n;
-}
-
 function setCompareMode(mode) {
   if (compareMode === mode) return;
   compareMode = mode;
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('mode-' + mode).classList.add('active');
+  clearCmpAccumulated(true);
+}
+
+function clearCmpAccumulated(keepModeUi) {
   cmpResults = {};
   cmpFreeformResults = {};
+  cmpAccumTranscript = null;
   cmpLastExport = null;
   cmpBatchData = null;
   destroyCmpCharts();
@@ -1603,6 +1609,137 @@ function setCompareMode(mode) {
   document.getElementById('cmpFreeformBody').innerHTML = '';
   document.getElementById('cmpSplitBody').innerHTML = '';
   document.getElementById('cmpEmpty').style.display = 'block';
+  if (!keepModeUi) {
+    const status = document.getElementById('cmpMicStatus');
+    if (status) status.textContent = 'Results cleared.';
+  }
+}
+
+function avgArr(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+/** Merge a new single-run API result into accumulated model results (intent). */
+function mergeIntentRun(existing, next, expected) {
+  const meta = CMP_MODEL_META[(next && next.model) || (existing && existing.model)] || {};
+  const model = (next && next.model) || (existing && existing.model);
+  const label = (next && next.label) || (existing && existing.label) || meta.label || model;
+  const prevRuns = (existing && existing.runs) ? existing.runs.slice() : [];
+  const newRuns = (next && next.runs && next.runs.length) ? next.runs : [{
+    run: 1,
+    ok: !!(next && next.ok),
+    latency: next && next.avg_latency,
+    intent: next && next.intent,
+    confidence: next && next.avg_confidence,
+    response: next && next.response,
+    stt_ms: next && next.avg_stt_ms,
+    stt_source: next && next.stt_source,
+    llm_ms: next && next.avg_llm_ms,
+    tts_ms: next && next.avg_tts_ms,
+    input_tokens: next && next.avg_input_tokens,
+    output_tokens: next && next.avg_output_tokens,
+    cost: next && next.est_cost,
+    error: next && next.error,
+  }];
+  const runs = prevRuns.concat(newRuns).map((r, i) => Object.assign({}, r, { run: i + 1 }));
+  const okRuns = runs.filter(r => r.ok);
+  if (!okRuns.length) {
+    return {
+      ok: false,
+      model,
+      label,
+      error: (next && next.error) || (existing && existing.error) || 'All runs failed',
+      runs,
+      total_runs: runs.length,
+      success_runs: 0,
+    };
+  }
+  const lastOk = okRuns[okRuns.length - 1];
+  const latencies = okRuns.map(r => r.latency).filter(v => v != null);
+  const avgLatencies = latencies.slice(0, 3);
+  const confidences = okRuns.map(r => r.confidence).filter(v => typeof v === 'number');
+  const inputTokens = okRuns.map(r => r.input_tokens || 0);
+  const outputTokens = okRuns.map(r => r.output_tokens || 0);
+  const costs = okRuns.map(r => r.cost || 0);
+  const sttTimes = okRuns.map(r => r.stt_ms).filter(v => v != null);
+  const llmTimes = okRuns.map(r => r.llm_ms).filter(v => v != null);
+  const ttsTimes = okRuns.map(r => r.tts_ms).filter(v => v != null);
+  const isGemini = String(model).startsWith('gemini');
+  const avgInput = avgArr(inputTokens);
+  const avgOutput = avgArr(outputTokens);
+  return {
+    ok: true,
+    model,
+    label,
+    intent: lastOk.intent,
+    avg_confidence: avgArr(confidences),
+    avg_latency: Math.round(avgArr(avgLatencies.length ? avgLatencies : latencies)),
+    avg_stt_ms: isGemini ? null : (sttTimes.length ? Math.round(avgArr(sttTimes)) : null),
+    stt_source: isGemini ? null : (lastOk.stt_source || (existing && existing.stt_source) || null),
+    avg_llm_ms: isGemini ? null : (llmTimes.length ? Math.round(avgArr(llmTimes)) : null),
+    avg_tts_ms: isGemini ? null : (ttsTimes.length ? Math.round(avgArr(ttsTimes)) : null),
+    min_latency: Math.min(...latencies),
+    max_latency: Math.max(...latencies),
+    avg_input_tokens: Math.round(avgInput),
+    avg_output_tokens: Math.round(avgOutput),
+    avg_tokens: Math.round(avgInput + avgOutput),
+    est_cost: avgArr(costs),
+    distress: lastOk.distress || null,
+    distress_signals: lastOk.distress_signals || null,
+    correct: expected ? lastOk.intent === expected : null,
+    success_runs: okRuns.length,
+    total_runs: runs.length,
+    runs,
+  };
+}
+
+function mergeFreeformRun(existing, next) {
+  const meta = CMP_MODEL_META[(next && next.model) || (existing && existing.model)] || {};
+  const model = (next && next.model) || (existing && existing.model);
+  const label = (next && next.label) || (existing && existing.label) || meta.label || model;
+  const prevRuns = (existing && existing.runs) ? existing.runs.slice() : [];
+  const newRuns = (next && next.runs && next.runs.length) ? next.runs : [{
+    run: 1,
+    ok: !!(next && next.ok),
+    latency: next && next.avg_latency,
+    response: next && next.last_response,
+    input_tokens: next && next.avg_input_tokens,
+    output_tokens: next && next.avg_output_tokens,
+    cost: next && next.est_cost,
+    error: next && next.error,
+  }];
+  const runs = prevRuns.concat(newRuns).map((r, i) => Object.assign({}, r, { run: i + 1 }));
+  const okRuns = runs.filter(r => r.ok);
+  if (!okRuns.length) {
+    return {
+      ok: false,
+      model,
+      label,
+      error: (next && next.error) || (existing && existing.error) || 'All runs failed',
+      runs,
+    };
+  }
+  const latencies = okRuns.map(r => r.latency).filter(v => v != null);
+  const inputTokens = okRuns.map(r => r.input_tokens || 0);
+  const outputTokens = okRuns.map(r => r.output_tokens || 0);
+  const costs = okRuns.map(r => r.cost || 0);
+  const avgInput = avgArr(inputTokens);
+  const avgOutput = avgArr(outputTokens);
+  return {
+    ok: true,
+    model,
+    label,
+    last_response: okRuns[okRuns.length - 1].response,
+    avg_latency: Math.round(avgArr(latencies)),
+    min_latency: Math.min(...latencies),
+    max_latency: Math.max(...latencies),
+    avg_tokens: Math.round(avgInput + avgOutput),
+    avg_input_tokens: Math.round(avgInput),
+    avg_output_tokens: Math.round(avgOutput),
+    est_cost: avgArr(costs),
+    runs,
+  };
 }
 
 function stopCmpRun() {
@@ -1611,10 +1748,17 @@ function stopCmpRun() {
   document.getElementById('cmpProgressLabel').textContent = 'Stopping...';
 }
 
+function setCmpRuns(n) {
+  const el = document.getElementById('cmpRuns');
+  if (el) el.value = n;
+}
+
 function setCmpRunning(running) {
   document.getElementById('cmpRunBtn').disabled = running;
   document.getElementById('cmpBatchBtn').disabled = running;
   document.getElementById('cmpStopBtn').disabled = !running;
+  const runsInput = document.getElementById('cmpRuns');
+  if (runsInput) runsInput.disabled = running;
 }
 
 function showCmpProgress(done, total, label) {
@@ -1676,6 +1820,17 @@ async function loadCmpScenarios() {
   }
 }
 
+function onCmpTranscriptInput() {
+  cmpLastSttMs = null;
+  const t = document.getElementById('cmpTranscript').value.trim();
+  if (cmpAccumTranscript != null && t !== cmpAccumTranscript) {
+    // Soft reset: keep UI but mark next Run as a new series
+    cmpAccumTranscript = null;
+    cmpResults = {};
+    cmpFreeformResults = {};
+  }
+}
+
 function onScenarioSelect() {
   const idx = document.getElementById('cmpScenario').value;
   if (idx === '') { cmpExpected = null; return; }
@@ -1684,6 +1839,9 @@ function onScenarioSelect() {
   document.getElementById('cmpTranscript').value = s.text;
   cmpExpected = s.expected || null;
   cmpLastSttMs = null;
+  cmpAccumTranscript = null;
+  cmpResults = {};
+  cmpFreeformResults = {};
 }
 
 function cmpStopDeepgramMic(flush) {
@@ -2599,112 +2757,246 @@ function renderCmpCharts(results, opts) {
 }
 
 async function runComparison() {
+  let n = parseInt(document.getElementById('cmpRuns').value, 10);
+  if (!Number.isFinite(n) || n < 1) n = 1;
+  if (n > 10) n = 10;
+  document.getElementById('cmpRuns').value = n;
+  return runComparisonSeries(n);
+}
+
+async function runComparisonSeries(seriesCount) {
   const transcript = document.getElementById('cmpTranscript').value.trim();
   const models = getSelectedCmpModels();
-  let runs = parseInt(document.getElementById('cmpRuns').value, 10);
+  const runs = 1; // each iteration = one API run; results accumulate in the table
   if (!transcript) { alert('Transcript girin'); return; }
   if (!models.length) { alert('En az bir model seçin'); return; }
-  if (!Number.isFinite(runs) || runs < 1) runs = 5;
-  if (compareMode === 'freeform' && runs > 5) runs = 5;
-  else if (runs > 10) runs = 10;
+  if (!Number.isFinite(seriesCount) || seriesCount < 1) seriesCount = 1;
 
   const matched = cmpScenarios.find(s => s.text === transcript);
   const expected = matched ? matched.expected : null;
   cmpExpected = expected;
   cmpStopFlag = false;
   cmpBatchData = null;
-  cmpResults = {};
-  cmpFreeformResults = {};
+
+  // New transcript → start a fresh accumulation series
+  if (cmpAccumTranscript !== transcript) {
+    cmpResults = {};
+    cmpFreeformResults = {};
+    cmpAccumTranscript = transcript;
+  }
 
   setCmpRunning(true);
   document.getElementById('cmpEmpty').style.display = 'none';
-  document.getElementById('cmpTableWrap').classList.remove('show');
-  document.getElementById('cmpFreeformTableWrap').classList.remove('show');
-  document.getElementById('cmpSplitWrap').classList.remove('show');
   document.getElementById('cmpBatchTableWrap').classList.remove('show');
-  document.getElementById('cmpCharts').classList.remove('show');
-  document.getElementById('cmpSummaryBox').classList.remove('show');
-  document.getElementById('cmpMetrics').classList.remove('show');
   document.getElementById('cmpToolbar').classList.add('show');
-  document.getElementById('cmpToolbarMeta').textContent =
-    compareMode === 'both' ? 'Intent + Free-Form comparison' :
-    compareMode === 'freeform' ? 'Free-Form comparison' : 'Intent comparison';
   showQuotaBanner([]);
-  showCmpProgress(0, 1, 'Starting...');
 
   let summaryLines = [];
   let chartResults = {};
   let chartOpts = { showConfidence: compareMode !== 'freeform' };
+  let completedInSeries = 0;
 
   try {
-    if (compareMode === 'intent') {
-      document.getElementById('cmpTableWrap').classList.add('show');
-      const tbody = document.getElementById('cmpTableBody');
-      tbody.innerHTML = models.map(renderCmpLoadingRow).join('');
+    for (let seriesIdx = 0; seriesIdx < seriesCount; seriesIdx++) {
+      if (cmpStopFlag) break;
 
-      let done = 0;
-      await Promise.all(models.map(async (model) => {
-        if (cmpStopFlag) return;
-        try {
-          cmpResults[model] = await fetchModelCompare(transcript, model, runs, expected);
-        } catch (e) {
-          cmpResults[model] = { ok: false, error: e.message, model, label: (CMP_MODEL_META[model] || {}).label || model };
+      const existingRunCount = Math.max(
+        0,
+        ...models.map(m => {
+          const a = (cmpResults[m] && cmpResults[m].runs && cmpResults[m].runs.length) || 0;
+          const b = (cmpFreeformResults[m] && cmpFreeformResults[m].runs && cmpFreeformResults[m].runs.length) || 0;
+          return Math.max(a, b);
+        })
+      );
+      const nextRunNum = existingRunCount + 1;
+      const seriesLabel = seriesCount > 1
+        ? `Run ${seriesIdx + 1}/${seriesCount} çalışıyor...`
+        : `Run #${nextRunNum} çalışıyor...`;
+
+      document.getElementById('cmpCharts').classList.remove('show');
+      document.getElementById('cmpSummaryBox').classList.remove('show');
+      document.getElementById('cmpMetrics').classList.remove('show');
+      document.getElementById('cmpToolbarMeta').textContent =
+        (compareMode === 'both' ? 'Intent + Free-Form' :
+        compareMode === 'freeform' ? 'Free-Form' : 'Intent') +
+        ` · ${seriesLabel}`;
+      showCmpProgress(seriesIdx, seriesCount, seriesLabel);
+
+      if (compareMode === 'intent') {
+        document.getElementById('cmpTableWrap').classList.add('show');
+        document.getElementById('cmpFreeformTableWrap').classList.remove('show');
+        document.getElementById('cmpSplitWrap').classList.remove('show');
+        const tbody = document.getElementById('cmpTableBody');
+        tbody.innerHTML = models.map(m => {
+          if (cmpResults[m] && cmpResults[m].ok) return renderCmpResultRow(m, cmpResults[m]);
+          return renderCmpLoadingRow(m);
+        }).join('');
+
+        let done = 0;
+        const claudeModels = models.filter(m => String(m).startsWith('claude'));
+        const otherModels = models.filter(m => !String(m).startsWith('claude'));
+
+        async function runOneModel(model) {
+          if (cmpStopFlag) return;
+          try {
+            const single = await fetchModelCompare(transcript, model, runs, expected);
+            cmpResults[model] = mergeIntentRun(cmpResults[model], single, expected);
+          } catch (e) {
+            cmpResults[model] = mergeIntentRun(cmpResults[model], {
+              ok: false, error: e.message, model, label: (CMP_MODEL_META[model] || {}).label || model, runs: [{ run: 1, ok: false, error: e.message }]
+            }, expected);
+          }
+          done++;
+          showCmpProgress(
+            seriesIdx + done / models.length,
+            seriesCount,
+            `${seriesLabel} · ${(CMP_MODEL_META[model] || {}).label || model} (${done}/${models.length})`
+          );
+          tbody.innerHTML = models.map(m => {
+            if (cmpResults[m]) return renderCmpResultRow(m, cmpResults[m]);
+            return renderCmpLoadingRow(m);
+          }).join('');
         }
-        done++;
-        showCmpProgress(done, models.length, `${(CMP_MODEL_META[model] || {}).label || model} done (${done}/${models.length})`);
-        const loadingRow = document.getElementById('cmp-row-' + modelDomId(model));
-        if (loadingRow) {
-          const tmp = document.createElement('tbody');
-          tmp.innerHTML = renderCmpResultRow(model, cmpResults[model]);
-          loadingRow.replaceWith(...tmp.children);
+
+        // All models serial; 3s after each model-run (Claude + Gemini). No extra run-to-run wait.
+        const orderedModels = otherModels.concat(claudeModels);
+        for (let mi = 0; mi < orderedModels.length; mi++) {
+          if (cmpStopFlag) break;
+          await runOneModel(orderedModels[mi]);
+          const isLastModel = mi === orderedModels.length - 1;
+          const isLastSeries = seriesIdx === seriesCount - 1;
+          if (!cmpStopFlag && !(isLastSeries && isLastModel)) {
+            showCmpProgress(
+              seriesIdx + (done / models.length),
+              seriesCount,
+              `${(CMP_MODEL_META[orderedModels[mi]] || {}).label || orderedModels[mi]} tamam · 3s bekleniyor...`
+            );
+            await new Promise(r => setTimeout(r, 3000));
+          }
         }
-      }));
-      tbody.innerHTML = models.map(m => renderCmpResultRow(m, cmpResults[m] || { ok: false, error: 'Stopped', model: m, label: (CMP_MODEL_META[m] || {}).label || m })).join('');
-      chartResults = cmpResults;
-      summaryLines = buildCmpSummary(cmpResults);
+        tbody.innerHTML = models.map(m => renderCmpResultRow(m, cmpResults[m] || { ok: false, error: 'Stopped', model: m, label: (CMP_MODEL_META[m] || {}).label || m })).join('');
+        chartResults = cmpResults;
+        summaryLines = buildCmpSummary(cmpResults);
 
-      if (expected) {
-        const row = { text: transcript, category: matched ? matched.category : '', expected, models: {} };
-        models.forEach(m => { row.models[m] = cmpResults[m]; });
-        renderCmpMetrics(computeBatchMetrics(models, [row]), models);
+        if (expected) {
+          const row = { text: transcript, category: matched ? matched.category : '', expected, models: {} };
+          models.forEach(m => { row.models[m] = cmpResults[m]; });
+          renderCmpMetrics(computeBatchMetrics(models, [row]), models);
+        }
+      } else if (compareMode === 'freeform') {
+        document.getElementById('cmpFreeformTableWrap').classList.add('show');
+        document.getElementById('cmpTableWrap').classList.remove('show');
+        document.getElementById('cmpSplitWrap').classList.remove('show');
+        document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
+          cmpFreeformResults[m] && cmpFreeformResults[m].ok
+            ? renderCmpFreeformRow(m, cmpFreeformResults[m])
+            : `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</td></tr>`
+        ).join('');
+
+        const claudeModels = models.filter(m => String(m).startsWith('claude'));
+        const otherModels = models.filter(m => !String(m).startsWith('claude'));
+
+        async function runOneFreeform(model) {
+          if (cmpStopFlag) return;
+          const fresh = await fetchCompareFreeformBatch(transcript, [model], runs);
+          cmpFreeformResults[model] = mergeFreeformRun(
+            cmpFreeformResults[model],
+            fresh[model] || { ok: false, error: 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model }
+          );
+          document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
+            cmpFreeformResults[m]
+              ? renderCmpFreeformRow(m, cmpFreeformResults[m])
+              : `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</td></tr>`
+          ).join('');
+        }
+
+        const orderedFf = otherModels.concat(claudeModels);
+        for (let mi = 0; mi < orderedFf.length; mi++) {
+          if (cmpStopFlag) break;
+          await runOneFreeform(orderedFf[mi]);
+          const isLastModel = mi === orderedFf.length - 1;
+          const isLastSeries = seriesIdx === seriesCount - 1;
+          if (!cmpStopFlag && !(isLastSeries && isLastModel)) {
+            showCmpProgress(seriesIdx + 1, seriesCount, `${(CMP_MODEL_META[orderedFf[mi]] || {}).label || orderedFf[mi]} tamam · 3s bekleniyor...`);
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        }
+        document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
+          renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: 'No result', model: m, label: (CMP_MODEL_META[m] || {}).label || m })
+        ).join('');
+        chartResults = cmpFreeformResults;
+        summaryLines = buildFreeformSummary(cmpFreeformResults);
+      } else {
+        document.getElementById('cmpSplitWrap').classList.add('show');
+        document.getElementById('cmpTableWrap').classList.remove('show');
+        document.getElementById('cmpFreeformTableWrap').classList.remove('show');
+        document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
+          `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</div></div>`
+        ).join('');
+
+        const claudeModels = models.filter(m => String(m).startsWith('claude'));
+        const otherModels = models.filter(m => !String(m).startsWith('claude'));
+
+        async function runOneBoth(model) {
+          if (cmpStopFlag) return;
+          const [intentMap, freeformMap] = await Promise.all([
+            fetchCompareIntentBatch(transcript, [model], runs, expected),
+            fetchCompareFreeformBatch(transcript, [model], runs),
+          ]);
+          cmpResults[model] = mergeIntentRun(cmpResults[model], intentMap[model] || { ok: false, error: 'No result', model }, expected);
+          cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], freeformMap[model] || { ok: false, error: 'No result', model });
+          document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
+            (cmpResults[m] || cmpFreeformResults[m])
+              ? renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
+              : `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</div></div>`
+          ).join('');
+        }
+
+        const orderedBoth = otherModels.concat(claudeModels);
+        for (let mi = 0; mi < orderedBoth.length; mi++) {
+          if (cmpStopFlag) break;
+          await runOneBoth(orderedBoth[mi]);
+          const isLastModel = mi === orderedBoth.length - 1;
+          const isLastSeries = seriesIdx === seriesCount - 1;
+          if (!cmpStopFlag && !(isLastSeries && isLastModel)) {
+            showCmpProgress(seriesIdx + 1, seriesCount, `${(CMP_MODEL_META[orderedBoth[mi]] || {}).label || orderedBoth[mi]} tamam · 3s bekleniyor...`);
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        }
+
+        document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
+          renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
+        ).join('');
+        chartResults = cmpResults;
+        summaryLines = buildBothSummary(cmpResults, cmpFreeformResults);
+
+        if (expected) {
+          const row = { text: transcript, category: matched ? matched.category : '', expected, models: {} };
+          models.forEach(m => { row.models[m] = cmpResults[m]; });
+          renderCmpMetrics(computeBatchMetrics(models, [row]), models);
+        }
       }
-    } else if (compareMode === 'freeform') {
-      document.getElementById('cmpFreeformTableWrap').classList.add('show');
-      document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-        `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — running...</td></tr>`
-      ).join('');
-      showCmpProgress(0, 1, 'Free-form models running...');
-      cmpFreeformResults = await fetchCompareFreeformBatch(transcript, models, runs);
-      document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-        renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: 'No result', model: m, label: (CMP_MODEL_META[m] || {}).label || m })
-      ).join('');
-      chartResults = cmpFreeformResults;
-      summaryLines = buildFreeformSummary(cmpFreeformResults);
-    } else {
-      document.getElementById('cmpSplitWrap').classList.add('show');
-      document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-        `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — running...</div></div>`
-      ).join('');
-      showCmpProgress(0, 1, 'Intent + Free-Form running...');
 
-      const [intentMap, freeformMap] = await Promise.all([
-        fetchCompareIntentBatch(transcript, models, runs, expected),
-        fetchCompareFreeformBatch(transcript, models, runs),
-      ]);
-      cmpResults = intentMap;
-      cmpFreeformResults = freeformMap;
+      completedInSeries++;
 
-      document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-        renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
-      ).join('');
-      chartResults = cmpResults;
-      summaryLines = buildBothSummary(cmpResults, cmpFreeformResults);
+      // Update summary/charts after each run so user sees live results
+      document.getElementById('cmpSummaryLines').innerHTML = summaryLines.map(l => `<div>${l}</div>`).join('');
+      document.getElementById('cmpSummaryBox').classList.add('show');
+      document.getElementById('cmpCharts').classList.add('show');
+      renderCmpCharts(chartResults, chartOpts);
 
-      if (expected) {
-        const row = { text: transcript, category: matched ? matched.category : '', expected, models: {} };
-        models.forEach(m => { row.models[m] = cmpResults[m]; });
-        renderCmpMetrics(computeBatchMetrics(models, [row]), models);
-      }
+      const totalRunsShown = Math.max(
+        1,
+        ...models.map(m => (cmpResults[m] && cmpResults[m].runs && cmpResults[m].runs.length) ||
+          (cmpFreeformResults[m] && cmpFreeformResults[m].runs && cmpFreeformResults[m].runs.length) || 0)
+      );
+      document.getElementById('cmpToolbarMeta').textContent =
+        (compareMode === 'both' ? 'Intent + Free-Form' :
+        compareMode === 'freeform' ? 'Free-Form' : 'Intent') +
+        ` · ${totalRunsShown} run(s) accumulated` +
+        (seriesCount > 1 ? ` · series ${completedInSeries}/${seriesCount}` : '');
+
+      if (cmpStopFlag) break;
     }
   } catch (e) {
     alert('Comparison failed: ' + e.message);
@@ -2713,16 +3005,17 @@ async function runComparison() {
     return;
   }
 
-  document.getElementById('cmpSummaryLines').innerHTML = summaryLines.map(l => `<div>${l}</div>`).join('');
-  document.getElementById('cmpSummaryBox').classList.add('show');
-  document.getElementById('cmpCharts').classList.add('show');
-  renderCmpCharts(chartResults, chartOpts);
-
   const errs = [
     ...Object.values(cmpResults).filter(r => r && !r.ok).map(r => r.error),
     ...Object.values(cmpFreeformResults).filter(r => r && !r.ok).map(r => r.error),
   ];
   showQuotaBanner(errs);
+
+  const totalRunsShown = Math.max(
+    1,
+    ...models.map(m => (cmpResults[m] && cmpResults[m].runs && cmpResults[m].runs.length) ||
+      (cmpFreeformResults[m] && cmpFreeformResults[m].runs && cmpFreeformResults[m].runs.length) || 0)
+  );
 
   const entry = {
     mode: 'single',
@@ -2730,7 +3023,7 @@ async function runComparison() {
     transcript,
     expected,
     models,
-    runs,
+    runs: totalRunsShown,
     results: cmpResults,
     freeformResults: cmpFreeformResults,
     timestamp: new Date().toISOString(),
@@ -2739,7 +3032,14 @@ async function runComparison() {
   cmpLastExport = entry;
   saveCmpHistory(entry);
 
-  hideCmpProgress();
+  showCmpProgress(
+    completedInSeries,
+    seriesCount,
+    cmpStopFlag
+      ? `Durduruldu · ${completedInSeries}/${seriesCount} run`
+      : (seriesCount > 1 ? `Tamam · ${completedInSeries}/${seriesCount} run` : `Run #${totalRunsShown} tamam`)
+  );
+  setTimeout(hideCmpProgress, 1200);
   setCmpRunning(false);
 }
 
@@ -2749,7 +3049,7 @@ async function runBatchScenarios() {
   if (!cmpScenarios.length) await loadCmpScenarios();
   if (!cmpScenarios.length) { alert('Senaryolar yüklenemedi'); return; }
 
-  // Batch = accuracy sweep: 1 run per scenario (fast). Use single Run Comparison + Stabilite for consistency.
+  // Batch = accuracy sweep: 1 run per scenario (fast).
   const runs = 1;
 
   cmpStopFlag = false;
@@ -2779,8 +3079,11 @@ async function runBatchScenarios() {
 
     const row = { text: s.text, category: s.category, expected: s.expected, models: {} };
 
-    // Models in parallel per scenario; backend Gemini queue serializes Gemini calls.
-    await Promise.all(models.map(async (model) => {
+    // Claude serial per scenario; Gemini can stay parallel
+    const claudeModels = models.filter(m => String(m).startsWith('claude'));
+    const otherModels = models.filter(m => !String(m).startsWith('claude'));
+
+    async function runBatchModel(model) {
       if (cmpStopFlag) {
         row.models[model] = { ok: false, error: 'Stopped', model, label: (CMP_MODEL_META[model] || {}).label || model };
         return;
@@ -2793,7 +3096,12 @@ async function runBatchScenarios() {
         row.models[model] = { ok: false, error: e.message, model, label: (CMP_MODEL_META[model] || {}).label || model };
         allErrors.push(e.message);
       }
-    }));
+    }
+
+    await Promise.all(otherModels.map(runBatchModel));
+    for (const model of claudeModels) {
+      await runBatchModel(model);
+    }
 
     rows.push(row);
     renderBatchTable(models, rows);
