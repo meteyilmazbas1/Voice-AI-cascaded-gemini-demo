@@ -160,10 +160,244 @@
   .cmp-field textarea:focus, .cmp-field select:focus, .cmp-field input:focus { outline: none; border-color: var(--accent); }
   .cmp-field select, .cmp-field input[type=number] { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 10px; font-size: 12px; }
   .cmp-field input[type=number] { width: 70px; }
-  .cmp-models { display: flex; gap: 8px; flex-wrap: wrap; }
-  .cmp-model-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--surface2); font-size: 12px; user-select: none; }
-  .cmp-model-check.checked { border-color: var(--accent); background: rgba(29,158,117,0.08); }
+  .cmp-panels {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 4px 0 12px;
+  }
+  .cmp-panel {
+    flex: 1 1 0;
+    min-width: 280px;
+    max-width: 440px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .cmp-panel.disabled { opacity: 0.45; pointer-events: none; }
+  .cmp-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .cmp-panel-header label { display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; margin: 0; user-select: none; }
+  .cmp-panel-header input[type=checkbox] { accent-color: var(--accent); }
+  .cmp-panel-stt-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .cmp-panel-stt-badge.deepgram {
+    background: rgba(63,185,80,0.12);
+    color: #3fb950;
+    border: 1px solid rgba(63,185,80,0.3);
+  }
+  .cmp-panel-stt-badge.gemini {
+    background: rgba(66,133,244,0.12);
+    color: #4285f4;
+    border: 1px solid rgba(66,133,244,0.35);
+  }
+  .cmp-panel-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .cmp-panel-input-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .cmp-panel-input-actions .btn { font-size: 11px; padding: 5px 10px; }
+  .cmp-panel-transcript {
+    width: 100%;
+    min-height: 72px;
+    resize: vertical;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    line-height: 1.4;
+    box-sizing: border-box;
+  }
+  .cmp-panel-transcript:focus { outline: none; border-color: var(--accent); }
+  .cmp-panel-stt-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--muted);
+    padding: 8px;
+    background: var(--surface2);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .cmp-panel-stt-meta .stt-row { display: flex; justify-content: space-between; gap: 8px; }
+  .cmp-panel-stt-meta .stt-file { font-size: 10px; color: var(--info, #58a6ff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmp-panel-results {
+    border-top: 1px solid var(--border);
+    padding: 10px 12px 12px;
+    min-height: 120px;
+    max-height: 380px;
+    overflow-y: auto;
+  }
+  .cmp-panel-results-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .cmp-panel-run {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    overflow: hidden;
+    background: var(--surface2);
+  }
+  .cmp-panel-run-main {
+    display: grid;
+    grid-template-columns: 36px 1fr auto auto;
+    gap: 8px;
+    padding: 8px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    align-items: center;
+  }
+  .cmp-panel-run-main:hover { background: rgba(255,255,255,0.03); }
+  .cmp-panel-run-main .intent { font-weight: 600; }
+  .cmp-panel-run-bd {
+    display: none;
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .cmp-panel-run.open .cmp-panel-run-bd { display: block; }
+  .cmp-panel-run-empty { font-size: 11px; color: var(--muted); padding: 8px 0; }
+  .cmp-panel-run-avg {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: rgba(88, 166, 255, 0.08);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.01em;
+  }
+  .cmp-panel-status { font-size: 10px; color: var(--muted); min-height: 14px; }
+  .cmp-models { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+  .cmp-model-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface2);
+    min-width: 220px;
+    max-width: 280px;
+  }
+  .cmp-model-card.checked { border-color: var(--accent); background: rgba(29,158,117,0.08); }
+  .cmp-model-check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; user-select: none; }
   .cmp-model-check input { display: none; }
+  .model-audio-upload {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .model-audio-upload .audio-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .model-audio-input {
+    font-size: 11px;
+    max-width: 140px;
+    color: var(--text);
+  }
+  .audio-file-name {
+    font-size: 10px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+  }
+  .audio-file-name.empty { color: var(--muted); }
+  .clear-audio-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    padding: 1px 6px;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .clear-audio-btn:hover { color: var(--danger); border-color: var(--danger); }
+  .run-latency-cell { display: flex; flex-direction: column; gap: 2px; }
+  .total-latency.clickable {
+    cursor: pointer;
+    color: var(--text);
+    font-weight: 600;
+    user-select: none;
+  }
+  .total-latency.clickable:hover { color: var(--accent); }
+  .run-breakdown {
+    font-size: 10px;
+    color: var(--muted);
+    padding: 4px 0 2px;
+    line-height: 1.4;
+  }
+  .run-audio-name {
+    font-size: 10px;
+    color: var(--info, #58a6ff);
+    margin-top: 2px;
+  }
+  .run-transcript {
+    font-size: 10px;
+    color: var(--text);
+    margin-top: 4px;
+    line-height: 1.35;
+    word-break: break-word;
+  }
+  .stt-conf { font-weight: 600; }
+  .stt-conf.high { color: #3fb950; }
+  .stt-conf.mid { color: var(--warn, #e3b341); }
+  .stt-conf.low { color: var(--danger, #f85149); }
+  .run-transcript-diff-warn {
+    margin: 10px 14px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(227, 179, 65, 0.12);
+    border: 1px solid rgba(227, 179, 65, 0.4);
+    color: var(--warn, #e3b341);
+    font-size: 12px;
+    display: none;
+  }
+  .run-transcript-diff-warn.show { display: block; }
+  .cmp-model-audio-tag {
+    display: block;
+    font-size: 10px;
+    color: var(--info, #58a6ff);
+    margin-top: 4px;
+    font-weight: 400;
+  }
   .cmp-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .cmp-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .cmp-actions .btn.primary { min-width: 140px; }
@@ -198,6 +432,26 @@
   .cmp-run-row { display: grid; grid-template-columns: 50px 80px 140px 70px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
   .cmp-run-row:last-child { border-bottom: none; }
   .cmp-run-row .intent { color: var(--text); font-weight: 600; }
+  .cmp-mode-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .cmp-mode-badge.live {
+    background: rgba(248, 81, 73, 0.12);
+    color: #f85149;
+    border: 1px solid rgba(248, 81, 73, 0.35);
+  }
+  .cmp-mode-badge.rest {
+    background: rgba(139, 148, 158, 0.12);
+    color: #8b949e;
+    border: 1px solid rgba(139, 148, 158, 0.3);
+  }
   .latency-breakdown {
     display: flex;
     align-items: center;
@@ -578,71 +832,37 @@
   <div class="cmp-config">
     <div class="cmp-config-row">
       <div class="cmp-field">
-        <label>Transcript</label>
-        <textarea id="cmpTranscript" placeholder="Worker said: I'm fine, just a bit late" oninput="onCmpTranscriptInput()"></textarea>
-      </div>
-      <div class="cmp-field">
-        <label>Hazır senaryolar</label>
+        <label>Hazır senaryolar (tüm panellere yazar)</label>
         <select id="cmpScenario" style="min-width:280px" onchange="onScenarioSelect()">
           <option value="">— Senaryo seç —</option>
         </select>
       </div>
       <div class="cmp-field">
         <label>Run count</label>
-        <input type="number" id="cmpRuns" value="5" min="1" max="10">
+        <input type="number" id="cmpRuns" value="5" min="1" max="20">
         <div class="cmp-presets" style="margin-top:6px">
           <button type="button" class="cmp-preset" onclick="setCmpRuns(1)">Tek (1)</button>
           <button type="button" class="cmp-preset" onclick="setCmpRuns(5)">Standart (5)</button>
           <button type="button" class="cmp-preset" onclick="setCmpRuns(10)">Stabilite (10)</button>
-        </div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.35;margin-top:6px">
-          Run'lar <strong>seri</strong> çalışır. Claude ve Gemini istekleri arası 3s throttle. Stop ile durdurulabilir.
-        </div>
-        <button type="button" class="btn" style="margin-top:8px" onclick="clearCmpAccumulated()">🗑 Clear results</button>
-      </div>
-    </div>
-    <div class="cmp-config-row">
-      <div class="cmp-field" style="flex:1">
-        <label>Modeller</label>
-        <div class="cmp-models" id="cmpModels">
-          <label class="cmp-model-check checked" data-model="claude-haiku-4-5" onclick="toggleCmpModel(this)">
-            <input type="checkbox" checked>
-            <span class="cmp-dot" style="background:#3fb950"></span>
-            Claude Haiku 4.5
-          </label>
-          <label class="cmp-model-check checked" data-model="claude-sonnet-4-6" onclick="toggleCmpModel(this)">
-            <input type="checkbox" checked>
-            <span class="cmp-dot" style="background:#a371f7"></span>
-            Claude Sonnet 4.6
-          </label>
-          <label class="cmp-model-check checked" data-model="gemini-2.0-flash-live-001" onclick="toggleCmpModel(this)">
-            <input type="checkbox" checked>
-            <span class="cmp-dot" style="background:#4285f4"></span>
-            Gemini 2.0 Flash Live
-          </label>
-          <label class="cmp-model-check checked" data-model="gemini-3.1-flash-live-preview" onclick="toggleCmpModel(this)">
-            <input type="checkbox" checked>
-            <span class="cmp-dot" style="background:#fbbc04"></span>
-            Gemini 3.1 Flash Live
-          </label>
+          <button type="button" class="cmp-preset" onclick="setCmpRuns(20)">Uzun (20)</button>
         </div>
       </div>
-      <div class="cmp-actions">
-        <button class="btn" id="cmpMicBtn" onclick="cmpToggleMic()">🎤 Mic</button>
-        <label class="btn" style="cursor:pointer;margin:0">
-          📁 Audio
-          <input type="file" id="cmpAudioFile" accept="audio/*,.mp3,.wav,.m4a" style="display:none" onchange="cmpTranscribeFile(this)">
-        </label>
+      <div class="cmp-actions" style="align-self:flex-end">
         <button class="btn primary" id="cmpRunBtn" onclick="runComparison()">▶ Run</button>
         <button class="btn" id="cmpBatchBtn" onclick="runBatchScenarios()" title="Tüm hazır senaryoları çalıştır">📋 Batch All</button>
         <button class="btn danger" id="cmpStopBtn" onclick="stopCmpRun()" disabled>■ Stop</button>
+        <button type="button" class="btn" onclick="clearCmpAccumulated()">🗑 Clear</button>
       </div>
     </div>
-    <div id="cmpMicStatus" style="font-size:11px;color:var(--muted)"></div>
-    <div class="mode-toggle">
+    <div style="font-size:11px;color:var(--muted);line-height:1.35;margin-top:4px">
+      Her panel bağımsız: kendi mic/dosya STT’si + kendi transcript’i. Run → her panel kendi transcript’i ile LLM+TTS.
+      Claude: Deepgram Nova-3 · Gemini: Live inputTranscription. İstekler arası 3s throttle.
+    </div>
+    <textarea id="cmpTranscript" style="display:none" aria-hidden="true"></textarea>
+    <div class="mode-toggle" style="margin-top:10px">
       <button type="button" class="mode-btn active" id="mode-intent" onclick="setCompareMode('intent')">
         Intent Mode
-        <span class="mode-sub">JSON → hazır cevap</span>
+        <span class="mode-sub">Panel karşılaştırması</span>
       </button>
       <button type="button" class="mode-btn" id="mode-freeform" onclick="setCompareMode('freeform')">
         Free-Form Mode
@@ -659,6 +879,12 @@
     </div>
   </div>
 
+  <div class="run-transcript-diff-warn" id="cmpTranscriptDiffWarn">⚠️ Modeller arası transkript farkı tespit edildi</div>
+  <div class="cmp-panels" id="cmpPanels"></div>
+  <div id="cmpMicStatus" style="font-size:11px;color:var(--muted);display:none"></div>
+  <!-- legacy model check container kept for getSelectedCmpModels compatibility (filled by initCmpPanels) -->
+  <div class="cmp-models" id="cmpModels" style="display:none"></div>
+
   <div class="cmp-quota" id="cmpQuotaBanner"></div>
 
   <div class="cmp-toolbar" id="cmpToolbar">
@@ -674,15 +900,14 @@
     <div class="cmp-summary-lines" id="cmpSummaryLines"></div>
   </div>
 
-  <div class="cmp-table-wrap" id="cmpTableWrap">
-    <p class="cmp-note">ⓘ Tüm modeller aynı minimal JSON şemasını kullanıyor (intent + confidence + distress) — adil latency karşılaştırması için response metni koddan map ediliyor.</p>
+  <div class="cmp-table-wrap" id="cmpTableWrap" style="display:none">
     <table class="cmp-table">
       <thead>
         <tr>
           <th>Model</th>
           <th>Intent (son run)</th>
           <th>Avg Confidence</th>
-          <th>Avg Latency <span class="breakdown-tip" data-tip="İlk 3 run ortalaması — API throttling etkisini dışlamak için">ⓘ</span></th>
+          <th>Avg Latency</th>
           <th>Min</th>
           <th>Max</th>
           <th>Avg Tokens</th>
@@ -700,7 +925,7 @@
         <tr>
           <th>Model</th>
           <th>Response (son run)</th>
-          <th>Avg Latency <span class="breakdown-tip" data-tip="İlk 3 run ortalaması — API throttling etkisini dışlamak için">ⓘ</span></th>
+          <th>Avg Latency</th>
           <th>Min</th>
           <th>Max</th>
           <th>Avg Tokens</th>
@@ -724,7 +949,7 @@
 
   <div class="cmp-charts" id="cmpCharts">
     <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Latency (avg ± min/max) <span class="breakdown-tip" data-tip="İlk 3 run ortalaması — API throttling etkisini dışlamak için">ⓘ</span></div>
+      <div class="cmp-chart-title">Latency (avg ± min/max)</div>
       <canvas id="chartLatency"></canvas>
     </div>
     <div class="cmp-chart-card">
@@ -750,7 +975,7 @@
     <div id="cmpHistoryList"></div>
   </div>
 
-  <div class="cmp-empty" id="cmpEmpty">Transcript girin veya <b>Batch All</b> ile tüm senaryoları çalıştırın. Accuracy, False SAFE ve distress metrikleri batch sonrası görünür.</div>
+  <div class="cmp-empty" id="cmpEmpty">Her panelde transcript gir (veya mic/dosya STT) → <b>Run</b>. Batch All senaryo doğruluğu için.</div>
 </div>
 
 <audio id="audioPlayer"></audio>
@@ -1437,6 +1662,29 @@ function sendMock(text) {
   ws.send(JSON.stringify({ type: 'mock_transcript', text }));
 }
 
+async function getAudioFileDurationSeconds(file) {
+  return new Promise(function(resolve) {
+    try {
+      const url = URL.createObjectURL(file);
+      const audioEl = new Audio();
+      audioEl.preload = 'metadata';
+      const done = function(sec) {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+        resolve(sec);
+      };
+      audioEl.onloadedmetadata = function() {
+        const d = audioEl.duration;
+        if (Number.isFinite(d) && d > 0) done(Math.round(d * 1000) / 1000);
+        else done(null);
+      };
+      audioEl.onerror = function() { done(null); };
+      audioEl.src = url;
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
 async function sendAudioFile() {
   if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
   const input = document.getElementById('audioFileInput');
@@ -1451,6 +1699,9 @@ async function sendAudioFile() {
     const fileBytes = new Uint8Array(arrayBuffer);
     const magic = String.fromCharCode(fileBytes[0] || 0, fileBytes[1] || 0, fileBytes[2] || 0, fileBytes[3] || 0);
     console.log('[Audio File] name:', file.name, '| size:', fileBytes.length, '| magic:', JSON.stringify(magic));
+
+    const audioDurationSec = await getAudioFileDurationSeconds(file);
+    console.log('[Audio File] duration (HTML Audio API):', audioDurationSec, 's');
 
     if (pipelineMode === 'gemini') {
       status.textContent = 'Converting to PCM...';
@@ -1472,7 +1723,9 @@ async function sendAudioFile() {
       for (let i = 0; i < mono.length; i++) {
         pcmBuffer[i] = Math.max(-32768, Math.min(32767, Math.round(mono[i] * 32767)));
       }
-      const durationSec = (mono.length / TARGET_RATE).toFixed(2);
+      const durationSec = audioDurationSec != null
+        ? audioDurationSec
+        : Number((mono.length / TARGET_RATE).toFixed(2));
       ws.send(pcmBuffer.buffer.slice(pcmBuffer.byteOffset, pcmBuffer.byteOffset + pcmBuffer.byteLength));
       status.textContent = `✓ Sent ${durationSec}s to Gemini`;
       await audioCtx.close();
@@ -1485,7 +1738,7 @@ async function sendAudioFile() {
     ws.send(JSON.stringify({
       type: 'audio_file_start',
       filename: file.name,
-      duration: null,
+      duration: audioDurationSec,
       size: fileBytes.length,
       mime: file.type || '',
     }));
@@ -1496,7 +1749,8 @@ async function sendAudioFile() {
       await new Promise(r => setTimeout(r, 5));
     }
     ws.send(JSON.stringify({ type: 'audio_file_end' }));
-    status.textContent = '✓ Sent ' + file.name + ' (' + Math.round(fileBytes.length / 1024) + ' KB)';
+    status.textContent = '✓ Sent ' + file.name + ' (' + Math.round(fileBytes.length / 1024) + ' KB)'
+      + (audioDurationSec != null ? (' · ' + audioDurationSec + 's') : '');
   } catch (e) {
     status.textContent = '✗ Error: ' + e.message;
     console.error('Audio file error:', e);
@@ -1510,15 +1764,13 @@ setInterval(updateAlertTimes, 60000);
 const CMP_MODEL_ORDER = [
   'claude-haiku-4-5',
   'claude-sonnet-4-6',
-  'gemini-2.0-flash-live-001',
   'gemini-3.1-flash-live-preview',
 ];
 
 const CMP_MODEL_META = {
   'claude-haiku-4-5': { label: 'Claude Haiku 4.5', color: '#3fb950' },
   'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', color: '#a371f7' },
-  'gemini-2.0-flash-live-001': { label: 'Gemini 2.0 Flash Live', color: '#4285f4' },
-  'gemini-3.1-flash-live-preview': { label: 'Gemini 3.1 Flash Live', color: '#fbbc04' },
+  'gemini-3.1-flash-live-preview': { label: 'Gemini 3.1 Flash Live', color: '#4285f4' },
 };
 
 function sortCmpModels(models) {
@@ -1582,14 +1834,6 @@ function switchView(view) {
   }
 }
 
-function setCompareMode(mode) {
-  if (compareMode === mode) return;
-  compareMode = mode;
-  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('mode-' + mode).classList.add('active');
-  clearCmpAccumulated(true);
-}
-
 function clearCmpAccumulated(keepModeUi) {
   cmpResults = {};
   cmpFreeformResults = {};
@@ -1597,6 +1841,8 @@ function clearCmpAccumulated(keepModeUi) {
   cmpLastExport = null;
   cmpBatchData = null;
   destroyCmpCharts();
+  const warn = document.getElementById('cmpTranscriptDiffWarn');
+  if (warn) warn.classList.remove('show');
   document.getElementById('cmpTableWrap').classList.remove('show');
   document.getElementById('cmpFreeformTableWrap').classList.remove('show');
   document.getElementById('cmpSplitWrap').classList.remove('show');
@@ -1605,14 +1851,29 @@ function clearCmpAccumulated(keepModeUi) {
   document.getElementById('cmpSummaryBox').classList.remove('show');
   document.getElementById('cmpMetrics').classList.remove('show');
   document.getElementById('cmpToolbar').classList.remove('show');
-  document.getElementById('cmpTableBody').innerHTML = '';
+  const tbody = document.getElementById('cmpTableBody');
+  if (tbody) tbody.innerHTML = '';
   document.getElementById('cmpFreeformBody').innerHTML = '';
   document.getElementById('cmpSplitBody').innerHTML = '';
-  document.getElementById('cmpEmpty').style.display = 'block';
+  const emptyEl = document.getElementById('cmpEmpty');
+  if (emptyEl) emptyEl.style.display = 'block';
+  const panelsEl = document.getElementById('cmpPanels');
+  if (panelsEl) panelsEl.style.display = compareMode === 'intent' ? 'flex' : 'none';
+  CMP_MODEL_ORDER.forEach(m => renderPanelRuns(m, null));
   if (!keepModeUi) {
     const status = document.getElementById('cmpMicStatus');
     if (status) status.textContent = 'Results cleared.';
   }
+}
+
+function setCompareMode(mode) {
+  if (compareMode === mode) return;
+  compareMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('mode-' + mode).classList.add('active');
+  clearCmpAccumulated(true);
+  const panelsEl = document.getElementById('cmpPanels');
+  if (panelsEl) panelsEl.style.display = mode === 'intent' ? 'flex' : 'none';
 }
 
 function avgArr(arr) {
@@ -1640,6 +1901,11 @@ function mergeIntentRun(existing, next, expected) {
     input_tokens: next && next.avg_input_tokens,
     output_tokens: next && next.avg_output_tokens,
     cost: next && next.est_cost,
+    mode: next && next.mode,
+    audio_file_name: next && next.audio_file_name,
+    transcript: next && next.transcript,
+    stt_confidence: next && next.stt_confidence,
+    stt_engine: next && next.stt_engine,
     error: next && next.error,
   }];
   const runs = prevRuns.concat(newRuns).map((r, i) => Object.assign({}, r, { run: i + 1 }));
@@ -1653,6 +1919,7 @@ function mergeIntentRun(existing, next, expected) {
       runs,
       total_runs: runs.length,
       success_runs: 0,
+      audio_file_name: (next && next.audio_file_name) || (existing && existing.audio_file_name) || null,
     };
   }
   const lastOk = okRuns[okRuns.length - 1];
@@ -1668,6 +1935,7 @@ function mergeIntentRun(existing, next, expected) {
   const isGemini = String(model).startsWith('gemini');
   const avgInput = avgArr(inputTokens);
   const avgOutput = avgArr(outputTokens);
+  const mode = lastOk.mode || (next && next.mode) || (existing && existing.mode) || (isGemini ? 'live_audio' : null);
   return {
     ok: true,
     model,
@@ -1675,9 +1943,9 @@ function mergeIntentRun(existing, next, expected) {
     intent: lastOk.intent,
     avg_confidence: avgArr(confidences),
     avg_latency: Math.round(avgArr(avgLatencies.length ? avgLatencies : latencies)),
-    avg_stt_ms: isGemini ? null : (sttTimes.length ? Math.round(avgArr(sttTimes)) : null),
-    stt_source: isGemini ? null : (lastOk.stt_source || (existing && existing.stt_source) || null),
-    avg_llm_ms: isGemini ? null : (llmTimes.length ? Math.round(avgArr(llmTimes)) : null),
+    avg_stt_ms: sttTimes.length ? Math.round(avgArr(sttTimes)) : null,
+    stt_source: lastOk.stt_source || (existing && existing.stt_source) || null,
+    avg_llm_ms: llmTimes.length ? Math.round(avgArr(llmTimes)) : (lastOk.llm_ms != null ? lastOk.llm_ms : null),
     avg_tts_ms: isGemini ? null : (ttsTimes.length ? Math.round(avgArr(ttsTimes)) : null),
     min_latency: Math.min(...latencies),
     max_latency: Math.max(...latencies),
@@ -1690,6 +1958,11 @@ function mergeIntentRun(existing, next, expected) {
     correct: expected ? lastOk.intent === expected : null,
     success_runs: okRuns.length,
     total_runs: runs.length,
+    mode,
+    audio_file_name: lastOk.audio_file_name || (next && next.audio_file_name) || (existing && existing.audio_file_name) || null,
+    transcript: lastOk.transcript || (next && next.transcript) || (existing && existing.transcript) || null,
+    stt_confidence: lastOk.stt_confidence != null ? lastOk.stt_confidence : ((next && next.stt_confidence) || (existing && existing.stt_confidence) || null),
+    stt_engine: lastOk.stt_engine || (next && next.stt_engine) || (existing && existing.stt_engine) || null,
     runs,
   };
 }
@@ -1784,12 +2057,508 @@ function toggleCmpModel(el) {
   el.classList.toggle('checked');
   const input = el.querySelector('input');
   if (input) input.checked = el.classList.contains('checked');
+  const card = el.closest('.cmp-model-card');
+  if (card) card.classList.toggle('checked', el.classList.contains('checked'));
 }
 
 function getSelectedCmpModels() {
   return sortCmpModels(
-    [...document.querySelectorAll('.cmp-model-check.checked')].map(el => el.dataset.model)
+    [...document.querySelectorAll('.cmp-panel-enable:checked')].map(el => el.dataset.model)
   );
+}
+
+function panelSttEngine(modelId) {
+  return String(modelId).startsWith('gemini') ? 'gemini' : 'deepgram';
+}
+
+function panelSttLabel(modelId) {
+  return panelSttEngine(modelId) === 'gemini' ? 'Gemini Live' : 'Deepgram Nova-3';
+}
+
+let cmpPanelState = {}; // modelId -> { enabled, transcript, sttMs, sttConfidence, sttEngine, audioFileName, audioFile, durationSec, deepgramCost, status }
+let cmpPanelMic = {}; // modelId -> mic session
+// Shared Deepgram audio billing meta when the same file is used across panels
+let cmpSharedDeepgramMeta = null; // { duration_sec, deepgram_cost, audioFileName }
+
+function ensurePanelState(modelId) {
+  if (!cmpPanelState[modelId]) {
+    cmpPanelState[modelId] = {
+      enabled: true,
+      transcript: '',
+      sttMs: null,
+      sttConfidence: null,
+      sttEngine: panelSttEngine(modelId),
+      audioFileName: null,
+      audioFile: null,
+      durationSec: null,
+      deepgramCost: null,
+      status: '',
+    };
+  }
+  return cmpPanelState[modelId];
+}
+
+function initCmpPanels() {
+  const wrap = document.getElementById('cmpPanels');
+  const legacy = document.getElementById('cmpModels');
+  if (!wrap) return;
+  wrap.innerHTML = CMP_MODEL_ORDER.map(modelId => {
+    const meta = CMP_MODEL_META[modelId] || { label: modelId, color: '#58a6ff' };
+    const engine = panelSttEngine(modelId);
+    const badgeCls = engine === 'gemini' ? 'gemini' : 'deepgram';
+    const badgeText = engine === 'gemini' ? 'STT: Gemini Live' : 'STT: Deepgram Nova-3';
+    ensurePanelState(modelId);
+    const domId = modelDomId(modelId);
+    return `<div class="cmp-panel" id="cmp-panel-${domId}" data-model="${modelId}">
+      <div class="cmp-panel-header">
+        <label>
+          <input type="checkbox" class="cmp-panel-enable" data-model="${modelId}" checked onchange="onPanelEnableChange('${modelId}', this.checked)">
+          <span class="cmp-dot" style="background:${meta.color}"></span>
+          ${meta.label}${engine === 'gemini' ? ' <span class="cmp-mode-badge live">🔴 Live</span>' : ''}
+        </label>
+        <span class="cmp-panel-stt-badge ${badgeCls}">${badgeText}</span>
+      </div>
+      <div class="cmp-panel-body">
+        <div class="cmp-panel-input-actions">
+          <button type="button" class="btn" id="panelMic-${domId}" onclick="panelToggleMic('${modelId}')">🎤 Mic</button>
+          <label class="btn" style="cursor:pointer;margin:0">
+            📁 Dosya
+            <input type="file" accept=".wav,.mp3,.webm,audio/*" style="display:none" onchange="panelFileSelected('${modelId}', this)">
+          </label>
+          <button type="button" class="btn" onclick="panelClearStt('${modelId}')" title="STT temizle">✕</button>
+        </div>
+        <textarea class="cmp-panel-transcript" id="panelTx-${domId}" placeholder="Transcript — mic/dosya ile otomatik dolar veya elle yazın"
+          oninput="onPanelTranscriptInput('${modelId}', this.value)"></textarea>
+        <div class="cmp-panel-stt-meta" id="panelSttMeta-${domId}">
+          <div class="stt-row"><span>Kaynak</span><span>${badgeText}</span></div>
+          <div class="stt-row"><span>STT</span><span id="panelSttMs-${domId}">—</span></div>
+          <div class="stt-row"><span>Güven</span><span id="panelSttConf-${domId}">—</span></div>
+          <div class="stt-row"><span>Süre</span><span id="panelAudioDur-${domId}">—</span></div>
+          <div class="stt-row"><span>DG cost</span><span id="panelDgCost-${domId}">—</span></div>
+          <div class="stt-file" id="panelSttFile-${domId}"></div>
+        </div>
+        <div class="cmp-panel-status" id="panelStatus-${domId}"></div>
+      </div>
+      <div class="cmp-panel-results">
+        <div class="cmp-panel-results-title">Run sonuçları</div>
+        <div id="panelRuns-${domId}"><div class="cmp-panel-run-empty">Henüz run yok — transcript girip Run’a bas.</div></div>
+      </div>
+    </div>`;
+  }).join('');
+  if (legacy) legacy.innerHTML = '';
+}
+
+function onPanelEnableChange(modelId, checked) {
+  const st = ensurePanelState(modelId);
+  st.enabled = !!checked;
+  const panel = document.getElementById('cmp-panel-' + modelDomId(modelId));
+  if (panel) panel.classList.toggle('disabled', !checked);
+}
+
+function onPanelTranscriptInput(modelId, value) {
+  const st = ensurePanelState(modelId);
+  const prev = st.transcript || '';
+  st.transcript = value;
+  // Manual edit/paste — don't keep stale STT timing (was inflating Gemini Total)
+  if (value !== prev) {
+    st.sttMs = null;
+    st.sttConfidence = null;
+    st.audioFile = null;
+    st.audioFileName = null;
+    st.durationSec = null;
+    st.deepgramCost = null;
+    st.audioDuration = null;
+    updatePanelSttUI(modelId);
+  }
+  const hidden = document.getElementById('cmpTranscript');
+  if (hidden) hidden.value = value;
+}
+
+function setPanelStatus(modelId, text) {
+  ensurePanelState(modelId).status = text || '';
+  const el = document.getElementById('panelStatus-' + modelDomId(modelId));
+  if (el) el.textContent = text || '';
+}
+
+function updatePanelSttUI(modelId) {
+  const st = ensurePanelState(modelId);
+  const domId = modelDomId(modelId);
+  const tx = document.getElementById('panelTx-' + domId);
+  if (tx && tx.value !== (st.transcript || '')) tx.value = st.transcript || '';
+  const msEl = document.getElementById('panelSttMs-' + domId);
+  if (msEl) msEl.textContent = st.sttMs != null ? (Math.round(st.sttMs) + 'ms') : '—';
+  const confEl = document.getElementById('panelSttConf-' + domId);
+  if (confEl) {
+    if (typeof st.sttConfidence === 'number' && Number.isFinite(st.sttConfidence)) {
+      const pct = Math.round(st.sttConfidence * 100);
+      const cls = sttConfidenceClass(st.sttConfidence);
+      confEl.innerHTML = `<span class="stt-conf ${cls}">%${pct}</span>`;
+    } else {
+      confEl.textContent = st.sttEngine === 'gemini' ? 'n/a (Live)' : '—';
+    }
+  }
+  // Prefer panel Deepgram meta; fall back to shared meta for same audio file across models
+  const dur = st.durationSec != null ? st.durationSec
+    : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.duration_sec);
+  const cost = st.deepgramCost != null ? st.deepgramCost
+    : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost);
+  const durEl = document.getElementById('panelAudioDur-' + domId);
+  if (durEl) {
+    durEl.textContent = dur != null ? (Number(dur).toFixed(2) + 's') : '—';
+  }
+  const costEl = document.getElementById('panelDgCost-' + domId);
+  if (costEl) {
+    costEl.textContent = cost != null ? ('$' + Number(cost).toFixed(6)) : '—';
+  }
+  const fileEl = document.getElementById('panelSttFile-' + domId);
+  if (fileEl) fileEl.textContent = st.audioFileName ? ('📁 ' + st.audioFileName) : '';
+}
+
+function panelClearStt(modelId) {
+  const st = ensurePanelState(modelId);
+  st.sttMs = null;
+  st.sttConfidence = null;
+  st.audioFileName = null;
+  st.audioFile = null;
+  st.durationSec = null;
+  st.deepgramCost = null;
+  st.audioDuration = null;
+  st.status = '';
+  updatePanelSttUI(modelId);
+  setPanelStatus(modelId, '');
+}
+
+async function panelFileSelected(modelId, input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  setPanelStatus(modelId, 'STT çalışıyor: ' + file.name + '...');
+  try {
+    const duration = await getAudioFileDurationSeconds(file);
+    let result;
+    if (panelSttEngine(modelId) === 'gemini') {
+      const buf = await file.arrayBuffer();
+      const headers = {
+        'Content-Type': file.type || 'audio/wav',
+        'X-Compare-Model': modelId,
+      };
+      if (duration != null) headers['X-Audio-Duration'] = String(duration);
+      const res = await fetch('/compare-gemini-stt?model=' + encodeURIComponent(modelId), {
+        method: 'POST',
+        headers: headers,
+        body: buf,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gemini STT failed');
+      if (!data.transcript) throw new Error('Gemini STT transcript boş');
+      result = {
+        transcript: data.transcript,
+        sttMs: data.sttMs,
+        confidence: data.confidence,
+        engine: 'gemini',
+        duration: data.duration != null ? data.duration : duration,
+      };
+    } else {
+      result = await compareAudioStt(file, duration);
+      result.engine = 'deepgram';
+      if (result.duration == null) result.duration = duration;
+    }
+    const st = ensurePanelState(modelId);
+    st.transcript = result.transcript;
+    st.sttMs = result.sttMs;
+    st.sttConfidence = typeof result.confidence === 'number' ? result.confidence : null;
+    st.sttEngine = result.engine;
+    st.audioFileName = file.name;
+    st.audioFile = file;
+    st.durationSec = result.duration_sec != null ? result.duration_sec : (result.duration != null ? result.duration : duration);
+    st.deepgramCost = result.deepgram_cost != null ? result.deepgram_cost : null;
+    st.audioDuration = st.durationSec;
+    if (st.durationSec != null && st.deepgramCost != null) {
+      cmpSharedDeepgramMeta = {
+        duration_sec: st.durationSec,
+        deepgram_cost: st.deepgramCost,
+        audioFileName: file.name,
+      };
+      // Same Deepgram cost on every comparison panel for this audio
+      CMP_MODEL_ORDER.forEach(m => {
+        const other = ensurePanelState(m);
+        other.durationSec = cmpSharedDeepgramMeta.duration_sec;
+        other.deepgramCost = cmpSharedDeepgramMeta.deepgram_cost;
+        updatePanelSttUI(m);
+      });
+    }
+    updatePanelSttUI(modelId);
+    setPanelStatus(modelId, 'STT tamam · ' + (result.sttMs != null ? Math.round(result.sttMs) + 'ms' : '')
+      + (st.durationSec != null ? (' · ' + Number(st.durationSec).toFixed(2) + 's') : '')
+      + (st.deepgramCost != null ? (' · DG $' + Number(st.deepgramCost).toFixed(6)) : ''));
+    updateTranscriptDiffWarningFromPanels();
+  } catch (e) {
+    setPanelStatus(modelId, 'STT hata: ' + e.message);
+  }
+}
+
+function panelStopMic(modelId) {
+  const sess = cmpPanelMic[modelId];
+  if (!sess) return;
+  try {
+    if (sess.recorder && sess.recorder.state !== 'inactive') sess.recorder.stop();
+  } catch (e) {}
+  if (sess.dgWs) {
+    try { sess.dgWs.send(JSON.stringify({ type: 'CloseStream' })); } catch (e) {}
+    setTimeout(() => { try { sess.dgWs.close(); } catch (e) {} }, 800);
+  }
+  if (sess.processor) {
+    try {
+      sess.processor.source.disconnect();
+      sess.processor.processor.disconnect();
+      if (sess.processor.ctx && sess.processor.ctx.state !== 'closed') sess.processor.ctx.close();
+    } catch (e) {}
+  }
+  if (sess.stream) sess.stream.getTracks().forEach(t => t.stop());
+  cmpPanelMic[modelId] = null;
+  const btn = document.getElementById('panelMic-' + modelDomId(modelId));
+  if (btn) btn.textContent = '🎤 Mic';
+}
+
+async function panelToggleMic(modelId) {
+  if (cmpPanelMic[modelId]) {
+    setPanelStatus(modelId, 'Mic kapatılıyor...');
+    if (panelSttEngine(modelId) === 'gemini' && cmpPanelMic[modelId].recorder) {
+      // MediaRecorder stop triggers onstop → STT
+      try { cmpPanelMic[modelId].recorder.stop(); } catch (e) { panelStopMic(modelId); }
+      return;
+    }
+    panelStopMic(modelId);
+    setPanelStatus(modelId, 'Mic durdu');
+    return;
+  }
+
+  // Stop other panels' mics
+  Object.keys(cmpPanelMic).forEach(m => { if (m !== modelId && cmpPanelMic[m]) panelStopMic(m); });
+
+  const btn = document.getElementById('panelMic-' + modelDomId(modelId));
+  if (panelSttEngine(modelId) === 'gemini') {
+    try {
+      setPanelStatus(modelId, 'Mic dinleniyor (Gemini)...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        cmpPanelMic[modelId] = null;
+        if (btn) btn.textContent = '🎤 Mic';
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        const file = new File([blob], 'mic-recording.webm', { type: blob.type });
+        await panelFileSelected(modelId, { files: [file], value: '' });
+      };
+      recorder.start();
+      cmpPanelMic[modelId] = { recorder, stream };
+      if (btn) btn.textContent = '⏹ Stop';
+    } catch (e) {
+      setPanelStatus(modelId, 'Mic hata: ' + e.message);
+    }
+    return;
+  }
+
+  // Claude: Deepgram live WS
+  try {
+    setPanelStatus(modelId, 'Deepgram bağlanıyor...');
+    const cfgRes = await fetch('/compare-stt-config');
+    const cfg = await cfgRes.json();
+    if (!cfgRes.ok) throw new Error(cfg.error || 'Deepgram not configured');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const dgParams = new URLSearchParams(cfg.params);
+    dgParams.set('sample_rate', String(ctx.sampleRate));
+    const wsUrl = 'wss://api.deepgram.com/v1/listen?' + dgParams.toString();
+    const dgWs = new WebSocket(wsUrl, ['token', cfg.apiKey]);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Deepgram timeout')), 8000);
+      dgWs.onopen = () => { clearTimeout(timer); resolve(); };
+      dgWs.onerror = () => { clearTimeout(timer); reject(new Error('Deepgram WS error')); };
+    });
+    let lastMediaAt = 0;
+    dgWs.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'UtteranceEnd') {
+          panelStopMic(modelId);
+          return;
+        }
+        if (msg.type === 'Results' && msg.is_final && msg.channel?.alternatives?.[0]?.transcript) {
+          const text = msg.channel.alternatives[0].transcript.trim();
+          if (!text) return;
+          const conf = msg.channel.alternatives[0].confidence;
+          const st = ensurePanelState(modelId);
+          st.transcript = text;
+          st.sttMs = lastMediaAt ? Date.now() - lastMediaAt : null;
+          st.sttConfidence = typeof conf === 'number' ? conf : null;
+          st.sttEngine = 'deepgram';
+          st.audioFileName = null;
+          st.audioFile = null;
+          updatePanelSttUI(modelId);
+          setPanelStatus(modelId, 'Transcript yakalandı' + (st.sttMs != null ? ` · ${st.sttMs}ms` : ''));
+          updateTranscriptDiffWarningFromPanels();
+        }
+      } catch (e) {}
+    };
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (e) => {
+      if (!cmpPanelMic[modelId] || dgWs.readyState !== WebSocket.OPEN) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+      lastMediaAt = Date.now();
+      dgWs.send(int16.buffer);
+    };
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    cmpPanelMic[modelId] = { dgWs, stream, processor: { source, processor, ctx } };
+    if (btn) btn.textContent = '⏹ Stop';
+    setPanelStatus(modelId, 'Dinleniyor (Deepgram)...');
+  } catch (e) {
+    panelStopMic(modelId);
+    setPanelStatus(modelId, 'Mic hata: ' + e.message);
+  }
+}
+
+function updateTranscriptDiffWarningFromPanels() {
+  const models = getSelectedCmpModels();
+  const claudeTx = [];
+  const geminiTx = [];
+  models.forEach(m => {
+    const st = ensurePanelState(m);
+    const tx = (st.transcript || '').trim();
+    if (!tx) return;
+    if (String(m).startsWith('claude')) claudeTx.push(tx);
+    if (String(m).startsWith('gemini')) geminiTx.push(tx);
+  });
+  let warn = false;
+  for (const c of claudeTx) {
+    for (const g of geminiTx) {
+      if (transcriptWordDiffRatio(c, g) > 0.2) { warn = true; break; }
+    }
+    if (warn) break;
+  }
+  const el = document.getElementById('cmpTranscriptDiffWarn');
+  if (el) el.classList.toggle('show', warn);
+}
+
+function panelRunTotalMs(modelId, r) {
+  if (!r || !r.ok) return 0;
+  const stt = Number(r.stt_ms) || 0;
+  const llm = Number(r.llm_ms) || 0;
+  const tts = Number(r.tts_ms) || 0;
+  // Fair E2E-style total: STT + model path (Gemini TTFA = llm_ms; Claude = LLM+TTS)
+  if (String(modelId).startsWith('gemini')) return stt + llm;
+  return stt + llm + tts;
+}
+
+function renderPanelRuns(modelId, data) {
+  const el = document.getElementById('panelRuns-' + modelDomId(modelId));
+  if (!el) return;
+  if (!data || !data.ok) {
+    el.innerHTML = `<div class="cmp-panel-run-empty">${escapeHtml((data && data.error) || 'Henüz run yok — transcript girip Run’a bas.')}</div>`;
+    return;
+  }
+  const runs = data.runs || [];
+  if (!runs.length) {
+    el.innerHTML = `<div class="cmp-panel-run-empty">Henüz run yok.</div>`;
+    return;
+  }
+  const isGemini = String(modelId).startsWith('gemini');
+  const rowsHtml = runs.map((r, idx) => {
+    if (!r.ok) {
+      return `<div class="cmp-panel-run"><div class="cmp-panel-run-main"><span>#${r.run || idx + 1}</span><span style="color:var(--danger)">ERROR</span><span></span><span></span></div>
+        <div class="cmp-panel-run-bd">${escapeHtml(r.error || '')}</div></div>`;
+    }
+    const total = Math.round(panelRunTotalMs(modelId, r));
+    r.latency = total;
+    const stt = r.stt_ms != null ? r.stt_ms + 'ms' : '—';
+    const llm = r.llm_ms != null ? r.llm_ms + 'ms' : '—';
+    const tts = r.tts_ms != null ? r.tts_ms + 'ms' : '—';
+    const dgCost = r.deepgram_cost != null ? r.deepgram_cost
+      : (ensurePanelState(modelId).deepgramCost != null ? ensurePanelState(modelId).deepgramCost
+        : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
+    const durSec = r.duration_sec != null ? r.duration_sec
+      : (ensurePanelState(modelId).durationSec != null ? ensurePanelState(modelId).durationSec
+        : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.duration_sec));
+    const dgCostPart = dgCost != null
+      ? ` | DG: $${Number(dgCost).toFixed(6)}${durSec != null ? (' (' + Number(durSec).toFixed(2) + 's)') : ''}`
+      : '';
+    const bd = isGemini
+      ? `STT: ${stt} | TTFA: ${llm}${dgCostPart}<br>Response: "${escapeHtml(r.response || '')}"`
+      : `STT: ${stt} | LLM: ${llm} | TTS: ${tts}${dgCostPart}<br>Response: "${escapeHtml(r.response || '')}"`;
+
+    return `<div class="cmp-panel-run" id="panel-run-${modelDomId(modelId)}-${r.run}">
+      <div class="cmp-panel-run-main" onclick="this.parentElement.classList.toggle('open')">
+        <span>#${r.run}</span>
+        <span>Total: ${total}ms</span>
+        <span class="intent cmp-intent ${r.intent}">${r.intent || '—'}</span>
+        <span>${fmtPct(r.confidence)}</span>
+      </div>
+      <div class="cmp-panel-run-bd">${bd}</div>
+    </div>`;
+  }).join('');
+
+  // Average over every successful run (all values included, no filtering)
+  const okRuns = runs.filter(r => r.ok);
+  let avgHtml = '';
+  if (okRuns.length) {
+    const n = okRuns.length;
+    const avgTotal = Math.round(okRuns.reduce((s, r) => s + panelRunTotalMs(modelId, r), 0) / n);
+    const avgStt = Math.round(okRuns.reduce((s, r) => s + (Number(r.stt_ms) || 0), 0) / n);
+    const avgLlm = Math.round(okRuns.reduce((s, r) => s + (Number(r.llm_ms) || 0), 0) / n);
+    const avgTts = Math.round(okRuns.reduce((s, r) => s + (Number(r.tts_ms) || 0), 0) / n);
+    const dgCost = (okRuns.find(r => r.deepgram_cost != null) || {}).deepgram_cost
+      ?? ensurePanelState(modelId).deepgramCost
+      ?? (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost);
+    const dgPart = dgCost != null ? ` | DG: $${Number(dgCost).toFixed(6)}` : '';
+    avgHtml = isGemini
+      ? `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | TTFA: ${avgLlm}ms${dgPart}</div>`
+      : `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | LLM: ${avgLlm}ms | TTS: ${avgTts}ms${dgPart}</div>`;
+  }
+
+  el.innerHTML = rowsHtml + avgHtml;
+}
+
+function refreshAllPanelRuns() {
+  getSelectedCmpModels().concat(CMP_MODEL_ORDER).filter((v, i, a) => a.indexOf(v) === i).forEach(m => {
+    renderPanelRuns(m, cmpResults[m]);
+  });
+  updateTranscriptDiffWarningFromPanels();
+}
+
+function initModelAudioUploads() {
+  initCmpPanels();
+}
+
+async function compareAudioStt(file, durationSec) {
+  const buf = await file.arrayBuffer();
+  const duration = durationSec != null ? durationSec : await getAudioFileDurationSeconds(file);
+  const headers = { 'Content-Type': file.type || 'audio/wav' };
+  if (duration != null) headers['X-Audio-Duration'] = String(duration);
+  const res = await fetch('/compare-audio-stt', {
+    method: 'POST',
+    headers: headers,
+    body: buf,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Audio STT failed');
+  if (!data.transcript) throw new Error('STT transcript boş (' + file.name + ')');
+  return {
+    transcript: data.transcript,
+    sttMs: data.sttMs,
+    confidence: data.confidence,
+    audioFileName: file.name,
+    duration: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : duration),
+    duration_sec: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : duration),
+    deepgram_cost: data.deepgram_cost != null ? data.deepgram_cost : null,
+  };
 }
 
 async function loadCmpScenarios() {
@@ -1842,11 +2611,25 @@ function onScenarioSelect() {
   cmpAccumTranscript = null;
   cmpResults = {};
   cmpFreeformResults = {};
+  // Fill all panels with scenario text (manual text path — no STT metrics)
+  CMP_MODEL_ORDER.forEach(modelId => {
+    const st = ensurePanelState(modelId);
+    st.transcript = s.text;
+    st.sttMs = null;
+    st.sttConfidence = null;
+    st.audioFileName = null;
+    st.audioFile = null;
+    updatePanelSttUI(modelId);
+    setPanelStatus(modelId, 'Senaryo yüklendi');
+    renderPanelRuns(modelId, null);
+  });
+  updateTranscriptDiffWarningFromPanels();
 }
 
 function cmpStopDeepgramMic(flush) {
   cmpMicActive = false;
-  document.getElementById('cmpMicBtn').textContent = '🎤 Mic';
+  const micBtn = document.getElementById('cmpMicBtn');
+  if (micBtn) micBtn.textContent = '🎤 Mic';
   if (cmpMicProcessor) {
     try {
       cmpMicProcessor.source.disconnect();
@@ -1928,7 +2711,8 @@ async function cmpToggleMic() {
     cmpDgWs.onclose = () => {
       if (cmpMicActive) {
         cmpMicActive = false;
-        document.getElementById('cmpMicBtn').textContent = '🎤 Mic';
+        const micBtn = document.getElementById('cmpMicBtn');
+        if (micBtn) micBtn.textContent = '🎤 Mic';
       }
     };
 
@@ -1949,7 +2733,8 @@ async function cmpToggleMic() {
     cmpMicProcessor = { source, processor, ctx };
 
     cmpMicActive = true;
-    document.getElementById('cmpMicBtn').textContent = '⏹ Stop';
+    const micBtn2 = document.getElementById('cmpMicBtn');
+    if (micBtn2) micBtn2.textContent = '⏹ Stop';
     status.textContent = 'Listening (Deepgram)...';
   } catch (e) {
     cmpLastSttMs = null;
@@ -1990,9 +2775,28 @@ async function cmpTranscribeFile(input) {
 
 function fmtMs(n) { return Math.round(n) + 'ms'; }
 
+function geminiModeBadge(data) {
+  const mode = (data && data.mode) || 'live_audio';
+  if (mode === 'rest') {
+    return '<span class="cmp-mode-badge rest" title="Gemini REST generateContent (text-only)">REST</span>';
+  }
+  return '<span class="cmp-mode-badge live" title="Gemini Live WebSocket — text input → ilk audio chunk (TTFA)">🔴 Live</span>';
+}
+
 function renderLatencyBreakdown(data, model) {
-  // Gemini: total latency only — no cascaded STT/LLM/TTS strip.
-  if (model && String(model).startsWith('gemini')) return '';
+  // Gemini Live: TTFA tip under total (no cascaded STT/LLM/TTS strip).
+  if (model && String(model).startsWith('gemini')) {
+    const mode = (data && data.mode) || 'live_audio';
+    if (mode === 'rest') {
+      return `<div class="latency-breakdown" style="margin-top:4px">
+        <span class="breakdown-label breakdown-label-row">REST<span class="breakdown-tip" data-tip="Gemini generateContent text inference (no audio).">ⓘ</span></span>
+      </div>`;
+    }
+    return `<div class="latency-breakdown" style="margin-top:4px">
+      <span class="breakdown-label breakdown-label-row">TTFA<span class="breakdown-tip" data-tip="Gemini Live WebSocket — text input → ilk audio chunk (TTFA). Bağlantı overhead dahil.">ⓘ</span></span>
+      <span class="breakdown-value">${data && data.avg_llm_ms != null ? data.avg_llm_ms + 'ms' : (data && data.avg_latency != null ? Math.round(data.avg_latency) + 'ms' : '—')}</span>
+    </div>`;
+  }
   // Breakdown is for Claude cascaded pipeline cards.
   if (model && !String(model).startsWith('claude')) return '';
   if (!data) return '';
@@ -2125,11 +2929,119 @@ function buildBothSummary(intentResults, freeformResults) {
   return lines;
 }
 
+function sttConfidenceClass(conf) {
+  if (typeof conf !== 'number' || !Number.isFinite(conf)) return '';
+  if (conf < 0.7) return 'low';
+  if (conf <= 0.85) return 'mid';
+  return 'high';
+}
+
+function formatSttConfidenceHtml(conf) {
+  if (typeof conf !== 'number' || !Number.isFinite(conf)) return '';
+  const pct = Math.round(conf * 100);
+  const cls = sttConfidenceClass(conf);
+  return ` <span class="stt-conf ${cls}">(güven: %${pct})</span>`;
+}
+
+function formatRunBreakdown(r, model) {
+  const stt = r.stt_ms != null ? r.stt_ms + 'ms' : '—';
+  const engine = r.stt_engine || (String(model).startsWith('gemini') && r.stt_ms != null ? 'gemini' : (r.stt_source === 'real' || r.stt_source === 'gemini_live' ? (String(model).startsWith('gemini') ? 'gemini' : 'deepgram') : null));
+  const sttLabel = engine === 'gemini' ? 'STT (Gemini)' : (engine === 'deepgram' || r.stt_source === 'real' ? 'STT (Deepgram)' : 'STT');
+  let confPart = '';
+  if (typeof r.stt_confidence === 'number' && Number.isFinite(r.stt_confidence) && engine !== 'gemini') {
+    const pct = Math.round(r.stt_confidence * 100);
+    const cls = sttConfidenceClass(r.stt_confidence);
+    confPart = ` <span class="stt-conf ${cls}">| Güven: %${pct}</span>`;
+  }
+  let pipeline;
+  if (String(model).startsWith('gemini')) {
+    const ttfa = r.llm_ms != null ? r.llm_ms + 'ms' : (r.latency != null ? r.latency + 'ms' : '—');
+    pipeline = `${sttLabel}: ${stt}${confPart} → TTFA: ${ttfa}`;
+  } else {
+    const llm = r.llm_ms != null ? r.llm_ms + 'ms' : '—';
+    const tts = r.tts_ms != null ? r.tts_ms + 'ms' : '—';
+    pipeline = `${sttLabel}: ${stt}${confPart} → LLM: ${llm} → TTS: ${tts}`;
+  }
+  let meta = '';
+  const tx = r.transcript || r.input_transcript || '';
+  if (tx) {
+    const filePart = r.audio_file_name ? ` · 📁 ${escapeHtml(r.audio_file_name)}` : '';
+    meta += `<div class="run-transcript">Transcript: "${escapeHtml(tx)}"${filePart}</div>`;
+  } else if (r.audio_file_name) {
+    meta += `<div class="run-audio-name">📁 ${escapeHtml(r.audio_file_name)}</div>`;
+  }
+  return pipeline + meta;
+}
+
+function tokenizeTranscript(t) {
+  return String(t || '').toLowerCase().replace(/[^\w\s']/g, ' ').split(/\s+/).filter(Boolean);
+}
+
+/** Word-level difference ratio 0..1 (1 = completely different). */
+function transcriptWordDiffRatio(a, b) {
+  const wa = tokenizeTranscript(a);
+  const wb = tokenizeTranscript(b);
+  if (!wa.length && !wb.length) return 0;
+  const longer = Math.max(wa.length, wb.length) || 1;
+  const used = new Set();
+  let matches = 0;
+  for (let i = 0; i < wa.length; i++) {
+    for (let j = 0; j < wb.length; j++) {
+      if (!used.has(j) && wa[i] === wb[j]) {
+        used.add(j);
+        matches++;
+        break;
+      }
+    }
+  }
+  return 1 - (matches / longer);
+}
+
+function updateTranscriptDiffWarning(results) {
+  const el = document.getElementById('cmpTranscriptDiffWarn');
+  if (!el) return;
+  const models = Object.keys(results || {});
+  const claudeTx = [];
+  const geminiTx = [];
+  models.forEach(m => {
+    const r = results[m];
+    if (!r || !r.ok) return;
+    const last = (r.runs || []).filter(x => x.ok).slice(-1)[0];
+    const tx = (last && (last.transcript || last.input_transcript)) || r.transcript || '';
+    if (!tx) return;
+    if (String(m).startsWith('claude')) claudeTx.push(tx);
+    if (String(m).startsWith('gemini')) geminiTx.push(tx);
+  });
+  let warn = false;
+  for (const c of claudeTx) {
+    for (const g of geminiTx) {
+      if (transcriptWordDiffRatio(c, g) > 0.2) { warn = true; break; }
+    }
+    if (warn) break;
+  }
+  el.classList.toggle('show', warn);
+}
+
+function toggleRunBreakdown(runId, latencyMs, ev) {
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  const row = document.getElementById(runId);
+  const btn = document.querySelector('[data-breakdown-btn="' + runId + '"]');
+  if (!row || !btn) return;
+  const currentlyHidden = row.style.display === 'none';
+  row.style.display = currentlyHidden ? 'block' : 'none';
+  btn.textContent = currentlyHidden ? (latencyMs + 'ms ▲') : (latencyMs + 'ms ▼');
+}
+
 function renderCmpResultRow(model, data) {
   const meta = CMP_MODEL_META[model] || { label: model, color: '#58a6ff' };
+  const isGemini = String(model).startsWith('gemini');
+  const liveBadge = isGemini ? ' ' + geminiModeBadge(data) : '';
+  const audioTag = data.audio_file_name
+    ? `<span class="cmp-model-audio-tag">📁 ${escapeHtml(data.audio_file_name)}</span>`
+    : '';
   if (!data.ok) {
     return `<tr class="error-row" data-model="${model}">
-      <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label}</td>
+      <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label}${liveBadge}${audioTag}</td>
       <td colspan="8">Error: ${escapeHtml(data.error || 'Unknown error')}</td>
     </tr>`;
   }
@@ -2143,9 +3055,13 @@ function renderCmpResultRow(model, data) {
     if (!r.ok) {
       return `<div class="cmp-run-row"><span>#${r.run}</span><span>—</span><span class="intent">ERROR</span><span>—</span><span>${escapeHtml(r.error || '')}</span></div>`;
     }
+    const runBreakdownId = detailId + '-bd-' + r.run;
     return `<div class="cmp-run-row">
       <span>#${r.run}</span>
-      <span>${r.latency}ms</span>
+      <span class="run-latency-cell">
+        <span class="total-latency clickable" data-breakdown-btn="${runBreakdownId}" onclick="toggleRunBreakdown('${runBreakdownId}', ${Math.round(r.latency)}, event)">${Math.round(r.latency)}ms ▼</span>
+        <div class="run-breakdown" id="${runBreakdownId}" style="display:none">${formatRunBreakdown(r, model)}</div>
+      </span>
       <span class="intent">${r.intent}</span>
       <span>${fmtPct(r.confidence)}</span>
       <span>${escapeHtml(r.response || '')}</span>
@@ -2153,12 +3069,11 @@ function renderCmpResultRow(model, data) {
   }).join('');
 
   return `<tr class="clickable" data-model="${model}" onclick="toggleCmpDetail('${detailId}')">
-    <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label} ▾</td>
+    <td><span class="cmp-dot" style="background:${meta.color};display:inline-block;margin-right:6px"></span>${meta.label}${liveBadge}${audioTag} ▾</td>
     <td><span class="cmp-intent ${data.intent}">${data.intent}</span>${data.distress ? ` <span style="font-size:10px;color:var(--danger)">distress:${data.distress}</span>` : ''}</td>
     <td>${fmtPct(data.avg_confidence)}</td>
     <td>
       <div>Total: ${fmtMs(data.avg_latency)}</div>
-      ${renderLatencyBreakdown(data, model)}
     </td>
     <td>${fmtMs(data.min_latency)}</td>
     <td>${fmtMs(data.max_latency)}</td>
@@ -2534,13 +3449,21 @@ function exportCmpCSV() {
     csv = lines.join('\n');
   } else {
     const results = (payload && payload.results) || cmpResults;
-    const lines = [['model', 'run', 'ok', 'intent', 'confidence', 'latency_ms', 'input_tokens', 'output_tokens', 'cost', 'correct', 'error'].join(',')];
+    const lines = [['model', 'run', 'ok', 'intent', 'confidence', 'latency_ms', 'input_tokens', 'output_tokens', 'cost', 'duration_sec', 'deepgram_cost', 'correct', 'error'].join(',')];
     Object.keys(results).forEach(model => {
       const r = results[model];
-      (r.runs || [{ run: 1, ok: r.ok, intent: r.intent, confidence: r.avg_confidence, latency: r.avg_latency, input_tokens: r.avg_input_tokens, output_tokens: r.avg_output_tokens, cost: r.est_cost, error: r.error }]).forEach(run => {
+      (r.runs || [{ run: 1, ok: r.ok, intent: r.intent, confidence: r.avg_confidence, latency: r.avg_latency, input_tokens: r.avg_input_tokens, output_tokens: r.avg_output_tokens, cost: r.est_cost, duration_sec: r.duration_sec, deepgram_cost: r.deepgram_cost, error: r.error }]).forEach(run => {
+        const dur = run.duration_sec != null ? run.duration_sec
+          : (r.duration_sec != null ? r.duration_sec
+            : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.duration_sec));
+        const dgCost = run.deepgram_cost != null ? run.deepgram_cost
+          : (r.deepgram_cost != null ? r.deepgram_cost
+            : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
         lines.push([
           model, run.run, run.ok ? 1 : 0, run.intent || '', run.confidence ?? '', run.latency || 0,
           run.input_tokens || 0, run.output_tokens || 0, run.cost || 0,
+          dur != null ? dur : '',
+          dgCost != null ? dgCost : '',
           r.correct === true ? 1 : r.correct === false ? 0 : '',
           JSON.stringify(run.error || r.error || ''),
         ].join(','));
@@ -2570,19 +3493,133 @@ function applyCompareSttMs(results, sttMs, sttSource) {
   return results;
 }
 
-async function fetchModelCompare(transcript, model, runs, expected) {
+async function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function fetchModelCompare(transcript, model, runs, expected, opts) {
+  opts = opts || {};
   const payload = { transcript, models: [model], runs, expected };
-  if (typeof cmpLastSttMs === 'number') payload.real_stt_ms = cmpLastSttMs;
+  if (opts.realSttMs != null) payload.real_stt_ms = opts.realSttMs;
+  else if (typeof cmpLastSttMs === 'number') payload.real_stt_ms = cmpLastSttMs;
+  if (opts.audioBase64) {
+    payload.audio_base64 = opts.audioBase64;
+    if (opts.audioMime) payload.audio_mime = opts.audioMime;
+  }
   const res = await fetch('/compare-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
   const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'compare-intent failed');
+  }
   const result = (data.results && data.results[model]) || { ok: false, error: data.error || 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model };
-  const sttMs = data.real_stt_ms ?? data.stt_ms ?? cmpLastSttMs;
-  const sttSource = data.stt_source || (typeof cmpLastSttMs === 'number' ? 'real' : 'estimated');
-  return applyCompareSttMs({ [model]: result }, sttMs, sttSource)[model];
+  const sttMs = opts.realSttMs != null
+    ? opts.realSttMs
+    : (data.real_stt_ms ?? data.stt_ms ?? cmpLastSttMs);
+  const sttSource = opts.realSttMs != null
+    ? 'real'
+    : (data.stt_source || (typeof cmpLastSttMs === 'number' ? 'real' : 'estimated'));
+  const applied = applyCompareSttMs({ [model]: result }, sttMs, sttSource)[model];
+
+  // Attach transcript / STT confidence / audio metadata to each run
+  if (applied && applied.runs) {
+    applied.runs.forEach(r => {
+      if (!r.ok) return;
+      if (transcript && !r.transcript) r.transcript = transcript;
+      if (opts.audioFileName) r.audio_file_name = opts.audioFileName;
+      if (typeof opts.sttConfidence === 'number') r.stt_confidence = opts.sttConfidence;
+      if (opts.sttEngine) r.stt_engine = opts.sttEngine;
+      else if (opts.realSttMs != null && !r.stt_engine) r.stt_engine = 'deepgram';
+      if (opts.realSttMs != null && r.stt_ms == null) {
+        r.stt_ms = opts.realSttMs;
+        r.stt_source = opts.sttEngine === 'gemini' ? 'gemini_live' : 'real';
+      }
+      if (opts.durationSec != null) r.duration_sec = opts.durationSec;
+      else if (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.duration_sec != null) {
+        r.duration_sec = cmpSharedDeepgramMeta.duration_sec;
+      }
+      if (opts.deepgramCost != null) r.deepgram_cost = opts.deepgramCost;
+      else if (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost != null) {
+        r.deepgram_cost = cmpSharedDeepgramMeta.deepgram_cost;
+      }
+    });
+    if (opts.audioFileName) applied.audio_file_name = opts.audioFileName;
+    if (transcript) applied.transcript = transcript;
+    if (typeof opts.sttConfidence === 'number') applied.stt_confidence = opts.sttConfidence;
+    if (opts.sttEngine) applied.stt_engine = opts.sttEngine;
+    if (opts.durationSec != null) applied.duration_sec = opts.durationSec;
+    else if (cmpSharedDeepgramMeta) applied.duration_sec = cmpSharedDeepgramMeta.duration_sec;
+    if (opts.deepgramCost != null) applied.deepgram_cost = opts.deepgramCost;
+    else if (cmpSharedDeepgramMeta) applied.deepgram_cost = cmpSharedDeepgramMeta.deepgram_cost;
+  }
+  return applied;
+}
+
+async function fetchGeminiAudioCompare(modelId, file) {
+  const buf = await file.arrayBuffer();
+  const res = await fetch('/compare-gemini-audio?model=' + encodeURIComponent(modelId), {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type || 'audio/wav',
+      'X-Compare-Model': modelId,
+    },
+    body: buf,
+  });
+  const data = await res.json();
+  if (!res.ok || data.ok === false) throw new Error(data.error || 'Gemini audio compare failed');
+  data.audio_file_name = file.name;
+  (data.runs || []).forEach(r => {
+    if (r.ok) {
+      r.audio_file_name = file.name;
+      r.stt_engine = r.stt_engine || 'gemini';
+      if (!r.transcript && data.transcript) r.transcript = data.transcript;
+    }
+  });
+  return data;
+}
+
+function getModelAudioFile(modelId) {
+  const st = ensurePanelState(modelId);
+  return st.audioFile || null;
+}
+
+async function runSingleModelCompare(modelId, transcript, expected) {
+  const st = ensurePanelState(modelId);
+  const tx = (st.transcript || transcript || '').trim();
+  const hasAudio = !!(st.audioFile && String(modelId).startsWith('gemini'));
+  if (!tx && !hasAudio) throw new Error('Panel transcript boş');
+  const opts = {};
+  if (st.audioFileName) opts.audioFileName = st.audioFileName;
+  if (typeof st.sttConfidence === 'number') opts.sttConfidence = st.sttConfidence;
+
+  // Gemini: panel STT already filled transcript (Gemini Live) — use text + that STT timing.
+  // Only re-send audio when transcript is missing (Deepgram fallback on server).
+  if (hasAudio && !tx) {
+    setPanelStatus(modelId, 'Audio → Deepgram STT → Gemini...');
+    const buf = await st.audioFile.arrayBuffer();
+    opts.audioBase64 = await arrayBufferToBase64(buf);
+    opts.audioMime = st.audioFile.type || 'audio/webm';
+    opts.sttEngine = 'deepgram';
+  } else {
+    if (st.sttMs != null) {
+      opts.realSttMs = st.sttMs;
+      opts.sttEngine = st.sttEngine || panelSttEngine(modelId);
+    }
+  }
+  if (st.durationSec != null) opts.durationSec = st.durationSec;
+  else if (cmpSharedDeepgramMeta) opts.durationSec = cmpSharedDeepgramMeta.duration_sec;
+  if (st.deepgramCost != null) opts.deepgramCost = st.deepgramCost;
+  else if (cmpSharedDeepgramMeta) opts.deepgramCost = cmpSharedDeepgramMeta.deepgram_cost;
+  return fetchModelCompare(tx, modelId, 1, expected, opts);
 }
 
 async function fetchCompareIntentBatch(transcript, models, runs, expected) {
@@ -2759,34 +3796,49 @@ function renderCmpCharts(results, opts) {
 async function runComparison() {
   let n = parseInt(document.getElementById('cmpRuns').value, 10);
   if (!Number.isFinite(n) || n < 1) n = 1;
-  if (n > 10) n = 10;
+  if (n > 20) n = 20;
   document.getElementById('cmpRuns').value = n;
   return runComparisonSeries(n);
 }
 
 async function runComparisonSeries(seriesCount) {
-  const transcript = document.getElementById('cmpTranscript').value.trim();
   const models = getSelectedCmpModels();
-  const runs = 1; // each iteration = one API run; results accumulate in the table
-  if (!transcript) { alert('Transcript girin'); return; }
+  const runs = 1;
   if (!models.length) { alert('En az bir model seçin'); return; }
+  models.forEach(m => {
+    const txEl = document.getElementById('panelTx-' + modelDomId(m));
+    if (txEl) ensurePanelState(m).transcript = txEl.value;
+  });
+  const missing = models.filter(m => {
+    const st = ensurePanelState(m);
+    const hasTx = !!(st.transcript || '').trim();
+    const hasAudio = !!(st.audioFile && String(m).startsWith('gemini'));
+    return !hasTx && !hasAudio;
+  });
+  if (missing.length) {
+    alert('Transcript gerekli: ' + missing.map(m => (CMP_MODEL_META[m] || {}).label || m).join(', '));
+    return;
+  }
   if (!Number.isFinite(seriesCount) || seriesCount < 1) seriesCount = 1;
 
-  const matched = cmpScenarios.find(s => s.text === transcript);
-  const expected = matched ? matched.expected : null;
+  const firstTx = (ensurePanelState(models[0]).transcript || '').trim();
+  document.getElementById('cmpTranscript').value = firstTx;
+  const matched = cmpScenarios.find(s => s.text === firstTx);
+  const expected = matched ? matched.expected : (cmpExpected || null);
   cmpExpected = expected;
   cmpStopFlag = false;
   cmpBatchData = null;
 
-  // New transcript → start a fresh accumulation series
-  if (cmpAccumTranscript !== transcript) {
+  const accumKey = models.map(m => m + ':' + (ensurePanelState(m).transcript || '').trim()).join('||');
+  if (cmpAccumTranscript !== accumKey) {
     cmpResults = {};
     cmpFreeformResults = {};
-    cmpAccumTranscript = transcript;
+    cmpAccumTranscript = accumKey;
   }
 
   setCmpRunning(true);
-  document.getElementById('cmpEmpty').style.display = 'none';
+  const emptyEl = document.getElementById('cmpEmpty');
+  if (emptyEl) emptyEl.style.display = 'none';
   document.getElementById('cmpBatchTableWrap').classList.remove('show');
   document.getElementById('cmpToolbar').classList.add('show');
   showQuotaBanner([]);
@@ -2810,8 +3862,8 @@ async function runComparisonSeries(seriesCount) {
       );
       const nextRunNum = existingRunCount + 1;
       const seriesLabel = seriesCount > 1
-        ? `Run ${seriesIdx + 1}/${seriesCount} çalışıyor...`
-        : `Run #${nextRunNum} çalışıyor...`;
+        ? 'Run ' + (seriesIdx + 1) + '/' + seriesCount + ' çalışıyor...'
+        : 'Run #' + nextRunNum + ' çalışıyor...';
 
       document.getElementById('cmpCharts').classList.remove('show');
       document.getElementById('cmpSummaryBox').classList.remove('show');
@@ -2819,18 +3871,15 @@ async function runComparisonSeries(seriesCount) {
       document.getElementById('cmpToolbarMeta').textContent =
         (compareMode === 'both' ? 'Intent + Free-Form' :
         compareMode === 'freeform' ? 'Free-Form' : 'Intent') +
-        ` · ${seriesLabel}`;
+        ' · ' + seriesLabel;
       showCmpProgress(seriesIdx, seriesCount, seriesLabel);
 
       if (compareMode === 'intent') {
-        document.getElementById('cmpTableWrap').classList.add('show');
+        document.getElementById('cmpTableWrap').classList.remove('show');
         document.getElementById('cmpFreeformTableWrap').classList.remove('show');
         document.getElementById('cmpSplitWrap').classList.remove('show');
-        const tbody = document.getElementById('cmpTableBody');
-        tbody.innerHTML = models.map(m => {
-          if (cmpResults[m] && cmpResults[m].ok) return renderCmpResultRow(m, cmpResults[m]);
-          return renderCmpLoadingRow(m);
-        }).join('');
+        const panelsEl = document.getElementById('cmpPanels');
+        if (panelsEl) panelsEl.style.display = 'flex';
 
         let done = 0;
         const claudeModels = models.filter(m => String(m).startsWith('claude'));
@@ -2838,27 +3887,46 @@ async function runComparisonSeries(seriesCount) {
 
         async function runOneModel(model) {
           if (cmpStopFlag) return;
+          const panelTx = (ensurePanelState(model).transcript || '').trim();
+          setPanelStatus(model, 'LLM çalışıyor...');
           try {
-            const single = await fetchModelCompare(transcript, model, runs, expected);
+            const single = await runSingleModelCompare(model, panelTx, expected);
+            if (single && single.runs) {
+              single.runs.forEach(r => {
+                if (!r.ok) return;
+                // Attach panel STT if run came back without stt_ms (text-only Gemini path)
+                const st = ensurePanelState(model);
+                if (r.stt_ms == null && st.sttMs != null) {
+                  r.stt_ms = st.sttMs;
+                  r.stt_source = st.sttEngine === 'gemini' ? 'gemini_live' : 'deepgram';
+                  r.stt_engine = st.sttEngine || (String(model).startsWith('gemini') ? 'gemini' : 'deepgram');
+                }
+                r.latency = panelRunTotalMs(model, r);
+              });
+              if (single.ok) {
+                const okRuns = single.runs.filter(r => r.ok);
+                if (okRuns.length) {
+                  single.avg_latency = Math.round(okRuns.reduce((sum, r) => sum + r.latency, 0) / okRuns.length);
+                  single.min_latency = Math.min.apply(null, okRuns.map(r => r.latency));
+                  single.max_latency = Math.max.apply(null, okRuns.map(r => r.latency));
+                }
+              }
+            }
             cmpResults[model] = mergeIntentRun(cmpResults[model], single, expected);
+            setPanelStatus(model, 'Tamam');
           } catch (e) {
             cmpResults[model] = mergeIntentRun(cmpResults[model], {
               ok: false, error: e.message, model, label: (CMP_MODEL_META[model] || {}).label || model, runs: [{ run: 1, ok: false, error: e.message }]
             }, expected);
+            setPanelStatus(model, 'Hata: ' + e.message);
           }
           done++;
-          showCmpProgress(
-            seriesIdx + done / models.length,
-            seriesCount,
-            `${seriesLabel} · ${(CMP_MODEL_META[model] || {}).label || model} (${done}/${models.length})`
-          );
-          tbody.innerHTML = models.map(m => {
-            if (cmpResults[m]) return renderCmpResultRow(m, cmpResults[m]);
-            return renderCmpLoadingRow(m);
-          }).join('');
+          showCmpProgress(seriesIdx + done / models.length, seriesCount,
+            seriesLabel + ' · ' + ((CMP_MODEL_META[model] || {}).label || model) + ' (' + done + '/' + models.length + ')');
+          renderPanelRuns(model, cmpResults[model]);
+          updateTranscriptDiffWarningFromPanels();
         }
 
-        // All models serial; 3s after each model-run (Claude + Gemini). No extra run-to-run wait.
         const orderedModels = otherModels.concat(claudeModels);
         for (let mi = 0; mi < orderedModels.length; mi++) {
           if (cmpStopFlag) break;
@@ -2866,24 +3934,23 @@ async function runComparisonSeries(seriesCount) {
           const isLastModel = mi === orderedModels.length - 1;
           const isLastSeries = seriesIdx === seriesCount - 1;
           if (!cmpStopFlag && !(isLastSeries && isLastModel)) {
-            showCmpProgress(
-              seriesIdx + (done / models.length),
-              seriesCount,
-              `${(CMP_MODEL_META[orderedModels[mi]] || {}).label || orderedModels[mi]} tamam · 3s bekleniyor...`
-            );
+            showCmpProgress(seriesIdx + (done / models.length), seriesCount,
+              ((CMP_MODEL_META[orderedModels[mi]] || {}).label || orderedModels[mi]) + ' tamam · 3s bekleniyor...');
             await new Promise(r => setTimeout(r, 3000));
           }
         }
-        tbody.innerHTML = models.map(m => renderCmpResultRow(m, cmpResults[m] || { ok: false, error: 'Stopped', model: m, label: (CMP_MODEL_META[m] || {}).label || m })).join('');
+        refreshAllPanelRuns();
         chartResults = cmpResults;
         summaryLines = buildCmpSummary(cmpResults);
-
         if (expected) {
-          const row = { text: transcript, category: matched ? matched.category : '', expected, models: {} };
+          const row = { text: firstTx, category: matched ? matched.category : '', expected: expected, models: {} };
           models.forEach(m => { row.models[m] = cmpResults[m]; });
           renderCmpMetrics(computeBatchMetrics(models, [row]), models);
         }
       } else if (compareMode === 'freeform') {
+        const panelsEl = document.getElementById('cmpPanels');
+        if (panelsEl) panelsEl.style.display = 'none';
+        const transcript = firstTx;
         document.getElementById('cmpFreeformTableWrap').classList.add('show');
         document.getElementById('cmpTableWrap').classList.remove('show');
         document.getElementById('cmpSplitWrap').classList.remove('show');
@@ -2898,7 +3965,15 @@ async function runComparisonSeries(seriesCount) {
 
         async function runOneFreeform(model) {
           if (cmpStopFlag) return;
-          const fresh = await fetchCompareFreeformBatch(transcript, [model], runs);
+          let ffTranscript = transcript;
+          const file = getModelAudioFile(model);
+          if (file) {
+            const stt = await compareAudioStt(file);
+            ffTranscript = stt.transcript;
+          } else if (!ffTranscript) {
+            throw new Error('Transcript yok ve audio dosyası seçilmedi');
+          }
+          const fresh = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
           cmpFreeformResults[model] = mergeFreeformRun(
             cmpFreeformResults[model],
             fresh[model] || { ok: false, error: 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model }
@@ -2939,10 +4014,23 @@ async function runComparisonSeries(seriesCount) {
 
         async function runOneBoth(model) {
           if (cmpStopFlag) return;
-          const [intentMap, freeformMap] = await Promise.all([
-            fetchCompareIntentBatch(transcript, [model], runs, expected),
-            fetchCompareFreeformBatch(transcript, [model], runs),
-          ]);
+          let intentMap = {};
+          try {
+            const single = await runSingleModelCompare(model, transcript, expected);
+            intentMap[model] = single;
+          } catch (e) {
+            intentMap[model] = { ok: false, error: e.message, model, label: (CMP_MODEL_META[model] || {}).label || model };
+          }
+          // Freeform: reuse audio STT transcript when per-model file is set
+          let ffTranscript = transcript;
+          let file = getModelAudioFile(model);
+          if (file) {
+            try {
+              const stt = await compareAudioStt(file);
+              ffTranscript = stt.transcript;
+            } catch (e) { /* fall back to shared transcript */ }
+          }
+          const freeformMap = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
           cmpResults[model] = mergeIntentRun(cmpResults[model], intentMap[model] || { ok: false, error: 'No result', model }, expected);
           cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], freeformMap[model] || { ok: false, error: 'No result', model });
           document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
@@ -3165,6 +4253,7 @@ async function runBatchScenarios() {
 }
 
 renderCmpHistory();
+initModelAudioUploads();
 </script>
 </body>
 </html>

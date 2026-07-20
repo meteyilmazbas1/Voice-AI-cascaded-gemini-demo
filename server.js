@@ -32,7 +32,7 @@ server.on('upgrade', function(request, socket, head) {
   }
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -94,6 +94,33 @@ unsafe: injury/distress/danger ("I fell", "I'm hurt", "SOS") — always escalate
 ambiguous: unclear, contradictory, or unrecognised
 
 Confidence: >0.90 clear | <0.60 hesitation/unclear.`;
+
+// Live compare: same system prompt + setup as server_gemini.js voice agent
+const COMPARE_LIVE_PROMPT = `CRITICAL LANGUAGE RULE: This call is in English only. The worker speaks English. Always transcribe and interpret audio as English, even if the audio quality is poor, words are unclear, or the accent is unfamiliar. Never output text in Korean, Japanese, Chinese, or any language other than English. If you cannot understand the worker's English, respond with the UNCLEAR script in English.
+
+SYSTEM: language=en-US. All input and output in English only.
+
+You are an automated safety monitoring system for Aware360...
+
+Your persona: "Aware360 Monitoring Center" — efficient, neutral, direct.
+
+When the worker speaks:
+1. Listen carefully to their response
+2. Classify their intent: safe confirmation, needs more time, wants human agent, or unclear
+3. Respond appropriately and concisely
+
+Rules:
+- SAFE: "Got it — I've reset your safety timer. Stay safe."
+- DELAYED: "Understood. I've extended your check-in timer. Please check in when ready."  
+- HUMAN AGENT: "Of course. I'm flagging this for a live agent — someone will call you back shortly."
+- UNCLEAR: Always respond with exactly this phrase, nothing else: "Sorry, I didn't catch that. Could you repeat?"
+
+CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or distress — even with positive statements — immediately escalate to human agent.
+
+Keep responses short (under 15 words). Be direct and professional.
+
+IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
+CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
@@ -676,6 +703,8 @@ browserWss.on('connection', function(ws) {
   let clientMimeType = 'audio/pcm;rate=16000';
   let isReceivingAudioFile = false;
   let audioFileChunks = [];
+  let audioFileDurationSec = null;
+  let audioFileName = null;
   let snrBlocked = false;
   let selectedModel = 'claude-haiku-4-5';
   let ttsMode = 'elevenlabs';
@@ -972,10 +1001,26 @@ browserWss.on('connection', function(ws) {
         }
 
         if (msg.type === 'audio_file_start' && sessionState === 'LISTENING') {
-          console.log('[Server] Audio file upload started:', msg.filename, msg.duration + 's');
+          const dur = (typeof msg.duration === 'number' && Number.isFinite(msg.duration))
+            ? msg.duration
+            : (msg.duration != null && Number.isFinite(parseFloat(msg.duration)) ? parseFloat(msg.duration) : null);
+          audioFileDurationSec = dur;
+          audioFileName = msg.filename || null;
+          console.log('[Server] Audio file upload started:', msg.filename, dur != null ? (dur + 's') : 'duration=n/a');
           isReceivingAudioFile = true;
           audioFileChunks = [];
-          send({ type: 'log', message: 'Receiving audio file: ' + msg.filename });
+          send({
+            type: 'audio_file_start_ack',
+            filename: msg.filename || null,
+            duration: audioFileDurationSec,
+            size: msg.size != null ? msg.size : null,
+            mime: msg.mime || null,
+          });
+          send({
+            type: 'log',
+            message: 'Receiving audio file: ' + msg.filename
+              + (audioFileDurationSec != null ? (' (' + audioFileDurationSec + 's)') : ''),
+          });
         }
 
         if (msg.type === 'audio_file_end' && isReceivingAudioFile) {
@@ -983,6 +1028,8 @@ browserWss.on('connection', function(ws) {
           if (audioFileChunks.length === 0) return;
           const fullBuffer = Buffer.concat(audioFileChunks);
           audioFileChunks = [];
+          const fileDurationSec = audioFileDurationSec;
+          const fileName = audioFileName;
 
           // Add WAV header to raw PCM (16-bit, 16kHz, mono)
           function createWavBuffer(pcmBuffer) {
@@ -1064,19 +1111,48 @@ browserWss.on('connection', function(ws) {
               && response.data.results.channels[0].alternatives[0];
             const fileTranscript = alt && alt.transcript;
             if (fileTranscript && String(fileTranscript).trim()) {
-              console.log('[Deepgram] File transcript:', fileTranscript);
-              send({ type: 'stage', stage: 'stt', status: 'done' });
+              console.log('[Deepgram] File transcript:', fileTranscript,
+                fileDurationSec != null ? ('| duration: ' + fileDurationSec + 's') : '');
+              send({
+                type: 'stage',
+                stage: 'stt',
+                status: 'done',
+                duration: fileDurationSec,
+                filename: fileName,
+              });
+              send({
+                type: 'audio_file_result',
+                filename: fileName,
+                duration: fileDurationSec,
+                transcript: String(fileTranscript).trim(),
+              });
               await handleTranscript(fileTranscript, null);
             } else {
               console.warn('[Deepgram] Empty transcript. alt=', JSON.stringify(alt));
-              send({ type: 'log', message: 'No transcript from Deepgram' });
-              send({ type: 'stage', stage: 'stt', status: 'error' });
+              send({
+                type: 'log',
+                message: 'No transcript from Deepgram'
+                  + (fileDurationSec != null ? (' (file ' + fileDurationSec + 's)') : ''),
+              });
+              send({
+                type: 'stage',
+                stage: 'stt',
+                status: 'error',
+                duration: fileDurationSec,
+                filename: fileName,
+              });
             }
           } catch (e) {
             console.error('[Deepgram File Error]', e.message);
             if (e.response) console.error('[Deepgram File Error] body:', JSON.stringify(e.response.data).substring(0, 400));
             send({ type: 'log', message: 'Deepgram error: ' + e.message });
-            send({ type: 'stage', stage: 'stt', status: 'error' });
+            send({
+              type: 'stage',
+              stage: 'stt',
+              status: 'error',
+              duration: fileDurationSec,
+              filename: fileName,
+            });
           }
         }
 
@@ -1119,7 +1195,6 @@ const TOKEN_COSTS = {
   'claude-opus-4-6': { input: 15.00, output: 75.00 },
   'claude-opus-4-7': { input: 15.00, output: 75.00 },
   'claude-opus-4-8': { input: 15.00, output: 75.00 },
-  'gemini-2.0-flash-live-001': { input: 2.10, output: 8.50 },
   'gemini-3.1-flash-live-preview': { input: 2.10, output: 8.50 },
   'gemini-2.0-flash': { input: 2.10, output: 8.50 },
   'gemini-2.0-flash-001': { input: 2.10, output: 8.50 },
@@ -1129,7 +1204,6 @@ const TOKEN_COSTS = {
 const COMPARE_MODEL_META = {
   'claude-haiku-4-5': { type: 'claude', label: 'Claude Haiku 4.5' },
   'claude-sonnet-4-6': { type: 'claude', label: 'Claude Sonnet 4.6' },
-  'gemini-2.0-flash-live-001': { type: 'gemini', label: 'Gemini 2.0 Flash Live' },
   'gemini-3.1-flash-live-preview': { type: 'gemini', label: 'Gemini 3.1 Flash Live' },
 };
 
@@ -1212,13 +1286,36 @@ function avgNum(arr) {
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
+function isAnthropicOverloadedError(err) {
+  if (!err) return false;
+  if (err.status === 529 || err.statusCode === 529) return true;
+  const type = (err.error && err.error.type) || err.type || '';
+  if (String(type).toLowerCase() === 'overloaded_error') return true;
+  const msg = String(err.message || '').toLowerCase();
+  return msg.includes('overloaded_error') || msg.includes('overloaded');
+}
+
+/** One retry on Anthropic 529 / overloaded_error (comparison path). */
+async function withAnthropicCompareRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!isAnthropicOverloadedError(err)) throw err;
+    console.log('[Compare] Anthropic overloaded — retrying in 5s...');
+    await new Promise(function(r) { setTimeout(r, 5000); });
+    return await fn();
+  }
+}
+
 async function classifyWithClaudeOnce(transcript, model, opts) {
   const realSttMs = opts && opts.realSttMs != null ? opts.realSttMs : null;
   const sttMs = realSttMs != null ? realSttMs : 300;
   const sttSource = realSttMs != null ? 'real' : 'estimated';
 
   const llmStart = Date.now();
-  const result = await classifyIntent(transcript, model, { skipFastPath: true });
+  const result = await withAnthropicCompareRetry(function() {
+    return classifyIntent(transcript, model, { skipFastPath: true });
+  });
   // Prefer TTFT (first stream chunk); fall back to wall clock if no chunk seen.
   const llmMs = result._ttft_ms != null ? result._ttft_ms : (Date.now() - llmStart);
   console.log('[Compare LLM]', model, 'TTFT', llmMs + 'ms',
@@ -1278,15 +1375,16 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
   };
 }
 
-// Benchmark/compare uses non-live generateContent (text JSON), not Live audio.
-// Live models (bidiGenerateContent) are audio-first and reject TEXT modality;
-// REST avoids WebSocket + audio synthesis overhead so latency is apples-to-apples with Claude.
-// UI still labels them as Live siblings; server_gemini.js keeps Live AUDIO for voice calls.
-// Each UI id maps to an ordered list of REST models (primary first, fallbacks for quota/availability).
-// Compare uses 2.5 Flash REST with thinkingBudget: 0 (no thinking overhead).
+// Intent compare uses real Gemini Live WebSocket (AUDIO TTFA). REST generateContent
+// remains for freeform / benchmark / explicit geminiMode:'rest' fallback.
+// Each UI id maps to REST fallbacks (quota) and Live model names for compare.
 const GEMINI_REST_MODEL_MAP = {
-  'gemini-2.0-flash-live-001': ['gemini-2.5-flash'],
   'gemini-3.1-flash-live-preview': ['gemini-2.5-flash'],
+};
+
+// UI Live model ids → Live API model names
+const GEMINI_LIVE_MODEL_MAP = {
+  'gemini-3.1-flash-live-preview': 'gemini-3.1-flash-live-preview',
 };
 
 const GEMINI_INTENT_PROMPT = COMPARE_INTENT_PROMPT;
@@ -1436,6 +1534,7 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             total_tokens: usage.total_tokens,
+            mode: 'rest',
             _rest_model: restModel,
           };
         });
@@ -1470,9 +1569,451 @@ async function classifyWithGeminiOnce(transcript, model, opts) {
   throw lastError || new Error('Gemini generateContent failed');
 }
 
+function detectIntentFromLiveOutput(outputText, transcript) {
+  const raw = String(outputText || '').trim();
+  // Prefer JSON if the model somehow emits it
+  const jsonMatch = raw.match(/\{[\s\S]*?"intent"[\s\S]*?\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const intentKey = normalizeGeminiCompareIntent(parsed.intent);
+      return {
+        intentKey: intentKey,
+        distress: parsed.distress || (intentKey === 'unsafe' ? 'high' : null),
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.90,
+      };
+    } catch (e) { /* fall through to keywords */ }
+  }
+
+  const lower = raw.toLowerCase();
+  const worker = String(transcript || '').toLowerCase();
+
+  // Ambiguous canned reply mentions "human agent" — check before request_human keywords
+  if (/didn't catch|did not catch|are you safe, need more time/.test(lower)) {
+    return { intentKey: 'ambiguous', distress: null, confidence: 0.90 };
+  }
+  if (/reset|stay safe|safety timer|got it/.test(lower)) {
+    return { intentKey: 'safe', distress: null, confidence: 0.90 };
+  }
+  if (/extend|check-in timer|understood/.test(lower)) {
+    return { intentKey: 'delayed', distress: null, confidence: 0.90 };
+  }
+  // Same spoken reply for request_human and unsafe — disambiguate via worker transcript
+  if (/flagging|live agent|call you back/.test(lower)) {
+    if (/\b(hurt|pain|fell|fall|emergenc|sos|bleeding|injur|trapped|stuck|help)\b/.test(worker)) {
+      return { intentKey: 'unsafe', distress: 'high', confidence: 0.90 };
+    }
+    return { intentKey: 'request_human', distress: null, confidence: 0.90 };
+  }
+
+  // Fallback: classify from worker transcript if speech was empty/unclear
+  if (/\b(hurt|pain|fell|fall|emergenc|sos|bleeding|injur|trapped|stuck)\b/.test(worker)) {
+    return { intentKey: 'unsafe', distress: 'high', confidence: 0.85 };
+  }
+  if (/\b(agent|human|representative|operator)\b/.test(worker)) {
+    return { intentKey: 'request_human', distress: null, confidence: 0.85 };
+  }
+  if (/\b(more\s+time|need\s+time|extend|minute|minutes|later|running late)\b/.test(worker)) {
+    return { intentKey: 'delayed', distress: null, confidence: 0.85 };
+  }
+  if (/\b(fine|safe|okay|ok|good|yes|yeah)\b/.test(worker)) {
+    return { intentKey: 'safe', distress: null, confidence: 0.85 };
+  }
+  return { intentKey: 'ambiguous', distress: null, confidence: 0.90 };
+}
+
+async function audioToPcm16kMono(inputBuffer) {
+  return new Promise(function(resolve, reject) {
+    const ffmpeg = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-ar', '16000',
+      '-ac', '1',
+      '-f', 's16le',
+      'pipe:1'
+    ]);
+    const chunks = [];
+    ffmpeg.stdout.on('data', function(chunk) { chunks.push(chunk); });
+    ffmpeg.stdout.on('end', function() { resolve(Buffer.concat(chunks)); });
+    let errText = '';
+    ffmpeg.stderr.on('data', function(d) { errText += d.toString(); });
+    ffmpeg.on('error', function(e) {
+      reject(new Error('ffmpeg failed: ' + e.message));
+    });
+    ffmpeg.on('close', function(code) {
+      if (code !== 0 && chunks.length === 0) {
+        reject(new Error('ffmpeg exit ' + code + (errText ? ': ' + errText.slice(0, 200) : '')));
+      }
+    });
+    ffmpeg.stdin.write(inputBuffer);
+    ffmpeg.stdin.end();
+  });
+}
+
+/** Probe audio duration (seconds) via ffmpeg stderr Duration: HH:MM:SS.xx */
+async function getAudioDurationSec(buf) {
+  return new Promise(function(resolve) {
+    const ff = spawn('ffmpeg', ['-hide_banner', '-i', 'pipe:0', '-f', 'null', '-']);
+    let stderr = '';
+    ff.stderr.on('data', function(d) { stderr += d.toString(); });
+    ff.on('error', function() { resolve(null); });
+    ff.on('close', function() {
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+      if (m) {
+        resolve(parseFloat(m[1]) * 3600 + parseFloat(m[2]) * 60 + parseFloat(m[3]));
+      } else {
+        resolve(null);
+      }
+    });
+    try {
+      ff.stdin.write(buf);
+      ff.stdin.end();
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * Real Gemini Live WebSocket compare.
+ * - Text path: transcript → clientContent → AUDIO out, latency = TTFA
+ * - Audio path (opts.audioBuffer | opts.audioPcm): wait setupComplete, then PCM
+ *   chunks (8192 bytes, 20ms gap) with mimeType audio/pcm;rate=16000, then audioStreamEnd
+ * - opts.sttOnly: resolve on first inputTranscription (do not wait for turnComplete / audio out)
+ */
+async function classifyWithGeminiLive(transcript, model, opts) {
+  opts = opts || {};
+  const audioBuffer = opts.audioBuffer || opts.audioPcm || null;
+  const sttOnly = !!opts.sttOnly;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'your_gemini_key') {
+    throw new Error('GEMINI_API_KEY is not set');
+  }
+  const liveModel = GEMINI_LIVE_MODEL_MAP[model] || model;
+  const geminiUrl = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' + apiKey;
+
+  console.log('[Gemini Live Compare] Connecting', liveModel,
+    sttOnly ? '| STT-only' : '',
+    audioBuffer ? ('| audioBuffer PCM ' + audioBuffer.length + ' bytes') : ('| transcript: ' + String(transcript || '').slice(0, 80)));
+
+  return new Promise(function(resolve, reject) {
+    const ws = new WebSocket(geminiUrl);
+    let setupDone = false;
+    let turnStartTime = null;
+    let audioSendStart = null;
+    let firstAudioMs = null;
+    let firstInputTranscriptAt = null;
+    let outputText = '';
+    let inputTranscript = '';
+    let promptTokens = 0;
+    let responseTokens = 0;
+    let settled = false;
+    const timeoutMs = audioBuffer ? 25000 : 15000;
+
+    const timeout = setTimeout(function() {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch (e) {}
+      console.error('[Gemini Live Compare] Timeout (' + (timeoutMs / 1000) + 's)');
+      reject(new Error('Gemini Live timeout (' + (timeoutMs / 1000) + 's)'));
+    }, timeoutMs);
+
+    function finishOk(payload) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try { ws.close(); } catch (e) {}
+      resolve(payload);
+    }
+
+    function finishErr(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try { ws.close(); } catch (e) {}
+      reject(err);
+    }
+
+    // PCM16 mono 16kHz — same mimeType as server_gemini.js
+    const PCM_MIME = 'audio/pcm;rate=16000';
+
+    function sendPcmChunk(pcmSlice) {
+      ws.send(JSON.stringify({
+        realtimeInput: {
+          audio: {
+            data: pcmSlice.toString('base64'),
+            mimeType: PCM_MIME
+          }
+        }
+      }));
+    }
+
+    async function sendAudioBuffer(pcm) {
+      if (!setupDone) {
+        throw new Error('sendAudioBuffer called before setupComplete');
+      }
+      // STT clock starts immediately before any PCM leaves the socket
+      audioSendStart = Date.now();
+      if (!Buffer.isBuffer(pcm)) {
+        pcm = Buffer.from(pcm);
+      }
+      const CHUNK_SIZE = 8192;
+      const totalChunks = Math.ceil(pcm.length / CHUNK_SIZE) || 1;
+      console.log('[Gemini Live Compare] setupComplete OK — sending PCM audio',
+        '| audioSendStart set',
+        '| bytes:', pcm.length,
+        '| chunks:', totalChunks,
+        '| chunkSize:', CHUNK_SIZE,
+        '| mimeType:', PCM_MIME,
+        sttOnly ? '| sttOnly' : '');
+      for (let offset = 0; offset < pcm.length; offset += CHUNK_SIZE) {
+        if (settled || ws.readyState !== WebSocket.OPEN) return;
+        const slice = pcm.subarray(offset, Math.min(offset + CHUNK_SIZE, pcm.length));
+        sendPcmChunk(slice);
+        if (offset + CHUNK_SIZE < pcm.length) {
+          await new Promise(function(r) { setTimeout(r, 20); });
+        }
+      }
+      if (settled || ws.readyState !== WebSocket.OPEN) return;
+      turnStartTime = Date.now();
+      ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+      console.log('[Gemini Live Compare] Audio sent (' + pcm.length + ' bytes) — audioStreamEnd');
+    }
+
+    ws.on('open', function() {
+      // VAD config mirrors server_gemini.js so Live knows how to segment audio
+      const setupMsg = {
+        setup: {
+          model: 'models/' + liveModel,
+          generation_config: {
+            response_modalities: ['AUDIO'],
+            speech_config: {
+              voice_config: {
+                prebuilt_voice_config: { voice_name: 'Charon' }
+              }
+            }
+          },
+          realtime_input_config: {
+            automatic_activity_detection: {
+              disabled: false,
+              end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
+              start_of_speech_sensitivity: 'START_SENSITIVITY_LOW',
+              silence_duration_ms: 1500,
+              prefix_padding_ms: 200,
+            }
+          },
+          input_audio_transcription: {},
+          output_audio_transcription: {},
+          system_instruction: {
+            parts: [{ text: COMPARE_LIVE_PROMPT }]
+          }
+        }
+      };
+      console.log('[Gemini Live Compare] WS open — sending setup (VAD enabled, audio waits for setupComplete)');
+      console.log('[Gemini Live Compare] setup.realtime_input_config:',
+        JSON.stringify(setupMsg.setup.realtime_input_config));
+      ws.send(JSON.stringify(setupMsg));
+    });
+
+    ws.on('message', function(data) {
+      try {
+        if (settled) return;
+        const raw = Buffer.isBuffer(data) ? data.toString('utf8') : data.toString();
+        const msg = JSON.parse(raw);
+        console.log('[Gemini Live Compare RAW]', JSON.stringify(msg).substring(0, 200));
+
+        if ((msg.setupComplete || msg.setup_complete) && !setupDone) {
+          setupDone = true;
+          if (audioBuffer) {
+            sendAudioBuffer(audioBuffer).catch(finishErr);
+          } else {
+            turnStartTime = Date.now();
+            console.log('[Gemini Live Compare] Setup complete — sending transcript');
+            ws.send(JSON.stringify({
+              client_content: {
+                turns: [{
+                  role: 'user',
+                  parts: [{ text: 'Worker said: "' + transcript + '"' }]
+                }],
+                turn_complete: true
+              }
+            }));
+          }
+          return;
+        }
+
+        if (msg.error) {
+          console.error('[Gemini Live Compare] API error:', JSON.stringify(msg.error).substring(0, 300));
+        }
+
+        const serverContent = msg.serverContent || msg.server_content || null;
+        const inputTxObj = serverContent && (serverContent.inputTranscription || serverContent.input_transcription);
+        const inputTxText = inputTxObj && inputTxObj.text;
+
+        // Resolve STT as soon as inputTranscription arrives — never wait for turnComplete
+        if (inputTxText) {
+          inputTranscript += inputTxText;
+          if (firstInputTranscriptAt === null) {
+            firstInputTranscriptAt = Date.now();
+            console.log('[Gemini Live Compare] inputTranscription start:', String(inputTxText).slice(0, 80));
+          }
+          if (sttOnly) {
+            if (!audioSendStart || firstInputTranscriptAt == null) return;
+            const sttMs = Math.max(0, firstInputTranscriptAt - audioSendStart);
+            const tx = inputTranscript.trim();
+            console.log('[Gemini Live Compare] STT-only resolve on inputTranscription:', sttMs + 'ms',
+              '| firstInputTranscriptAt - audioSendStart');
+            clearTimeout(timeout);
+            try { ws.close(); } catch (e) {}
+            if (!settled) {
+              settled = true;
+              resolve({
+                transcript: tx,
+                sttMs: sttMs,
+                stt_ms: sttMs,
+                stt_source: 'gemini_live',
+                stt_engine: 'gemini',
+                inputTranscript: tx,
+                input_transcript: tx,
+                latency: sttMs,
+                ttfa: null,
+                llm_ms: null,
+                mode: 'stt_only',
+                intent: null,
+                confidence: null,
+                response: '',
+                input_tokens: 0,
+                output_tokens: 0,
+                total_tokens: 0,
+              });
+            }
+            return; // ignore subsequent messages (turnComplete / audio)
+          }
+        }
+
+        if (sttOnly) return; // STT-only: ignore turnComplete / generationComplete / audio out
+
+        function markFirstAudio(reason) {
+          if (firstAudioMs === null && turnStartTime) {
+            firstAudioMs = Date.now() - turnStartTime;
+            console.log('[Gemini Live Compare] TTFA:', firstAudioMs + 'ms (' + reason + ')');
+          }
+        }
+
+        if (serverContent && serverContent.modelTurn && serverContent.modelTurn.parts) {
+          for (let i = 0; i < serverContent.modelTurn.parts.length; i++) {
+            const part = serverContent.modelTurn.parts[i];
+            const inline = part.inlineData || part.inline_data;
+            const mime = inline && (inline.mimeType || inline.mime_type);
+            if (inline && mime && String(mime).indexOf('audio/') === 0) {
+              markFirstAudio('modelTurn.audio');
+            }
+            if (part.text) outputText += part.text;
+          }
+        }
+
+        // First spoken-word transcription is a solid TTFA proxy if audio chunks aren't parsed
+        const outTx = serverContent && (serverContent.outputTranscription || serverContent.output_transcription);
+        if (outTx && outTx.text) {
+          markFirstAudio('outputTranscription');
+          outputText += outTx.text;
+        }
+
+        if (serverContent && (serverContent.generationComplete || serverContent.generation_complete)) {
+          markFirstAudio('generationComplete');
+        }
+
+        if (msg.usageMetadata) {
+          promptTokens = msg.usageMetadata.promptTokenCount || promptTokens;
+          responseTokens = msg.usageMetadata.responseTokenCount
+            || msg.usageMetadata.candidatesTokenCount
+            || responseTokens;
+        }
+
+        if (serverContent && (serverContent.turnComplete || serverContent.turn_complete)) {
+          const workerText = (inputTranscript || transcript || '').trim();
+          const detected = detectIntentFromLiveOutput(outputText, workerText);
+          const mapped = applyCompareDistress(enrichCompareFromMinimal({
+            intent: detected.intentKey,
+            confidence: detected.confidence != null ? detected.confidence : 0.90,
+            distress: detected.distress,
+          }, workerText));
+          // Never use full turnComplete duration as TTFA — that inflates long replies (~4–5s)
+          const ttfa = firstAudioMs != null ? firstAudioMs : null;
+          if (ttfa == null) {
+            console.warn('[Gemini Live Compare] No TTFA mark before turnComplete — llm_ms left null');
+          }
+          let sttMs = null;
+          if (audioBuffer && audioSendStart) {
+            const sttEnd = firstInputTranscriptAt || Date.now();
+            sttMs = Math.max(0, sttEnd - audioSendStart);
+          }
+          const totalLatency = (sttMs || 0) + (ttfa || 0);
+
+          console.log('[Gemini Live Compare] Done | TTFA:', ttfa != null ? ttfa + 'ms' : 'n/a',
+            sttMs != null ? ('| STT:', sttMs + 'ms') : '',
+            '| turnComplete elapsed:', turnStartTime ? (Date.now() - turnStartTime) + 'ms (not used as TTFA)' : 'n/a',
+            '| inputTranscript:', workerText.slice(0, 100),
+            '| intent:', mapped.intent);
+
+          finishOk({
+            latency: totalLatency,
+            ttfa: ttfa,
+            llm_ms: ttfa,
+            stt_ms: sttMs,
+            stt_source: audioBuffer ? 'gemini_live' : null,
+            stt_engine: audioBuffer ? 'gemini' : null,
+            intent: mapped.intent,
+            confidence: mapped.confidence,
+            response: mapped.response || outputText.trim(),
+            resolved: !!mapped.resolved,
+            escalate: !!mapped.escalate,
+            delay_minutes: mapped.delay_minutes ?? null,
+            distress: mapped.distress || null,
+            distress_signals: mapped.distress_signals || null,
+            input_tokens: promptTokens,
+            output_tokens: responseTokens,
+            total_tokens: promptTokens + responseTokens,
+            mode: audioBuffer ? 'live_audio' : 'live_text',
+            output_text: outputText.trim(),
+            inputTranscript: inputTranscript.trim(),
+            input_transcript: inputTranscript.trim(),
+            transcript: workerText,
+          });
+        }
+      } catch (e) {
+        console.error('[Gemini Live Compare] Parse error:', e.message);
+      }
+    });
+
+    ws.on('error', function(e) {
+      console.error('[Gemini Live Compare] WS error:', e.message);
+      finishErr(e);
+    });
+
+    ws.on('close', function(code, reason) {
+      const reasonStr = reason ? reason.toString() : '';
+      console.log('[Gemini Live Compare] Closed', code, reasonStr);
+      clearTimeout(timeout);
+      if (!settled) {
+        finishErr(new Error(
+          sttOnly
+            ? ('Gemini Live STT closed before inputTranscription (code=' + code + (reasonStr ? ', reason=' + reasonStr : '') + ')')
+            : ('Gemini Live connection closed before turnComplete (code=' + code + (reasonStr ? ', reason=' + reasonStr : '') + ')')
+        ));
+      }
+    });
+  });
+}
+
 async function classifyOnce(transcript, model, opts) {
+  opts = opts || {};
   if (model.indexOf('claude-') === 0) return classifyWithClaudeOnce(transcript, model, opts);
-  if (resolveGeminiRestModels(model)) return classifyWithGeminiOnce(transcript, model, opts);
+  if (resolveGeminiRestModels(model) || GEMINI_LIVE_MODEL_MAP[model]) {
+    if (opts.geminiMode === 'rest') return classifyWithGeminiOnce(transcript, model, opts);
+    console.log('[Compare] Gemini path: Live WebSocket', model, (opts.audioBuffer || opts.audioPcm) ? '(audio)' : '(text)');
+    return classifyWithGeminiLive(transcript, model, opts);
+  }
   throw new Error('Unsupported model: ' + model);
 }
 
@@ -1499,8 +2040,18 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
       let sttSource = null;
 
       if (isGemini) {
-        // Gemini compare is LLM-only; no cascaded STT/TTS breakdown.
-        totalLatency = r.latency;
+        // STT = Deepgram (opts.realSttMs) when audio→text path; Gemini = text→audio TTFA
+        const deepgramStt = classifyOpts.realSttMs != null ? classifyOpts.realSttMs : null;
+        sttMs = deepgramStt != null ? deepgramStt : (r.stt_ms != null ? r.stt_ms : null);
+        sttSource = deepgramStt != null
+          ? (classifyOpts.sttSource || 'deepgram')
+          : (r.stt_source || (sttMs != null ? 'gemini_live' : null));
+        llmMs = r.ttfa != null ? r.ttfa : (r.llm_ms != null ? r.llm_ms : null);
+        totalLatency = (sttMs || 0) + (llmMs || 0);
+        console.log('[Compare Gemini]', model,
+          '| STT:', sttMs != null ? sttMs + 'ms' : 'n/a',
+          '| Gemini TTFA:', llmMs != null ? llmMs + 'ms' : 'n/a',
+          '| Total:', totalLatency + 'ms');
       } else {
         sttMs = r.stt_ms ?? null;
         sttSource = r.stt_source || null;
@@ -1517,7 +2068,11 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
         latency: totalLatency,
         stt_ms: sttMs,
         stt_source: sttSource,
+        stt_engine: classifyOpts.sttEngine
+          || r.stt_engine
+          || (sttSource === 'deepgram' ? 'deepgram' : (isGemini && sttMs != null ? 'gemini' : null)),
         llm_ms: llmMs,
+        gemini_ms: isGemini ? llmMs : undefined,
         tts_ms: ttsMs,
         intent: r.intent,
         confidence: r.confidence,
@@ -1531,6 +2086,9 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
         output_tokens: r.output_tokens,
         total_tokens: r.total_tokens != null ? r.total_tokens : ((r.input_tokens || 0) + (r.output_tokens || 0)),
         cost: cost,
+        mode: r.mode || (isGemini ? 'live_audio' : null),
+        transcript: r.transcript || r.input_transcript || r.inputTranscript || null,
+        input_transcript: r.input_transcript || r.inputTranscript || null,
       });
     } catch (err) {
       runRows.push({
@@ -1581,9 +2139,9 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
     intent: lastOk.intent,
     avg_confidence: avgNum(confidences),
     avg_latency: Math.round(avgNum(avgLatencies)),
-    avg_stt_ms: isGemini ? null : (sttTimes.length ? Math.round(avgNum(sttTimes)) : null),
-    stt_source: isGemini ? null : (lastOk.stt_source || null),
-    avg_llm_ms: isGemini ? null : (llmTimes.length ? Math.round(avgNum(llmTimes)) : null),
+    avg_stt_ms: sttTimes.length ? Math.round(avgNum(sttTimes)) : null,
+    stt_source: lastOk.stt_source || null,
+    avg_llm_ms: llmTimes.length ? Math.round(avgNum(llmTimes)) : (isGemini ? lastOk.llm_ms : null),
     avg_tts_ms: isGemini ? null : (ttsTimes.length ? Math.round(avgNum(ttsTimes)) : null),
     min_latency: Math.min.apply(null, latencies),
     max_latency: Math.max.apply(null, latencies),
@@ -1596,6 +2154,7 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
     correct: expected ? lastOk.intent === expected : null,
     success_runs: okRuns.length,
     total_runs: runs,
+    mode: lastOk.mode || (isGemini ? 'live_audio' : null),
     runs: runRows,
   };
 }
@@ -1622,6 +2181,265 @@ app.post('/transcribe', express.raw({ type: ['audio/*', 'application/octet-strea
   }
 });
 
+function createCompareWavBuffer(pcmBuffer) {
+  const sampleRate = 16000;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const dataSize = pcmBuffer.length;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([header, pcmBuffer]);
+}
+
+/** Shared Deepgram Nova-3 REST STT for comparison audio (same logic as /compare-audio-stt). */
+async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
+  const dgApiKey = process.env.DEEPGRAM_API_KEY;
+  if (!dgApiKey || dgApiKey === 'your_deepgram_key') {
+    throw new Error('DEEPGRAM_API_KEY is not set');
+  }
+  if (!buf || !buf.length) {
+    throw new Error('audio body required');
+  }
+
+  const head4 = buf.slice(0, 4).toString('ascii');
+  const head3 = buf.slice(0, 3).toString('ascii');
+  const b0 = buf.length > 0 ? buf[0] : 0;
+  const b1 = buf.length > 1 ? buf[1] : 0;
+  const isRiff = head4 === 'RIFF';
+  const isMp3 = head3 === 'ID3' || (b0 === 0xff && (b1 & 0xe0) === 0xe0);
+  // EBML / WebM / Matroska
+  const isWebm = (b0 === 0x1a && b1 === 0x45) ||
+    (contentTypeHint && String(contentTypeHint).toLowerCase().indexOf('webm') !== -1);
+  const isOgg = head4 === 'OggS' ||
+    (contentTypeHint && String(contentTypeHint).toLowerCase().indexOf('ogg') !== -1);
+
+  let audioBuffer = buf;
+  let dgContentType = 'audio/wav';
+
+  // Normalize tricky containers to WAV via ffmpeg so Deepgram doesn't return empty
+  if (isWebm || isOgg || (!isRiff && !isMp3)) {
+    try {
+      console.log('[Compare Audio STT] Converting to PCM/WAV via ffmpeg...',
+        isWebm ? 'webm' : isOgg ? 'ogg' : (contentTypeHint || 'unknown'), buf.length, 'bytes');
+      const pcm = await audioToPcm16kMono(buf);
+      if (pcm && pcm.length) {
+        audioBuffer = createCompareWavBuffer(pcm);
+        dgContentType = 'audio/wav';
+      }
+    } catch (convErr) {
+      console.warn('[Compare Audio STT] ffmpeg convert failed, sending raw:', convErr.message);
+      if (isRiff) dgContentType = 'audio/wav';
+      else if (isMp3) dgContentType = 'audio/mpeg';
+      else if (isWebm) dgContentType = 'audio/webm';
+      else if (isOgg) dgContentType = 'audio/ogg';
+      else if (contentTypeHint) dgContentType = String(contentTypeHint).split(';')[0] || 'audio/wav';
+    }
+  } else if (isRiff) {
+    dgContentType = 'audio/wav';
+  } else if (isMp3) {
+    dgContentType = 'audio/mpeg';
+  }
+
+  const sttStart = Date.now();
+  const response = await axios.post(
+    'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true',
+    audioBuffer,
+    {
+      headers: { Authorization: 'Token ' + dgApiKey, 'Content-Type': dgContentType },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      transformRequest: [function(data) { return data; }],
+      responseType: 'json',
+      timeout: 60000,
+    }
+  );
+  const sttMs = Date.now() - sttStart;
+  const alt = (((response.data || {}).results || {}).channels || [])[0] || {};
+  const best = (alt.alternatives || [])[0] || {};
+  const transcript = best.transcript || '';
+  const confidence = typeof best.confidence === 'number' ? best.confidence : 0;
+
+  console.log('[Compare Audio STT]', sttMs + 'ms |', dgContentType, '|', JSON.stringify(transcript).slice(0, 120));
+  return { transcript: transcript, sttMs: sttMs, confidence: confidence, engine: 'deepgram' };
+}
+
+/** Deepgram REST STT for per-model comparison audio uploads. Returns transcript + sttMs. */
+app.post('/compare-audio-stt', express.raw({ type: '*/*', limit: '50mb' }), async function(req, res) {
+  try {
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ error: 'audio body required' });
+    }
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+    const durationSec = await getAudioDurationSec(buf);
+    const deepgramCost = durationSec != null ? (durationSec / 60) * 0.0043 : null;
+    console.log('[Compare Audio STT] duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
+
+    const result = await transcribeCompareAudioDeepgram(buf, req.headers['content-type']);
+    res.json({
+      transcript: result.transcript,
+      sttMs: result.sttMs,
+      confidence: result.confidence,
+      engine: 'deepgram',
+      duration_sec: durationSec,
+      deepgram_cost: deepgramCost,
+      // aliases for older frontend fields
+      duration: durationSec,
+    });
+  } catch (e) {
+    const apiMsg = e.response && e.response.data && (e.response.data.err_msg || e.response.data.error);
+    console.error('[Compare Audio STT] Error:', e.message, apiMsg || '');
+    res.status(500).json({ error: (apiMsg && String(apiMsg)) || e.message || 'STT failed' });
+  }
+});
+
+/**
+ * Gemini Live STT only (inputTranscription). No Deepgram.
+ * Query: ?model=gemini-3.1-flash-live-preview
+ */
+app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), async function(req, res) {
+  try {
+    const model = (req.query && req.query.model) || req.headers['x-compare-model'] || 'gemini-3.1-flash-live-preview';
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ error: 'audio body required' });
+    }
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+    const durationHeader = req.headers['x-audio-duration'];
+    const duration = durationHeader != null && Number.isFinite(parseFloat(durationHeader))
+      ? parseFloat(durationHeader)
+      : null;
+    console.log('[Compare Gemini STT] Converting to PCM16k...', buf.length, 'bytes | model:', model,
+      duration != null ? ('| duration: ' + duration + 's') : '');
+    const pcm = await audioToPcm16kMono(buf);
+    if (!pcm || !pcm.length) {
+      return res.status(400).json({ error: 'Audio conversion produced empty PCM' });
+    }
+    const r = await classifyWithGeminiLive(null, model, { audioBuffer: pcm, sttOnly: true });
+    const transcript = r.inputTranscript || r.input_transcript || r.transcript || '';
+    console.log('[Compare Gemini STT]', (r.stt_ms || 0) + 'ms |', JSON.stringify(transcript).slice(0, 120));
+    res.json({
+      transcript: transcript,
+      sttMs: r.stt_ms != null ? r.stt_ms : null,
+      confidence: null,
+      engine: 'gemini',
+      duration: duration,
+    });
+  } catch (e) {
+    console.error('[Compare Gemini STT] Error:', e.message);
+    res.status(500).json({ error: e.message || 'Gemini STT failed' });
+  }
+});
+
+/**
+ * Gemini Live compare with audio file:
+ * Deepgram Nova-3 STT → transcript text → Gemini Live (text in, audio out TTFA).
+ * Query: ?model=gemini-3.1-flash-live-preview
+ */
+app.post('/compare-gemini-audio', express.raw({ type: '*/*', limit: '50mb' }), async function(req, res) {
+  try {
+    const model = (req.query && req.query.model) || req.headers['x-compare-model'] || 'gemini-3.1-flash-live-preview';
+    if (!COMPARE_MODEL_META[model] && String(model).indexOf('gemini-') !== 0) {
+      return res.status(400).json({ error: 'Unsupported Gemini model: ' + model });
+    }
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ error: 'audio body required' });
+    }
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+
+    console.log('[Compare Gemini Audio] Deepgram STT first...', buf.length, 'bytes | model:', model);
+    const stt = await transcribeCompareAudioDeepgram(buf, req.headers['content-type']);
+    const transcript = (stt.transcript || '').trim();
+    if (!transcript) {
+      return res.status(400).json({ error: 'Deepgram returned empty transcript' });
+    }
+    const sttMs = stt.sttMs;
+
+    console.log('[Compare Gemini Audio] STT (Deepgram):', sttMs + 'ms — sending transcript to Gemini Live (text)');
+    const r = await classifyWithGeminiLive(transcript, model, {});
+    const geminiMs = r.ttfa != null ? r.ttfa : (r.llm_ms != null ? r.llm_ms : r.latency);
+    const totalLatency = (sttMs || 0) + (geminiMs || 0);
+    console.log('[Compare Gemini Audio] Gemini TTFA:', geminiMs + 'ms | Total:', totalLatency + 'ms');
+
+    const cost = calcTokenCost(model, r.input_tokens, r.output_tokens);
+    const meta = COMPARE_MODEL_META[model] || { label: model, type: 'gemini' };
+
+    res.json({
+      ok: true,
+      model: model,
+      label: meta.label,
+      intent: r.intent,
+      avg_confidence: r.confidence,
+      avg_latency: totalLatency,
+      avg_stt_ms: sttMs,
+      avg_llm_ms: geminiMs,
+      avg_tts_ms: null,
+      min_latency: totalLatency,
+      max_latency: totalLatency,
+      avg_input_tokens: r.input_tokens || 0,
+      avg_output_tokens: r.output_tokens || 0,
+      avg_tokens: (r.input_tokens || 0) + (r.output_tokens || 0),
+      est_cost: cost,
+      distress: r.distress,
+      distress_signals: r.distress_signals,
+      correct: null,
+      success_runs: 1,
+      total_runs: 1,
+      mode: 'deepgram_stt_gemini_live_text',
+      stt_source: 'deepgram',
+      stt_engine: 'deepgram',
+      stt_ms: sttMs,
+      gemini_ms: geminiMs,
+      llm_ms: geminiMs,
+      transcript: transcript,
+      input_transcript: transcript,
+      inputTranscript: transcript,
+      stt_confidence: stt.confidence,
+      runs: [{
+        run: 1,
+        ok: true,
+        latency: totalLatency,
+        stt_ms: sttMs,
+        stt_source: 'deepgram',
+        stt_engine: 'deepgram',
+        llm_ms: geminiMs,
+        gemini_ms: geminiMs,
+        tts_ms: null,
+        intent: r.intent,
+        confidence: r.confidence,
+        response: r.response,
+        resolved: r.resolved,
+        escalate: r.escalate,
+        delay_minutes: r.delay_minutes,
+        distress: r.distress,
+        distress_signals: r.distress_signals,
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        total_tokens: (r.input_tokens || 0) + (r.output_tokens || 0),
+        cost: cost,
+        mode: 'deepgram_stt_gemini_live_text',
+        transcript: transcript,
+        input_transcript: transcript,
+      }],
+    });
+  } catch (e) {
+    console.error('[Compare Gemini Audio] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message || 'Gemini audio compare failed' });
+  }
+});
+
 // Single-run classify for public/benchmark.html (one model per request, no aggregation).
 app.post('/benchmark-classify', async function(req, res) {
   const transcript = (req.body && req.body.transcript || '').trim();
@@ -1637,7 +2455,7 @@ app.post('/benchmark-classify', async function(req, res) {
   for (const model of models) {
     const start = Date.now();
     try {
-      const r = await classifyOnce(transcript, model);
+      const r = await classifyOnce(transcript, model, { geminiMode: 'rest' });
       results[model] = {
         ok: true,
         latency: r.latency,
@@ -1651,6 +2469,7 @@ app.post('/benchmark-classify', async function(req, res) {
         delay_minutes: r.delay_minutes,
         input_tokens: r.input_tokens,
         output_tokens: r.output_tokens,
+        mode: r.mode || 'rest',
       };
     } catch (err) {
       results[model] = {
@@ -1683,23 +2502,66 @@ app.get('/compare-stt-config', function(req, res) {
 });
 
 app.post('/compare-intent', async function(req, res) {
-  const transcript = (req.body && req.body.transcript || '').trim();
+  let transcript = (req.body && req.body.transcript || '').trim();
   const models = (req.body && req.body.models) || [];
   let runs = parseInt(req.body && req.body.runs, 10);
   const expected = (req.body && req.body.expected) || null;
   // Mic/audio-file Deepgram latency from client; fall back to legacy stt_ms key
-  const realSttMs = normalizeClientSttMs(
+  let realSttMs = normalizeClientSttMs(
     (req.body && req.body.real_stt_ms != null) ? req.body.real_stt_ms : (req.body && req.body.stt_ms)
   );
-  const compareOpts = realSttMs != null ? { realSttMs: realSttMs } : {};
+  const compareOpts = realSttMs != null ? { realSttMs: realSttMs, geminiMode: 'live' } : { geminiMode: 'live' };
+  let deepgramFromAudio = false;
 
-  if (!transcript) return res.status(400).json({ error: 'transcript is required' });
+  // Optional audio: Deepgram Nova-3 STT → transcript text → Gemini Live (no audio buffer to Live)
+  const audioB64 = req.body && (req.body.audio_base64 || req.body.audioBuffer);
+  const clientTranscript = transcript;
+  if (audioB64 && typeof audioB64 === 'string') {
+    try {
+      const rawAudio = Buffer.from(audioB64, 'base64');
+      console.log('[Compare Intent] Audio received — Deepgram STT first...', rawAudio.length, 'bytes');
+      const stt = await transcribeCompareAudioDeepgram(rawAudio, req.body.audio_mime || 'audio/wav');
+      if ((stt.transcript || '').trim()) {
+        transcript = stt.transcript.trim();
+        realSttMs = stt.sttMs;
+        compareOpts.realSttMs = stt.sttMs;
+        compareOpts.sttEngine = 'deepgram';
+        compareOpts.sttSource = 'deepgram';
+        compareOpts.sttConfidence = stt.confidence;
+        deepgramFromAudio = true;
+        console.log('[Compare Intent] STT (Deepgram):', stt.sttMs + 'ms | transcript:', JSON.stringify(transcript).slice(0, 100));
+      } else if (clientTranscript) {
+        // Deepgram empty (common on some webm/mic blobs) — keep panel transcript
+        console.warn('[Compare Intent] Deepgram empty — falling back to client transcript');
+        transcript = clientTranscript;
+        if (realSttMs != null) {
+          compareOpts.realSttMs = realSttMs;
+          compareOpts.sttEngine = compareOpts.sttEngine || 'deepgram';
+          compareOpts.sttSource = 'client_fallback';
+        }
+      } else {
+        return res.status(400).json({ error: 'Deepgram returned empty transcript' });
+      }
+    } catch (e) {
+      console.error('[Compare Intent] Deepgram STT error:', e.message);
+      if (clientTranscript) {
+        console.warn('[Compare Intent] Deepgram failed — falling back to client transcript');
+        transcript = clientTranscript;
+      } else {
+        return res.status(400).json({ error: 'Deepgram STT failed: ' + (e.message || String(e)) });
+      }
+    }
+  }
+
+  if (!transcript) {
+    return res.status(400).json({ error: 'transcript is required (or audio_base64 for Deepgram→Gemini)' });
+  }
   if (!Array.isArray(models) || models.length === 0) {
     return res.status(400).json({ error: 'models[] is required' });
   }
 
   if (!Number.isFinite(runs) || runs < 1) runs = 1;
-  if (runs > 10) runs = 10;
+  if (runs > 20) runs = 20;
 
   const invalid = models.filter(function(m) {
     return !(COMPARE_MODEL_META[m] || m.indexOf('claude-') === 0 || resolveGeminiRestModels(m));
@@ -1713,7 +2575,11 @@ app.post('/compare-intent', async function(req, res) {
   const otherModels = models.filter(function(m) { return String(m).indexOf('claude-') !== 0; });
 
   function runOne(model) {
-    return runModelComparison(transcript, model, runs, expected, compareOpts)
+    const opts = Object.assign({}, compareOpts);
+    // Never send audio buffer to Live — Gemini gets text only (TTFA)
+    delete opts.audioBuffer;
+    delete opts.audioPcm;
+    return runModelComparison(transcript, model, runs, expected, opts)
       .catch(function(err) {
         return {
           ok: false,
@@ -1742,7 +2608,9 @@ app.post('/compare-intent', async function(req, res) {
     runs: runs,
     real_stt_ms: realSttMs,
     stt_ms: realSttMs != null ? realSttMs : 300,
-    stt_source: realSttMs != null ? 'real' : 'estimated',
+    stt_source: realSttMs != null ? (deepgramFromAudio ? 'deepgram' : 'real') : 'estimated',
+    stt_engine: deepgramFromAudio ? 'deepgram' : undefined,
+    audio_used: deepgramFromAudio,
     results: results,
   });
 });
@@ -1756,26 +2624,31 @@ async function classifyFreeformOnce(transcript, model) {
   let outputTokens = 0;
 
   if (model.indexOf('claude-') === 0) {
-    const stream = anthropic.messages.stream({
-      model: model,
-      max_tokens: 150,
-      system: FREEFORM_PROMPT,
-      messages: [{ role: 'user', content: 'Worker said: "' + transcript + '"' }]
-    });
-    for await (const chunk of stream) {
-      if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
-        response += chunk.delta.text;
-      }
-    }
-    try {
-      const finalMsg = await stream.finalMessage();
-      const usage = parseClaudeUsage(finalMsg && finalMsg.usage);
-      inputTokens = usage.input_tokens;
-      outputTokens = usage.output_tokens;
-    } catch (e) {
+    await withAnthropicCompareRetry(async function() {
+      response = '';
       inputTokens = 0;
       outputTokens = 0;
-    }
+      const stream = anthropic.messages.stream({
+        model: model,
+        max_tokens: 150,
+        system: FREEFORM_PROMPT,
+        messages: [{ role: 'user', content: 'Worker said: "' + transcript + '"' }]
+      });
+      for await (const chunk of stream) {
+        if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
+          response += chunk.delta.text;
+        }
+      }
+      try {
+        const finalMsg = await stream.finalMessage();
+        const usage = parseClaudeUsage(finalMsg && finalMsg.usage);
+        inputTokens = usage.input_tokens;
+        outputTokens = usage.output_tokens;
+      } catch (e) {
+        inputTokens = 0;
+        outputTokens = 0;
+      }
+    });
   } else {
     const candidates = resolveGeminiRestModels(model);
     if (!candidates) throw new Error('Unsupported Gemini model: ' + model);
@@ -1896,7 +2769,7 @@ app.post('/compare-freeform', async function(req, res) {
   }
 
   if (!Number.isFinite(runs) || runs < 1) runs = 1;
-  if (runs > 10) runs = 10;
+  if (runs > 20) runs = 20;
 
   const invalid = models.filter(function(m) {
     return !(COMPARE_MODEL_META[m] || m.indexOf('claude-') === 0 || resolveGeminiRestModels(m));
