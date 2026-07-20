@@ -9,6 +9,9 @@ const http = require('http');
 const axios = require('axios');
 const twilio = require('twilio');
 const { insertCallStart, updateCallEnd, updateRecordingUrl, updateCallSessionState, listCalls, getCallBySid } = require('./db');
+const { createNoiseEstimator } = require("./noiseEstimator");
+const { createSileroVad } = require("./sileroVad");
+const { frameStatsMulaw } = require("./audioLevel"); 
 
 const app = express();
 const server = http.createServer(app);
@@ -105,6 +108,14 @@ wss.on('connection', function(ws) {
   let actualSampleRate = 16000;
   let greetingSent = false;
   let isCachingGreeting = false;
+  let turnHadAudio = false;
+  let greetingAnnounced = false; // guards the conversation-history bubble (send once per session)
+
+  function announceGreeting() {
+    if (greetingAnnounced) return;
+    greetingAnnounced = true;
+    send({ type: 'greeting', text: WORKER_INTRO, audio: null });
+  }
   let workerSpeechEndTime = null; let turnStartTime = null;
   let workerSpeechActive = false;
   let workerSilenceTimer = null;
@@ -162,6 +173,9 @@ wss.on('connection', function(ws) {
     // language_codes removed — caused WebSocket 1007 on Gemini Live setup
     input_audio_transcription: {},
     output_audio_transcription: {},
+    // camelCase alias — snake_case form is silently ignored by some preview models,
+    // which is why AI turns never reached the transcript buffer
+    outputAudioTranscription: {},
     system_instruction: {
       parts: [{ text: SYSTEM_PROMPT }]
     }
@@ -193,7 +207,7 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
       await new Promise(r => setTimeout(r, 20));
     }
     send({ type: 'audio_stream_end' });
-    send({ type: 'greeting', text: WORKER_INTRO, audio: null });
+    announceGreeting();
     // Stay in GREETING until client has time to play audio — no playback_done wait
     scheduleListeningTransition('cached greeting');
     return; // cache hit — do not send greetingMsg to Gemini
@@ -236,6 +250,7 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     cachedGreetingChunks.push(part.inlineData.data);
     cachedGreetingMimeType = part.inlineData.mimeType;
   }
+  turnHadAudio = true;
   send({ type: 'audio_chunk', chunk: part.inlineData.data, index: 0, mimeType: part.inlineData.mimeType });
 }
       if (part.text) {
@@ -245,18 +260,23 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     }
   }
 
-  if (content.outputTranscription && content.outputTranscription.text) {
-  aiTranscriptBuffer += content.outputTranscription.text;
-}
+  const outTx = content.outputTranscription || content.output_transcription;
+  if (outTx && outTx.text) {
+    aiTranscriptBuffer += outTx.text;
+  }
 
           if (content.turnComplete) {
+            const isGreetingTurn = sessionState === 'GREETING' || isCachingGreeting;
             if (aiTranscriptBuffer) {
-    send({ type: 'transcript', text: aiTranscriptBuffer, role: 'ai' });
+    // greeting turn already renders its own bubble via announceGreeting()
+    if (!isGreetingTurn) send({ type: 'transcript', text: aiTranscriptBuffer, role: 'ai' });
     aiTranscriptBuffer = '';
   }
-            send({ type: 'audio_stream_end' });
+            // a turn that produced no audio must not trigger playback of the previous buffer
+            if (turnHadAudio) send({ type: 'audio_stream_end' });
+            turnHadAudio = false;
             if (sessionState === 'GREETING' || isCachingGreeting) {
-              send({ type: 'greeting', text: WORKER_INTRO, audio: null });
+              announceGreeting();
               isCachingGreeting = false;
               console.log('[Gemini] Greeting audio done — auto LISTENING in 2s');
               scheduleListeningTransition('greeting turnComplete');
@@ -518,6 +538,10 @@ twilioWss.on('connection', function(ws) {
   let silencePromptCount = 0;
   let twilioSetupTime = null;
   let twilioFirstAudioTime = null;
+  const noise = createNoiseEstimator({ frameMs: 20 });
+  const vad = createSileroVad({ sampleRate: 8000 });
+  let audioClockMs = 0;
+  let agentPlaybackUntil = 0;
 
   function isSpuriousUnclearResponse(text) {
     const t = (text || '').toLowerCase();
@@ -612,6 +636,8 @@ twilioWss.on('connection', function(ws) {
 
   function sendAudioToTwilio(mulawBuffer) {
     if (ws.readyState !== WebSocket.OPEN || !streamSid) return;
+    const durMs = mulawBuffer.length / 8;
+    agentPlaybackUntil = Math.max(agentPlaybackUntil, Date.now()) + durMs;
     ws.send(JSON.stringify({
       event: 'media',
       streamSid: streamSid,
@@ -645,7 +671,7 @@ twilioWss.on('connection', function(ws) {
 },
           input_audio_transcription: {},
           output_audio_transcription: {},
-          system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
+          system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
         }
       }));
     });
@@ -724,6 +750,20 @@ twilioWss.on('connection', function(ws) {
             }
           }
           if (content.turnComplete) {
+            if (sessionState === "LISTENING") {
+              const nm = noise.endTurn();
+            console.log('[Gemini Noise] Turn committed | snr=' + (nm.snrDb != null ? nm.snrDb.toFixed(1) : 'n/a')
+                + ' | floor=' + (nm.floorDbfs != null ? nm.floorDbfs.toFixed(1) : 'n/a') + ' | noisy=' + nm.noisy);
+            if (!callLog.noiseTurns) callLog.noiseTurns = [];
+            callLog.noiseTurns.push({
+              time: new Date().toISOString(),
+              snrDb: nm.snrDb,
+              noiseLevelDbfs: nm.noiseLevelDbfs,
+              speechDbfs: nm.speechDbfs,
+              noisy: nm.noisy,
+              snrReliable: nm.snrReliable
+            });
+          }
             // Check for resolution phrases after each AI turn (post-greeting)
             if (sessionState === 'LISTENING' && twilioAiTranscript) {
               const t = twilioAiTranscript.toLowerCase();
@@ -821,13 +861,19 @@ twilioWss.on('connection', function(ws) {
         startSilenceKeepalive();
       }
 
-      if (msg.event === 'media' && sessionState === 'LISTENING') {
+      if (msg.event === 'media') {
         const mulawChunk = Buffer.from(msg.media.payload, 'base64');
-        try {
-          const pcmChunk = mulawToPcm(mulawChunk);
-          pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
-        } catch (e) {
-          console.error('[DEBUG] mulawToPcm error:', e.message);
+        noise.setAgentSpeaking(Date.now() < agentPlaybackUntil + 200);
+        vad.processMulaw(mulawChunk);
+        noise.pushFrame({ ...frameStatsMulaw(mulawChunk), speechProb: vad.prob() }, audioClockMs);
+        audioClockMs += mulawChunk.length / 8;
+        if (sessionState === "LISTENING") {
+          try {
+            const pcmChunk = mulawToPcm(mulawChunk);
+            pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
+          } catch (e) {
+            console.error("[DEBUG] mulawToPcm error:", e.message);
+          }
         }
       }
 
