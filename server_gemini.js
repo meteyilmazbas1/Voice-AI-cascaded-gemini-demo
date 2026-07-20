@@ -9,6 +9,9 @@ const http = require('http');
 const axios = require('axios');
 const twilio = require('twilio');
 const { insertCallStart, updateCallEnd, updateRecordingUrl, updateCallSessionState, listCalls, getCallBySid } = require('./db');
+const { createNoiseEstimator } = require("./noiseEstimator");
+const { createSileroVad } = require("./sileroVad");
+const { frameStatsMulaw } = require("./audioLevel"); 
 
 const app = express();
 const server = http.createServer(app);
@@ -86,6 +89,12 @@ Rules:
 CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or distress — even with positive statements — immediately escalate to human agent.
 
 Keep responses short (under 15 words). Be direct and professional.
+
+TOOL USE (MANDATORY):
+- After EVERY worker utterance, FIRST call report_worker_intent with the intent and your confidence (0 to 1) BEFORE speaking.
+Confidence reflects how clearly you HEARD the audio - if it was noisy, partial or unclear, report below 0.6.
+- If status is "ok", reply with the normal script.
+- Right after you say a closing line (timer reset, timer extended, agent escalation, unreachable), call finish_call with the outcome.
 
 IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
 CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
@@ -518,6 +527,10 @@ twilioWss.on('connection', function(ws) {
   let silencePromptCount = 0;
   let twilioSetupTime = null;
   let twilioFirstAudioTime = null;
+  const noise = createNoiseEstimator({ frameMs: 20 });
+  const vad = createSileroVad({ sampleRate: 8000 });
+  let audioClockMs = 0;
+  let agentPlaybackUntil = 0;
 
   function isSpuriousUnclearResponse(text) {
     const t = (text || '').toLowerCase();
@@ -612,6 +625,8 @@ twilioWss.on('connection', function(ws) {
 
   function sendAudioToTwilio(mulawBuffer) {
     if (ws.readyState !== WebSocket.OPEN || !streamSid) return;
+    const durMs = mulawBuffer.length / 8;
+    agentPlaybackUntil = Math.max(agentPlaybackUntil, Date.now()) + durMs;
     ws.send(JSON.stringify({
       event: 'media',
       streamSid: streamSid,
@@ -645,7 +660,36 @@ twilioWss.on('connection', function(ws) {
 },
           input_audio_transcription: {},
           output_audio_transcription: {},
-          system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
+          system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          tools: [{
+            function_declarations: [
+              {
+                name: "report_worker_intent",
+                description: "Report the classification of the worker\'s latest utterance. Call after EVERY worker utterance, before speaking.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {
+                    intent: { type: "STRING", enum: ["SAFE_CONFIRMATION", "DELAYED_CHECKIN", "REQUEST_HUMAN", "DISTRESS", "UNRECOGNISED"] },
+                    confidence: { type: "NUMBER", description: "How clearly you heard AND understood the worker, 0 to 1."},
+                    distress: { type: "BOOLEAN", description: "True if any injury, pain, fall or distress was mentioned."}
+                  },
+                  required: ["intent", "confidence"]
+                }
+              },
+              {
+                name: "finish_call",
+                description: "Call right after saying a closing line, when the conversation is complete.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {
+                    outcome: { type: "STRING", enum: ["RESOLVED", "ESCALATED", "NO_ANSWER"]},
+                    intent: { type: "STRING", enum: ["SAFE_CONFIRMATION", "DELAYED_CHECKIN", "REQUEST_HUMAN", "DISTRESS", "UNRECOGNISED"]}
+                  },
+                  required: ["outcome"]
+                }
+              }
+            ]
+          }]
         }
       }));
     });
@@ -724,6 +768,20 @@ twilioWss.on('connection', function(ws) {
             }
           }
           if (content.turnComplete) {
+            if (sessionState === "LISTENING") {
+              const nm = noise.endTurn();
+            console.log('[Gemini Noise] Turn committed | snr=' + (nm.snrDb != null ? nm.snrDb.toFixed(1) : 'n/a')
+                + ' | floor=' + (nm.floorDbfs != null ? nm.floorDbfs.toFixed(1) : 'n/a') + ' | noisy=' + nm.noisy);
+            if (!callLog.noiseTurns) callLog.noiseTurns = [];
+            callLog.noiseTurns.push({
+              time: new Date().toISOString(),
+              snrDb: nm.snrDb,
+              noiseLevelDbfs: nm.noiseLevelDbfs,
+              speechDbfs: nm.speechDbfs,
+              noisy: nm.noisy,
+              snrReliable: nm.snrReliable
+            });
+          }
             // Check for resolution phrases after each AI turn (post-greeting)
             if (sessionState === 'LISTENING' && twilioAiTranscript) {
               const t = twilioAiTranscript.toLowerCase();
@@ -783,6 +841,33 @@ twilioWss.on('connection', function(ws) {
             }
           }
         }
+        if (msg.toolCall && msg.toolCall.functionCalls) {
+          const responses = [];
+          for (const fc of msg.toolCall.functionCalls) {
+            if (fc.name === "report_worker_intent") {
+              const args = fc.args || {};
+              const conf = typeof args.confidence === "number" ? args.confidence : null;
+              console.log('[Gemini Tool] intent:', args.intent, '| conf:', conf, '| distress:', args.distress);
+              if (args.intent && args.intent !== "UNRECOGNISED") callLog.finalIntent = args.intent;
+            } else if (fc.name === "finish_call") {
+              const args = fc.args || {};
+              console.log('[Gemini Tool] finish_call:', args.outcome, '|', args.intent);
+              setCallOutcome(args.outcome || 'RESOLVED', args.intent || callLog.finalIntent);
+              responses.push({ id: fc.id, name: fc.name, response: { status: "ok" } });
+              clearWorkerSilenceTimer();
+              setTimeout(() => {
+                console.log("[Twilio-Gemini] Closing call (finish_call)");
+                if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+                if (ws.readyState === WebSocket.OPEN) ws.close();
+              }, 4000);
+            } else {
+              responses.push({ id: fc.id, name: fc.name, response: { status: "ok" } });
+            }
+          }
+          if ( responses.length && geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+            geminiWs.send(JSON.stringify({ tool_response: { function_responses: responses} }));
+          }
+        }
       } catch(e) { console.error('[Twilio-Gemini] Message error:', e.message); }
     });
 
@@ -821,13 +906,19 @@ twilioWss.on('connection', function(ws) {
         startSilenceKeepalive();
       }
 
-      if (msg.event === 'media' && sessionState === 'LISTENING') {
+      if (msg.event === 'media') {
         const mulawChunk = Buffer.from(msg.media.payload, 'base64');
-        try {
-          const pcmChunk = mulawToPcm(mulawChunk);
-          pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
-        } catch (e) {
-          console.error('[DEBUG] mulawToPcm error:', e.message);
+        noise.setAgentSpeaking(Date.now() < agentPlaybackUntil + 200);
+        vad.processMulaw(mulawChunk);
+        noise.pushFrame({ ...frameStatsMulaw(mulawChunk), speechProb: vad.prob() }, audioClockMs);
+        audioClockMs += mulawChunk.length / 8;
+        if (sessionState === "LISTENING") {
+          try {
+            const pcmChunk = mulawToPcm(mulawChunk);
+            pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
+          } catch (e) {
+            console.error("[DEBUG] mulawToPcm error:", e.message);
+          }
         }
       }
 
