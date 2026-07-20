@@ -1220,12 +1220,14 @@ async function playPCMChunks(chunks) {
 }
 
 // Merge all base64 chunks into one and play (MP3/ElevenLabs)
-async function playAllChunks() {
-  if (audioChunks.length === 0) return;
+async function playAllChunks(chunks) {
+  // callers may hand in their own buffer (already detached from audioChunks)
+  const buf = chunks || audioChunks;
+  if (buf.length === 0) return;
 
   // PCM path for Gemini
   if (audioChunkMimeType && audioChunkMimeType.startsWith('audio/pcm')) {
-    await playPCMChunks(audioChunks);
+    await playPCMChunks(buf);
     aiSpeaking = false;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'playback_done' }));
     return;
@@ -1233,7 +1235,7 @@ async function playAllChunks() {
 
   try {
     const ctx = getAudioContext();
-    const allBytes = audioChunks.map(b64 => {
+    const allBytes = buf.map(b64 => {
       const bin = atob(b64);
       const arr = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
@@ -1461,7 +1463,11 @@ function connectWS() {
 }
 if (msg.type === 'audio_stream_end') {
   if (audioChunks.length > 0) {
-    playAllChunks();
+    // hand the buffer to the player and clear it, so a trailing
+    // audio_stream_end (no new chunks) cannot replay the same turn
+    const pending = audioChunks;
+    audioChunks = [];
+    playAllChunks(pending);
   } else {
     aiSpeaking = false;
   }
