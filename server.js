@@ -103,32 +103,8 @@ ambiguous: unclear, contradictory, or unrecognised
 
 Confidence: >0.90 clear | <0.60 hesitation/unclear.`;
 
-// Live compare: same system prompt + setup as server_gemini.js voice agent
-const COMPARE_LIVE_PROMPT = `CRITICAL LANGUAGE RULE: This call is in English only. The worker speaks English. Always transcribe and interpret audio as English, even if the audio quality is poor, words are unclear, or the accent is unfamiliar. Never output text in Korean, Japanese, Chinese, or any language other than English. If you cannot understand the worker's English, respond with the UNCLEAR script in English.
-
-SYSTEM: language=en-US. All input and output in English only.
-
-You are an automated safety monitoring system for Aware360...
-
-Your persona: "Aware360 Monitoring Center" — efficient, neutral, direct.
-
-When the worker speaks:
-1. Listen carefully to their response
-2. Classify their intent: safe confirmation, needs more time, wants human agent, or unclear
-3. Respond appropriately and concisely
-
-Rules:
-- SAFE: "Got it — I've reset your safety timer. Stay safe."
-- DELAYED: "Understood. I've extended your check-in timer. Please check in when ready."  
-- HUMAN AGENT: "Of course. I'm flagging this for a live agent — someone will call you back shortly."
-- UNCLEAR: Always respond with exactly this phrase, nothing else: "Sorry, I didn't catch that. Could you repeat?"
-
-CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or distress — even with positive statements — immediately escalate to human agent.
-
-Keep responses short (under 15 words). Be direct and professional.
-
-IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
-CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
+// Live compare: same intent-only prompt as Claude compare (no language/persona fluff)
+const COMPARE_LIVE_PROMPT = COMPARE_INTENT_PROMPT;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
@@ -1459,22 +1435,42 @@ function calcTokenCost(model, inputTokens, outputTokens) {
   return (inputTokens / 1e6) * rates.input + (outputTokens / 1e6) * rates.output;
 }
 
-/** Normalize Gemini usageMetadata — do not subtract modality details (e.g. audio). */
+/** Sum tokenCount for a single modality in Gemini *TokensDetails arrays. */
+function sumGeminiModalityTokens(details, modality) {
+  if (!Array.isArray(details) || !details.length) return null;
+  const want = String(modality || '').toUpperCase();
+  let sum = 0;
+  for (let i = 0; i < details.length; i++) {
+    const d = details[i];
+    if (!d) continue;
+    const m = String(d.modality || d.Modality || '').toUpperCase();
+    if (m !== want) continue;
+    sum += Number(d.tokenCount != null ? d.tokenCount : d.token_count) || 0;
+  }
+  return sum;
+}
+
+/**
+ * Normalize Gemini usageMetadata for billing/compare.
+ * input_tokens: TEXT modality only from promptTokensDetails (AUDIO excluded).
+ * output_tokens: raw responseTokenCount (unchanged; do not filter by modality).
+ */
 function parseGeminiUsageMetadata(usageMetadata) {
   const u = usageMetadata || {};
-  const input = Number(u.promptTokenCount) || 0;
-  const output = Number(u.candidatesTokenCount) || 0;
-  const total = (typeof u.totalTokenCount === 'number' && Number.isFinite(u.totalTokenCount))
-    ? u.totalTokenCount
-    : (input + output);
-  // Log details for debugging but never subtract them from the totals we report
+  let input = Number(u.promptTokenCount) || 0;
+  // Prefer responseTokenCount for Live; fall back to candidatesTokenCount for REST
+  const output = Number(u.responseTokenCount) || Number(u.candidatesTokenCount) || 0;
+
   if (Array.isArray(u.promptTokensDetails) && u.promptTokensDetails.length) {
     console.log('[Compare] Gemini promptTokensDetails:', JSON.stringify(u.promptTokensDetails));
+    // TEXT only for input — do not include AUDIO in cost
+    input = sumGeminiModalityTokens(u.promptTokensDetails, 'TEXT') || 0;
   }
+
   return {
     input_tokens: input,
     output_tokens: output,
-    total_tokens: total,
+    total_tokens: input + output,
   };
 }
 
@@ -2146,10 +2142,13 @@ async function classifyWithGeminiLive(transcript, model, opts) {
         }
 
         if (msg.usageMetadata) {
-          promptTokens = msg.usageMetadata.promptTokenCount || promptTokens;
-          responseTokens = msg.usageMetadata.responseTokenCount
-            || msg.usageMetadata.candidatesTokenCount
-            || responseTokens;
+          const usage = parseGeminiUsageMetadata(msg.usageMetadata);
+          promptTokens = usage.input_tokens;
+          responseTokens = usage.output_tokens;
+          console.log('[Gemini Live Compare] usage in(TEXT)/out(responseTokenCount):',
+            promptTokens + '/' + responseTokens,
+            '| raw promptTokenCount:', msg.usageMetadata.promptTokenCount,
+            '| raw responseTokenCount:', msg.usageMetadata.responseTokenCount);
         }
 
         if (serverContent && (serverContent.turnComplete || serverContent.turn_complete)) {
@@ -2539,12 +2538,19 @@ app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), asy
       return res.status(400).json({ error: 'audio body required' });
     }
     const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
-    const durationHeader = req.headers['x-audio-duration'];
-    const duration = durationHeader != null && Number.isFinite(parseFloat(durationHeader))
-      ? parseFloat(durationHeader)
-      : null;
+
+    // Prefer ffmpeg duration; fall back to client X-Audio-Duration header
+    let durationSec = await getAudioDurationSec(buf);
+    if (durationSec == null) {
+      const durationHeader = req.headers['x-audio-duration'];
+      if (durationHeader != null && Number.isFinite(parseFloat(durationHeader))) {
+        durationSec = parseFloat(durationHeader);
+      }
+    }
+    const deepgramCost = durationSec != null ? (durationSec / 60) * 0.0043 : null;
+
     console.log('[Compare Gemini STT] Converting to PCM16k...', buf.length, 'bytes | model:', model,
-      duration != null ? ('| duration: ' + duration + 's') : '');
+      '| duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
     const pcm = await audioToPcm16kMono(buf);
     if (!pcm || !pcm.length) {
       return res.status(400).json({ error: 'Audio conversion produced empty PCM' });
@@ -2557,7 +2563,9 @@ app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), asy
       sttMs: r.stt_ms != null ? r.stt_ms : null,
       confidence: null,
       engine: 'gemini',
-      duration: duration,
+      duration_sec: durationSec,
+      deepgram_cost: deepgramCost,
+      duration: durationSec,
     });
   } catch (e) {
     console.error('[Compare Gemini STT] Error:', e.message);
@@ -2734,6 +2742,8 @@ app.post('/compare-intent', async function(req, res) {
   );
   const compareOpts = realSttMs != null ? { realSttMs: realSttMs, geminiMode: 'live' } : { geminiMode: 'live' };
   let deepgramFromAudio = false;
+  let durationSec = null;
+  let deepgramCost = null;
 
   // Optional audio: Deepgram Nova-3 STT → transcript text → Gemini Live (no audio buffer to Live)
   const audioB64 = req.body && (req.body.audio_base64 || req.body.audioBuffer);
@@ -2742,6 +2752,10 @@ app.post('/compare-intent', async function(req, res) {
     try {
       const rawAudio = Buffer.from(audioB64, 'base64');
       console.log('[Compare Intent] Audio received — Deepgram STT first...', rawAudio.length, 'bytes');
+      durationSec = await getAudioDurationSec(rawAudio);
+      deepgramCost = durationSec != null ? (durationSec / 60) * 0.0043 : null;
+      console.log('[Compare Intent] duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
+
       const stt = await transcribeCompareAudioDeepgram(rawAudio, req.body.audio_mime || 'audio/wav');
       if ((stt.transcript || '').trim()) {
         transcript = stt.transcript.trim();
@@ -2824,6 +2838,21 @@ app.post('/compare-intent', async function(req, res) {
   const results = {};
   for (const row of settled) results[row.model] = row;
 
+  // Attach duration/cost onto each model result when audio was transcribed here
+  if (durationSec != null || deepgramCost != null) {
+    Object.keys(results).forEach(function(model) {
+      const row = results[model];
+      if (!row) return;
+      if (durationSec != null) row.duration_sec = durationSec;
+      if (deepgramCost != null) row.deepgram_cost = deepgramCost;
+      (row.runs || []).forEach(function(run) {
+        if (!run || !run.ok) return;
+        if (durationSec != null) run.duration_sec = durationSec;
+        if (deepgramCost != null) run.deepgram_cost = deepgramCost;
+      });
+    });
+  }
+
   res.json({
     transcript: transcript,
     expected: expected,
@@ -2833,6 +2862,8 @@ app.post('/compare-intent', async function(req, res) {
     stt_source: realSttMs != null ? (deepgramFromAudio ? 'deepgram' : 'real') : 'estimated',
     stt_engine: deepgramFromAudio ? 'deepgram' : undefined,
     audio_used: deepgramFromAudio,
+    duration_sec: durationSec,
+    deepgram_cost: deepgramCost,
     results: results,
   });
 });
