@@ -90,12 +90,6 @@ CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or
 
 Keep responses short (under 15 words). Be direct and professional.
 
-TOOL USE (MANDATORY):
-- After EVERY worker utterance, FIRST call report_worker_intent with the intent and your confidence (0 to 1) BEFORE speaking.
-Confidence reflects how clearly you HEARD the audio - if it was noisy, partial or unclear, report below 0.6.
-- If status is "ok", reply with the normal script.
-- Right after you say a closing line (timer reset, timer extended, agent escalation, unreachable), call finish_call with the outcome.
-
 IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
 CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
 
@@ -114,6 +108,14 @@ wss.on('connection', function(ws) {
   let actualSampleRate = 16000;
   let greetingSent = false;
   let isCachingGreeting = false;
+  let turnHadAudio = false;
+  let greetingAnnounced = false; // guards the conversation-history bubble (send once per session)
+
+  function announceGreeting() {
+    if (greetingAnnounced) return;
+    greetingAnnounced = true;
+    send({ type: 'greeting', text: WORKER_INTRO, audio: null });
+  }
   let workerSpeechEndTime = null; let turnStartTime = null;
   let workerSpeechActive = false;
   let workerSilenceTimer = null;
@@ -171,6 +173,9 @@ wss.on('connection', function(ws) {
     // language_codes removed — caused WebSocket 1007 on Gemini Live setup
     input_audio_transcription: {},
     output_audio_transcription: {},
+    // camelCase alias — snake_case form is silently ignored by some preview models,
+    // which is why AI turns never reached the transcript buffer
+    outputAudioTranscription: {},
     system_instruction: {
       parts: [{ text: SYSTEM_PROMPT }]
     }
@@ -202,7 +207,7 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
       await new Promise(r => setTimeout(r, 20));
     }
     send({ type: 'audio_stream_end' });
-    send({ type: 'greeting', text: WORKER_INTRO, audio: null });
+    announceGreeting();
     // Stay in GREETING until client has time to play audio — no playback_done wait
     scheduleListeningTransition('cached greeting');
     return; // cache hit — do not send greetingMsg to Gemini
@@ -245,6 +250,7 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     cachedGreetingChunks.push(part.inlineData.data);
     cachedGreetingMimeType = part.inlineData.mimeType;
   }
+  turnHadAudio = true;
   send({ type: 'audio_chunk', chunk: part.inlineData.data, index: 0, mimeType: part.inlineData.mimeType });
 }
       if (part.text) {
@@ -254,18 +260,23 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     }
   }
 
-  if (content.outputTranscription && content.outputTranscription.text) {
-  aiTranscriptBuffer += content.outputTranscription.text;
-}
+  const outTx = content.outputTranscription || content.output_transcription;
+  if (outTx && outTx.text) {
+    aiTranscriptBuffer += outTx.text;
+  }
 
           if (content.turnComplete) {
+            const isGreetingTurn = sessionState === 'GREETING' || isCachingGreeting;
             if (aiTranscriptBuffer) {
-    send({ type: 'transcript', text: aiTranscriptBuffer, role: 'ai' });
+    // greeting turn already renders its own bubble via announceGreeting()
+    if (!isGreetingTurn) send({ type: 'transcript', text: aiTranscriptBuffer, role: 'ai' });
     aiTranscriptBuffer = '';
   }
-            send({ type: 'audio_stream_end' });
+            // a turn that produced no audio must not trigger playback of the previous buffer
+            if (turnHadAudio) send({ type: 'audio_stream_end' });
+            turnHadAudio = false;
             if (sessionState === 'GREETING' || isCachingGreeting) {
-              send({ type: 'greeting', text: WORKER_INTRO, audio: null });
+              announceGreeting();
               isCachingGreeting = false;
               console.log('[Gemini] Greeting audio done — auto LISTENING in 2s');
               scheduleListeningTransition('greeting turnComplete');
@@ -661,35 +672,6 @@ twilioWss.on('connection', function(ws) {
           input_audio_transcription: {},
           output_audio_transcription: {},
           system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          tools: [{
-            function_declarations: [
-              {
-                name: "report_worker_intent",
-                description: "Report the classification of the worker\'s latest utterance. Call after EVERY worker utterance, before speaking.",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    intent: { type: "STRING", enum: ["SAFE_CONFIRMATION", "DELAYED_CHECKIN", "REQUEST_HUMAN", "DISTRESS", "UNRECOGNISED"] },
-                    confidence: { type: "NUMBER", description: "How clearly you heard AND understood the worker, 0 to 1."},
-                    distress: { type: "BOOLEAN", description: "True if any injury, pain, fall or distress was mentioned."}
-                  },
-                  required: ["intent", "confidence"]
-                }
-              },
-              {
-                name: "finish_call",
-                description: "Call right after saying a closing line, when the conversation is complete.",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    outcome: { type: "STRING", enum: ["RESOLVED", "ESCALATED", "NO_ANSWER"]},
-                    intent: { type: "STRING", enum: ["SAFE_CONFIRMATION", "DELAYED_CHECKIN", "REQUEST_HUMAN", "DISTRESS", "UNRECOGNISED"]}
-                  },
-                  required: ["outcome"]
-                }
-              }
-            ]
-          }]
         }
       }));
     });
@@ -839,33 +821,6 @@ twilioWss.on('connection', function(ws) {
                 startWorkerSilenceTimer();
               }, 2000);
             }
-          }
-        }
-        if (msg.toolCall && msg.toolCall.functionCalls) {
-          const responses = [];
-          for (const fc of msg.toolCall.functionCalls) {
-            if (fc.name === "report_worker_intent") {
-              const args = fc.args || {};
-              const conf = typeof args.confidence === "number" ? args.confidence : null;
-              console.log('[Gemini Tool] intent:', args.intent, '| conf:', conf, '| distress:', args.distress);
-              if (args.intent && args.intent !== "UNRECOGNISED") callLog.finalIntent = args.intent;
-            } else if (fc.name === "finish_call") {
-              const args = fc.args || {};
-              console.log('[Gemini Tool] finish_call:', args.outcome, '|', args.intent);
-              setCallOutcome(args.outcome || 'RESOLVED', args.intent || callLog.finalIntent);
-              responses.push({ id: fc.id, name: fc.name, response: { status: "ok" } });
-              clearWorkerSilenceTimer();
-              setTimeout(() => {
-                console.log("[Twilio-Gemini] Closing call (finish_call)");
-                if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
-                if (ws.readyState === WebSocket.OPEN) ws.close();
-              }, 4000);
-            } else {
-              responses.push({ id: fc.id, name: fc.name, response: { status: "ok" } });
-            }
-          }
-          if ( responses.length && geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-            geminiWs.send(JSON.stringify({ tool_response: { function_responses: responses} }));
           }
         }
       } catch(e) { console.error('[Twilio-Gemini] Message error:', e.message); }
