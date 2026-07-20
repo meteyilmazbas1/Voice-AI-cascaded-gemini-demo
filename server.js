@@ -39,6 +39,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl } = require('./db');
 const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
+const { createNoiseEstimator } = require("./noiseEstimator");
+const { createSileroVad } = require("./sileroVad");
+const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
+const { off } = require('cluster');
+
+// TEMP: DeepFilter bypass — mic PCM goes straight to Deepgram.
+// Re-enable with DEEPFILTER_ENABLED=true in .env (or flip default below).
+const DEEPFILTER_ENABLED = process.env.DEEPFILTER_ENABLED === 'true';
 
 const CACHE_DIR = path.join(__dirname, 'audio_cache');
 function loadAudioCache() {
@@ -95,32 +103,8 @@ ambiguous: unclear, contradictory, or unrecognised
 
 Confidence: >0.90 clear | <0.60 hesitation/unclear.`;
 
-// Live compare: same system prompt + setup as server_gemini.js voice agent
-const COMPARE_LIVE_PROMPT = `CRITICAL LANGUAGE RULE: This call is in English only. The worker speaks English. Always transcribe and interpret audio as English, even if the audio quality is poor, words are unclear, or the accent is unfamiliar. Never output text in Korean, Japanese, Chinese, or any language other than English. If you cannot understand the worker's English, respond with the UNCLEAR script in English.
-
-SYSTEM: language=en-US. All input and output in English only.
-
-You are an automated safety monitoring system for Aware360...
-
-Your persona: "Aware360 Monitoring Center" — efficient, neutral, direct.
-
-When the worker speaks:
-1. Listen carefully to their response
-2. Classify their intent: safe confirmation, needs more time, wants human agent, or unclear
-3. Respond appropriately and concisely
-
-Rules:
-- SAFE: "Got it — I've reset your safety timer. Stay safe."
-- DELAYED: "Understood. I've extended your check-in timer. Please check in when ready."  
-- HUMAN AGENT: "Of course. I'm flagging this for a live agent — someone will call you back shortly."
-- UNCLEAR: Always respond with exactly this phrase, nothing else: "Sorry, I didn't catch that. Could you repeat?"
-
-CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or distress — even with positive statements — immediately escalate to human agent.
-
-Keep responses short (under 15 words). Be direct and professional.
-
-IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
-CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
+// Live compare: same intent-only prompt as Claude compare (no language/persona fluff)
+const COMPARE_LIVE_PROMPT = COMPARE_INTENT_PROMPT;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
@@ -151,6 +135,37 @@ PRIORITY: If the message contains ANY unsafe signal (injury, pain, danger, "help
 
 Respond with ONLY one word, nothing else, no punctuation:
 safe OR delayed OR request_human OR unsafe OR ambiguous`;
+
+const MASKED_WORD_PROMPT = `You are a transcript-trust auditor for a Voice AI Safety Assistant. A field worker triggered a safety alert and is answering a safety check call. Noise bursts overlapped parts of the worker's utterance, so parts of the transcript may be misheard or missing.
+
+You will receive:
+- Agent question: what the assistant last asked the worker.
+- Transcript: the utterance. [word] marks a word the noise overlapped (may be misheard). [NOISE 0.8s] marks lost audio — between words, or at the very start/end of the utterance (a trailing [NOISE] right after an unfinished clause often hides the words that decide the classification).
+- Masked items: the overlapped words and missing spots.
+
+The call outcome is decided by classifying the utterance as one of: safe, delayed, request_human, unsafe, ambiguous.
+
+Decide: does the masked or missing content genuinely block the classification, OR does it hide a concrete detail the system needs to act on it (e.g. the NUMBER of minutes for delayed — the safety timer cannot be extended without it)?
+- For each [word], imagine realistic alternatives (similar-sounding words: "stepped"/"slipped", "fine"/"fell"; negations: "can"/"can't").
+- For each [NOISE], imagine realistic words that could fill the gap, given the agent's question.
+- Weigh each alternative against the INTACT words: an alternative only counts if the whole utterance stays coherent with it. If the intact words already form a complete, consistent account that fits exactly one classification, the meaning is recovered — reply "unimportant".
+- Reply "important" if a coherent reading of the full utterance changes the classification — especially toward unsafe — or if the masked content hides a required actionable detail, or if so much is masked that the overall meaning is not recoverable.
+
+Tie-break: if after weighing coherence you still cannot tell, reply "important" — but a filling that contradicts the intact context is not genuine uncertainty.
+
+Respond with exactly one word, nothing else: important or unimportant`;
+
+async function classifyMaskedWordImportance(transcript, maskedWords, agentQuestion) {
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5',
+    max_tokens: 4,
+    temperature: 0,
+    system: [{ type: 'text', text: MASKED_WORD_PROMPT, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: 'Agent question: "' + (agentQuestion || '(unknown)') + '"\nTranscript: "' + transcript + '"\nMasked items: ' + maskedWords.join(', ') }],
+  }, { timeout: 2500, maxRetries: 0 });
+  const raw = ((response.content[0] && response.content[0].text) || '').trim().toLowerCase();
+  return { important: raw.startsWith('important') };
+}
 
 const VALID_INTENTS_SET = new Set(['safe', 'delayed', 'request_human', 'unsafe', 'ambiguous']);
 const DURATION_REGEX = /(\d+)\s*(min(?:ute)?s?|hours?|hrs?|h)\b/i;
@@ -492,11 +507,18 @@ twilioWss.on('connection', function(ws) {
   let callFinalIntent = null;
   let callTranscript = [];
   let workerPhone = null;
+  const noise = createNoiseEstimator({ frameMs: 20 });
+  const vad = createSileroVad({ sampleRate: 8000 });
+  let dgClockMs = 0;
+  let agentPlaybackUntil = 0;
+  let uttWords = [];
 
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
 
   function sendAudioToTwilio(audioBuffer) {
     if (ws.readyState !== WebSocket.OPEN || !streamSid) return;
+    const durMs = audioBuffer.length / 8;
+    agentPlaybackUntil = Math.max(agentPlaybackUntil, Date.now()) + durMs;
     ws.send(JSON.stringify({
       event: 'media',
       streamSid: streamSid,
@@ -533,6 +555,11 @@ twilioWss.on('connection', function(ws) {
 
   async function handleTwilioTranscript(finalTranscript) {
     if (!finalTranscript || finalTranscript.trim() === '') return;
+    const speechSpans = uttWords.map(function(w) { return { startMs: w.start * 1000, endMs: w.end * 1000, word: w.word }; });
+    uttWords = [];
+    const m = noise.endTurn({ speechSpans: speechSpans.length ? speechSpans : null });
+    console.log("[Noise] snr=" + (m.snrDb != null ? m.snrDb.toFixed(1) : "n/a") + "floor=" + 
+    (m.floorDbfs != null ? m.floorDbfs.toFixed(1) : "n/a") + "noisy=" + m.noisy);
     console.log('[Twilio Transcript]', finalTranscript);
     callTranscript.push({ role: 'worker', text: finalTranscript, time: new Date().toISOString() });
     sessionState = 'PROCESSING';
@@ -544,17 +571,19 @@ twilioWss.on('connection', function(ws) {
 
       const CONFIDENCE_THRESHOLD = 0.6;
       const criticalIntents = ['SAFE_CONFIRMATION', 'DELAYED_CHECKIN'];
-      if (callLastConfidence !== null && callLastConfidence < CONFIDENCE_THRESHOLD
-          && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
+      const lowConf = callLastConfidence !== null && callLastConfidence < CONFIDENCE_THRESHOLD;
+      const noisyEnv = m.noisy;
+      if ((lowConf || noisyEnv) && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
         safetyConfirmPending = true;
-        const confirmText = result.intent === 'SAFE_CONFIRMATION'
-          ? "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?"
-          : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
-        console.log('[Confidence] Low confidence (' + callLastConfidence.toFixed(2) + ') for', result.intent, '— asking to confirm');
-        callLastConfidence = null;
-        await speakText(confirmText, null, false);
-        sessionState = 'LISTENING';
-        return;
+        const confirmText = result.intent === "SAFE_CONFIRMATION" ? (noisyEnv ?
+           "Sorry, it's a bit noisy. Can you confirm clearly that you are safe?" : 
+           "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?")
+           : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
+           console.log("[Confidence] lowConf=" + lowConf + "noisy=" + noisyEnv + "for", result.intent, "-asking to confirm");
+           callLastConfidence = null;
+           await speakText(confirmText, null, false);
+           sessionState = "LISTENING";
+           return;
       }
       safetyConfirmPending = false;
       callLastConfidence = null;
@@ -593,6 +622,7 @@ twilioWss.on('connection', function(ws) {
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const alt = msg.channel.alternatives[0];
           const text = alt.transcript;
+          if (msg.is_final && alt.words && alt.words.length) uttWords.push(...alt.words);
           if (text && text.trim()) {
             if (msg.is_final && typeof alt.confidence === 'number') {
               callLastConfidence = alt.confidence;
@@ -645,7 +675,12 @@ twilioWss.on('connection', function(ws) {
       }
       if (msg.event === 'media' && deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
         lastMediaAt = Date.now();
-        deepgramWs.send(Buffer.from(msg.media.payload, 'base64'));
+        const buf = Buffer.from(msg.media.payload, "base64");
+        noise.setAgentSpeaking(Date.now() < agentPlaybackUntil + 200);
+        vad.processMulaw(buf);
+        noise.pushFrame({ ...frameStatsMulaw(buf), speechProb: vad.prob() }, dgClockMs);
+        dgClockMs += buf.length / 8;
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.send(buf);
       }
       if (msg.event === 'stop') {
         console.log('[Twilio] Stream stopped');
@@ -713,14 +748,27 @@ browserWss.on('connection', function(ws) {
   let safetyConfirmPending = false;
   let clientE2eMs = null;
   let deepFilter = null;
-  let dfPreferred = true;  // Noise Cancel ON by default
-  let dfEnabled = true;
+  let dfPreferred = DEEPFILTER_ENABLED;  // TEMP: off unless DEEPFILTER_ENABLED=true
+  let dfEnabled = DEEPFILTER_ENABLED;
+  const noise = createNoiseEstimator({ frameMs: 20 });
+  const vad = createSileroVad({ sampleRate: 16000 });
+  let audioClockMs = 0;
+  let vadChain = Promise.resolve();
+  let uttWords = [];
+  let lastAgentText = null;
+  const SNR_HARD_MIN = 5;
+  const LOWCONF_RATIO_MAX = 0.5;
   const SILENCE_MS = 4000;
 
   function send(obj) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
 
   function ensureDeepFilter() {
+    if (!DEEPFILTER_ENABLED) {
+      deepFilter = null;
+      dfEnabled = false;
+      return false;
+    }
     if (!isDeepFilterReady()) {
       deepFilter = null;
       dfEnabled = false;
@@ -733,8 +781,10 @@ browserWss.on('connection', function(ws) {
     return dfEnabled;
   }
 
-  // Activate Noise Cancel immediately on connect (no toggle required)
-  if (ensureDeepFilter()) {
+  // Activate Noise Cancel immediately on connect (no toggle required) — skipped when DEEPFILTER_ENABLED=false
+  if (!DEEPFILTER_ENABLED) {
+    console.log('[DeepFilter] DISABLED (DEEPFILTER_ENABLED=false) — raw mic → Deepgram');
+  } else if (ensureDeepFilter()) {
     console.log('[DeepFilter] Session filter ready (active=true)');
   } else {
     console.warn('[DeepFilter] Model not ready — denoise inactive until model loads');
@@ -748,6 +798,22 @@ browserWss.on('connection', function(ws) {
 
   async function handleTranscript(finalTranscript, sttMs) {
     if (!finalTranscript || finalTranscript.trim() === '') return;
+    const speechSpans = uttWords.map(function(w, i) {
+      return { startMs: (w.start || 0) * 1000, endMs: (w.end || 0) * 1000, word: w.word, idx: i,
+         conf: (w.confidence != null ? w.confidence : null) };
+    });
+    uttWords = [];
+    const m = noise.endTurn({ speechSpans: speechSpans.length ? speechSpans : null });
+    const totalWords = Math.max(speechSpans.length, 1);
+    const hitIdx = new Set(m.collisions.filter(function(c) { 
+      return c.type === "overlap" && c.idx != null; }).map(function(c) { return c.idx; }));
+    const lowConfRatio = speechSpans.filter(function(s) { return s.conf != null && s.conf < 0.6; }).length / totalWords;
+    const untrusted = m.speechFallback
+     || (m.snrReliable && m.snrDb != null && m.snrDb <= SNR_HARD_MIN)
+     || lowConfRatio >= LOWCONF_RATIO_MAX;
+     console.log('[Noise] snr=' + (m.snrDb != null ? m.snrDb.toFixed(1) : 'n/a') + ' noisy=' + m.noisy
+      + ' collisions=' + m.collisions.length + ' lowConfRatio=' + lowConfRatio.toFixed(2)
+       + ' untrusted=' + untrusted); 
     if (snrBlocked) {
       console.log('[SNR] Transcript blocked due to bad SNR:', finalTranscript);
       snrBlocked = false;
@@ -764,15 +830,42 @@ browserWss.on('connection', function(ws) {
       const llmMs = Date.now() - llmStart;
       let result = intentToResult(intent, duration);
 
-      const CONFIDENCE_THRESHOLD = 0.6;
+            const CONFIDENCE_THRESHOLD = 0.6;
       const criticalIntents = ['SAFE_CONFIRMATION', 'DELAYED_CHECKIN'];
-      if (lastConfidence !== null && lastConfidence < CONFIDENCE_THRESHOLD
-          && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
+      const lowConf = lastConfidence !== null && lastConfidence < CONFIDENCE_THRESHOLD;
+
+      let maskImportant = false;
+      if (!untrusted && m.hasCollision && criticalIntents.includes(result.intent)) {
+        const maskedItems = [...new Set(m.collisions.map(function(c) {
+          return c.type === 'overlap' && c.word ? c.word
+            : '[MISSING between "' + (c.prevWord || '<start>') + '" and "' + (c.nextWord || '<end>') + '"]';
+        }))];
+        const gaps = m.collisions.filter(function(c) { return c.type === 'gap'; })
+          .sort(function(a, b) { return a.tMs - b.tMs; });
+        const parts = [];
+        let gi = 0;
+        for (const s of speechSpans) {
+          while (gi < gaps.length && gaps[gi].tMs < s.startMs) { parts.push('[NOISE ' + (gaps[gi].durationMs / 1000).toFixed(1) + 's]'); gi++; }
+          if (s.word) parts.push(hitIdx.has(s.idx) ? '[' + s.word + ']' : s.word);
+        }
+        while (gi < gaps.length) { parts.push('[NOISE ' + (gaps[gi].durationMs / 1000).toFixed(1) + 's]'); gi++; }
+        const annotated = parts.join(' ');
+        try {
+          const maskRes = await classifyMaskedWordImportance(annotated, maskedItems, lastAgentText);
+          maskImportant = maskRes.important;
+        } catch (e) { maskImportant = true; }
+        console.log('[Mask] annotated="' + annotated + '" important=' + maskImportant);
+      }
+
+      const noisyTurn = m.noisy || untrusted || maskImportant;
+      if ((lowConf || noisyTurn) && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
         safetyConfirmPending = true;
         const confirmText = result.intent === 'SAFE_CONFIRMATION'
-          ? "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?"
+          ? (noisyTurn ? "Sorry, it's a bit noisy. Can you confirm clearly that you are safe?"
+                       : "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?")
           : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
-        console.log('[Confidence] Low confidence (' + lastConfidence.toFixed(2) + ') for', result.intent, '— asking to confirm');
+        lastAgentText = confirmText;
+        console.log('[Confidence] lowConf=' + lowConf + ' noisyTurn=' + noisyTurn + ' for', result.intent);
         send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
         send({ type: 'response', text: confirmText, audio: null, resolved: false, escalate: false });
         try {
@@ -802,6 +895,7 @@ browserWss.on('connection', function(ws) {
 
       if (!result.distress) applyCachedResponse(result);
       console.log('[Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none', '| LLM:', llmMs + 'ms');
+      lastAgentText = result.response;
       send({ type: 'intent', data: result, client_e2e_ms: clientE2eMs });
       clientE2eMs = null;
       send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
@@ -894,6 +988,7 @@ browserWss.on('connection', function(ws) {
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const alt = msg.channel.alternatives[0];
           const text = alt.transcript;
+          if (msg.is_final && alt.words && alt.words.length) uttWords.push(...alt.words);
           if (text && text.trim()) {
             if (msg.is_final && typeof alt.confidence === 'number') {
               lastConfidence = alt.confidence;
@@ -932,11 +1027,18 @@ browserWss.on('connection', function(ws) {
         if (msg.type === 'set_model') { selectedModel = msg.model; console.log('[Model]', selectedModel); }
         if (msg.type === 'tts_mode') { ttsMode = msg.mode; }
         if (msg.type === 'toggle_denoise') {
-          dfPreferred = msg.enabled !== false; // default ON unless explicitly false
-          ensureDeepFilter();
-          if (!dfPreferred) dfEnabled = false;
-          console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
-          send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
+          if (!DEEPFILTER_ENABLED) {
+            dfPreferred = false;
+            dfEnabled = false;
+            console.log('[DeepFilter] toggle ignored — DEEPFILTER_ENABLED=false (forced bypass)');
+            send({ type: 'log', message: 'Noise cancellation disabled (server bypass for transcript test)' });
+          } else {
+            dfPreferred = msg.enabled !== false; // default ON unless explicitly false
+            ensureDeepFilter();
+            if (!dfPreferred) dfEnabled = false;
+            console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
+            send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
+          }
         }
         if (msg.type === 'client_metrics') {
           clientE2eMs = msg.total;
@@ -972,6 +1074,7 @@ browserWss.on('connection', function(ws) {
           }
           send({ type: 'stage', stage: 'tts', status: 'done' });
           send({ type: 'greeting', text: WORKER_INTRO, audio: introAudio });
+                    lastAgentText = WORKER_INTRO;
           sessionState = 'LISTENING';
         }
         if (msg.type === 'snr_block') {
@@ -1083,6 +1186,53 @@ browserWss.on('connection', function(ws) {
               '| ch:', fullBuffer.readUInt16LE(22),
               '| bits:', fullBuffer.readUInt16LE(34));
           }
+                    let fileStartMs = null;
+          if (!isMp3) {
+            const sr = isRiff ? fullBuffer.readUInt32LE(24) : 16000;
+            const ch = isRiff ? fullBuffer.readUInt16LE(22) : 1;
+            const bits = isRiff ? fullBuffer.readUInt16LE(34) : 16;
+            let dataOff = 0;
+            if (isRiff) {
+              dataOff = 44;
+              for (let i = 12; i + 8 <= fullBuffer.length;) {
+                const id = fullBuffer.toString("ascii", i, i + 4);
+                const sz = fullBuffer.readUInt32LE(i + 4);
+                if (id === "data") { dataOff = i + 8; break; }
+                i += 8 + sz + (sz % 2);
+              }
+            }
+            const pcm = fullBuffer.subarray(dataOff);
+            if (bits === 16 && ch >= 1 && pcm.length >= 2 * ch) {
+              // stereo -> mono ortalama, sonra 16k'ya lineer resample
+              const n = Math.floor(pcm.length / 2 / ch);
+              const monoF = new Float32Array(n);
+              for (let i = 0; i < n; i++) {
+                let s = 0;
+                for (let c = 0; c < ch; c++) s += pcm.readInt16LE((i * ch + c) * 2);
+                monoF[i] = s / ch;
+              }
+              const outN = sr === 16000 ? n : Math.floor(n * 16000 / sr);
+              const mono = Buffer.alloc(outN * 2);
+              for (let i = 0; i < outN; i++) {
+                const src = i * sr / 16000;
+                const i0 = Math.floor(src), frac = src - i0;
+                const v = monoF[i0] * (1 - frac) + (monoF[Math.min(i0 + 1, n - 1)] || 0) * frac;
+                mono.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v))), i * 2);
+              }
+              const fileVad = createSileroVad({ sampleRate: 16000 });
+              const FRAME_BYTES = 640;
+              await vadChain;
+              fileStartMs = audioClockMs;
+              for (let off = 0; off + 2 <= mono.length; off += FRAME_BYTES) {
+                const sub = mono.subarray(off, Math.min(off + FRAME_BYTES, mono.length));
+                const t = audioClockMs;
+                audioClockMs += sub.length / 32;
+                fileVad.processPcm16(sub);
+                const p = await fileVad.flush();
+                noise.pushFrame({ ...frameStatsPcm16(sub), speechProb: p }, t);
+              }
+            }
+          }
           console.log('[Server] Audio file received — Deepgram REST (axios)');
           send({ type: 'log', message: 'Sending to Deepgram STT (' + contentType + ')...' });
           send({ type: 'stage', stage: 'stt', status: 'processing' });
@@ -1126,6 +1276,18 @@ browserWss.on('connection', function(ws) {
                 duration: fileDurationSec,
                 transcript: String(fileTranscript).trim(),
               });
+              if (fileStartMs != null && alt.words && alt.words.length) {
+                const offSec = fileStartMs / 1000;
+                uttWords = alt.words.map(function(w) {
+                  return {
+                    word: w.punctuated_word || w.word,
+                    start: (w.start || 0) + offSec,
+                    end: (w.end || 0) + offSec,
+                    confidence: (w.confidence != null ? w.confidence : null),
+                  };
+                });
+              }
+              if (typeof alt.confidence === "number") lastConfidence = alt.confidence;
               await handleTranscript(fileTranscript, null);
             } else {
               console.warn('[Deepgram] Empty transcript. alt=', JSON.stringify(alt));
@@ -1166,13 +1328,49 @@ browserWss.on('connection', function(ws) {
         } else {
           lastMediaAt = Date.now();
           const raw = Buffer.from(data);
-          if (dfEnabled && deepFilter) {
-            deepFilter.processPcm16(raw).then(function(cleanBuf) {
-              sendAudioToDeepgram(cleanBuf);
-            }).catch(function(e) {
-              console.error('[DeepFilter] process error:', e.message);
-              sendAudioToDeepgram(raw);
-            });
+          const SUB_BYTES = 640;
+          for (let off = 0; off < raw.length; off += SUB_BYTES) {
+            const sub = raw.subarray(off, Math.min(off + SUB_BYTES, raw.length));
+            if (sub.length < 2) break;
+            const t = audioClockMs;
+            audioClockMs += sub.length / 32;
+            const stats = frameStatsPcm16(sub);
+            vadChain = vadChain.then(async function() {
+              vad.processPcm16(sub);
+              const p = await vad.flush();
+              noise.pushFrame({ ...stats, speechProb: p}, t);
+            }).catch(function(e) { console.error("[VAD] chain error:", e.message); });
+          }
+          if (DEEPFILTER_ENABLED && dfEnabled && deepFilter) {
+            console.log('[DeepFilter] raw size:', raw.length);
+            const DF_CHUNK = 640; // 320 samples @ 16 kHz PCM16 ≈ 20 ms
+            if (raw.length <= DF_CHUNK) {
+              deepFilter.processPcm16(raw).then(function(cleanBuf) {
+                console.log('[DeepFilter] processPcm16 resolved | in:', raw.length, '| out:', cleanBuf ? cleanBuf.length : 0);
+                sendAudioToDeepgram(cleanBuf);
+              }).catch(function(e) {
+                console.error('[DeepFilter] process error:', e.message);
+                sendAudioToDeepgram(raw);
+              });
+            } else {
+              // Large WS frames → feed DeepFilter in 640-byte slices (same as VAD framing)
+              const nChunks = Math.ceil(raw.length / DF_CHUNK);
+              console.log('[DeepFilter] splitting into', nChunks, 'x', DF_CHUNK, 'byte chunks');
+              let chain = Promise.resolve();
+              for (let off = 0; off < raw.length; off += DF_CHUNK) {
+                const chunk = Buffer.from(raw.subarray(off, Math.min(off + DF_CHUNK, raw.length)));
+                if (chunk.length < 2) break;
+                chain = chain.then(function() {
+                  return deepFilter.processPcm16(chunk).then(function(cleanBuf) {
+                    console.log('[DeepFilter] processPcm16 resolved | chunk in:', chunk.length, '| out:', cleanBuf ? cleanBuf.length : 0);
+                    if (cleanBuf && cleanBuf.length) sendAudioToDeepgram(cleanBuf);
+                  });
+                }).catch(function(e) {
+                  console.error('[DeepFilter] process error (chunk):', e.message);
+                  sendAudioToDeepgram(chunk);
+                });
+              }
+            }
           } else {
             sendAudioToDeepgram(raw);
           }
@@ -1237,22 +1435,42 @@ function calcTokenCost(model, inputTokens, outputTokens) {
   return (inputTokens / 1e6) * rates.input + (outputTokens / 1e6) * rates.output;
 }
 
-/** Normalize Gemini usageMetadata — do not subtract modality details (e.g. audio). */
+/** Sum tokenCount for a single modality in Gemini *TokensDetails arrays. */
+function sumGeminiModalityTokens(details, modality) {
+  if (!Array.isArray(details) || !details.length) return null;
+  const want = String(modality || '').toUpperCase();
+  let sum = 0;
+  for (let i = 0; i < details.length; i++) {
+    const d = details[i];
+    if (!d) continue;
+    const m = String(d.modality || d.Modality || '').toUpperCase();
+    if (m !== want) continue;
+    sum += Number(d.tokenCount != null ? d.tokenCount : d.token_count) || 0;
+  }
+  return sum;
+}
+
+/**
+ * Normalize Gemini usageMetadata for billing/compare.
+ * input_tokens: TEXT modality only from promptTokensDetails (AUDIO excluded).
+ * output_tokens: raw responseTokenCount (unchanged; do not filter by modality).
+ */
 function parseGeminiUsageMetadata(usageMetadata) {
   const u = usageMetadata || {};
-  const input = Number(u.promptTokenCount) || 0;
-  const output = Number(u.candidatesTokenCount) || 0;
-  const total = (typeof u.totalTokenCount === 'number' && Number.isFinite(u.totalTokenCount))
-    ? u.totalTokenCount
-    : (input + output);
-  // Log details for debugging but never subtract them from the totals we report
+  let input = Number(u.promptTokenCount) || 0;
+  // Prefer responseTokenCount for Live; fall back to candidatesTokenCount for REST
+  const output = Number(u.responseTokenCount) || Number(u.candidatesTokenCount) || 0;
+
   if (Array.isArray(u.promptTokensDetails) && u.promptTokensDetails.length) {
     console.log('[Compare] Gemini promptTokensDetails:', JSON.stringify(u.promptTokensDetails));
+    // TEXT only for input — do not include AUDIO in cost
+    input = sumGeminiModalityTokens(u.promptTokensDetails, 'TEXT') || 0;
   }
+
   return {
     input_tokens: input,
     output_tokens: output,
-    total_tokens: total,
+    total_tokens: input + output,
   };
 }
 
@@ -1924,10 +2142,13 @@ async function classifyWithGeminiLive(transcript, model, opts) {
         }
 
         if (msg.usageMetadata) {
-          promptTokens = msg.usageMetadata.promptTokenCount || promptTokens;
-          responseTokens = msg.usageMetadata.responseTokenCount
-            || msg.usageMetadata.candidatesTokenCount
-            || responseTokens;
+          const usage = parseGeminiUsageMetadata(msg.usageMetadata);
+          promptTokens = usage.input_tokens;
+          responseTokens = usage.output_tokens;
+          console.log('[Gemini Live Compare] usage in(TEXT)/out(responseTokenCount):',
+            promptTokens + '/' + responseTokens,
+            '| raw promptTokenCount:', msg.usageMetadata.promptTokenCount,
+            '| raw responseTokenCount:', msg.usageMetadata.responseTokenCount);
         }
 
         if (serverContent && (serverContent.turnComplete || serverContent.turn_complete)) {
@@ -2317,12 +2538,19 @@ app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), asy
       return res.status(400).json({ error: 'audio body required' });
     }
     const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
-    const durationHeader = req.headers['x-audio-duration'];
-    const duration = durationHeader != null && Number.isFinite(parseFloat(durationHeader))
-      ? parseFloat(durationHeader)
-      : null;
+
+    // Prefer ffmpeg duration; fall back to client X-Audio-Duration header
+    let durationSec = await getAudioDurationSec(buf);
+    if (durationSec == null) {
+      const durationHeader = req.headers['x-audio-duration'];
+      if (durationHeader != null && Number.isFinite(parseFloat(durationHeader))) {
+        durationSec = parseFloat(durationHeader);
+      }
+    }
+    const deepgramCost = durationSec != null ? (durationSec / 60) * 0.0043 : null;
+
     console.log('[Compare Gemini STT] Converting to PCM16k...', buf.length, 'bytes | model:', model,
-      duration != null ? ('| duration: ' + duration + 's') : '');
+      '| duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
     const pcm = await audioToPcm16kMono(buf);
     if (!pcm || !pcm.length) {
       return res.status(400).json({ error: 'Audio conversion produced empty PCM' });
@@ -2335,7 +2563,9 @@ app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), asy
       sttMs: r.stt_ms != null ? r.stt_ms : null,
       confidence: null,
       engine: 'gemini',
-      duration: duration,
+      duration_sec: durationSec,
+      deepgram_cost: deepgramCost,
+      duration: durationSec,
     });
   } catch (e) {
     console.error('[Compare Gemini STT] Error:', e.message);
@@ -2512,6 +2742,8 @@ app.post('/compare-intent', async function(req, res) {
   );
   const compareOpts = realSttMs != null ? { realSttMs: realSttMs, geminiMode: 'live' } : { geminiMode: 'live' };
   let deepgramFromAudio = false;
+  let durationSec = null;
+  let deepgramCost = null;
 
   // Optional audio: Deepgram Nova-3 STT → transcript text → Gemini Live (no audio buffer to Live)
   const audioB64 = req.body && (req.body.audio_base64 || req.body.audioBuffer);
@@ -2520,6 +2752,10 @@ app.post('/compare-intent', async function(req, res) {
     try {
       const rawAudio = Buffer.from(audioB64, 'base64');
       console.log('[Compare Intent] Audio received — Deepgram STT first...', rawAudio.length, 'bytes');
+      durationSec = await getAudioDurationSec(rawAudio);
+      deepgramCost = durationSec != null ? (durationSec / 60) * 0.0043 : null;
+      console.log('[Compare Intent] duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
+
       const stt = await transcribeCompareAudioDeepgram(rawAudio, req.body.audio_mime || 'audio/wav');
       if ((stt.transcript || '').trim()) {
         transcript = stt.transcript.trim();
@@ -2602,6 +2838,21 @@ app.post('/compare-intent', async function(req, res) {
   const results = {};
   for (const row of settled) results[row.model] = row;
 
+  // Attach duration/cost onto each model result when audio was transcribed here
+  if (durationSec != null || deepgramCost != null) {
+    Object.keys(results).forEach(function(model) {
+      const row = results[model];
+      if (!row) return;
+      if (durationSec != null) row.duration_sec = durationSec;
+      if (deepgramCost != null) row.deepgram_cost = deepgramCost;
+      (row.runs || []).forEach(function(run) {
+        if (!run || !run.ok) return;
+        if (durationSec != null) run.duration_sec = durationSec;
+        if (deepgramCost != null) run.deepgram_cost = deepgramCost;
+      });
+    });
+  }
+
   res.json({
     transcript: transcript,
     expected: expected,
@@ -2611,6 +2862,8 @@ app.post('/compare-intent', async function(req, res) {
     stt_source: realSttMs != null ? (deepgramFromAudio ? 'deepgram' : 'real') : 'estimated',
     stt_engine: deepgramFromAudio ? 'deepgram' : undefined,
     audio_used: deepgramFromAudio,
+    duration_sec: durationSec,
+    deepgram_cost: deepgramCost,
     results: results,
   });
 });
@@ -2880,17 +3133,23 @@ function startServer() {
     console.log('\n🎙️  Voice AI Demo: http://localhost:' + PORT);
     console.log('📞  Twilio webhook: ' + PUBLIC_URL + '/incoming-call');
     console.log('🔌  Twilio WS path: ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio');
+    console.log('[DeepFilter] ' + (DEEPFILTER_ENABLED ? 'ENABLED' : 'DISABLED (raw mic → Deepgram)'));
     console.log('Cascaded Pipeline: Deepgram nova-2 -> Claude -> ElevenLabs\n');
   });
 }
-Promise.all([
+const bootTasks = [
   loadMulawCache().catch(function(e) {
     console.error('[Mulaw Cache] Init error:', e.message);
   }),
-  preloadDeepFilter().catch(function(e) {
+];
+if (DEEPFILTER_ENABLED) {
+  bootTasks.push(preloadDeepFilter().catch(function(e) {
     console.error('[DeepFilter] Model load failed:', e.message);
     console.error('[DeepFilter] Denoise will be disabled until model is available');
-  }),
-]).then(function() {
+  }));
+} else {
+  console.log('[DeepFilter] Preload skipped — DEEPFILTER_ENABLED=false');
+}
+Promise.all(bootTasks).then(function() {
   startServer();
 });
