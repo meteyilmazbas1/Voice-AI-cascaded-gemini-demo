@@ -294,6 +294,13 @@
     color: var(--text);
     letter-spacing: 0.01em;
   }
+  .cmp-cost-lines {
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--muted);
+  }
+  .cmp-cost-lines div { white-space: nowrap; }
   .cmp-panel-status { font-size: 10px; color: var(--muted); min-height: 14px; }
   .cmp-models { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
   .cmp-model-card {
@@ -1906,15 +1913,31 @@ function mergeIntentRun(existing, next, expected) {
     tts_ms: next && next.avg_tts_ms,
     input_tokens: next && next.avg_input_tokens,
     output_tokens: next && next.avg_output_tokens,
-    cost: next && next.est_cost,
+    // Prefer llm_cost so we don't double-add deepgram when est_cost already folded
+    cost: next && (next.llm_cost != null ? next.llm_cost : next.est_cost),
+    llm_cost: next && next.llm_cost,
     mode: next && next.mode,
     audio_file_name: next && next.audio_file_name,
     transcript: next && next.transcript,
     stt_confidence: next && next.stt_confidence,
     stt_engine: next && next.stt_engine,
+    duration_sec: next && next.duration_sec,
+    deepgram_cost: next && next.deepgram_cost,
     error: next && next.error,
   }];
   const runs = prevRuns.concat(newRuns).map((r, i) => Object.assign({}, r, { run: i + 1 }));
+  // Ensure each run.cost = llm_cost + deepgram_cost before averaging
+  const dgFallback = (next && next.deepgram_cost) ?? (existing && existing.deepgram_cost)
+    ?? (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost) ?? null;
+  runs.forEach(r => {
+    if (!r || !r.ok) return;
+    if (r.llm_cost == null) r.llm_cost = Number(r.cost) || 0;
+    const dg = r.deepgram_cost != null ? Number(r.deepgram_cost) : (dgFallback != null ? Number(dgFallback) : null);
+    if (dg != null) {
+      r.deepgram_cost = dg;
+      r.cost = Number(r.llm_cost) + dg;
+    }
+  });
   const okRuns = runs.filter(r => r.ok);
   if (!okRuns.length) {
     return {
@@ -1926,6 +1949,9 @@ function mergeIntentRun(existing, next, expected) {
       total_runs: runs.length,
       success_runs: 0,
       audio_file_name: (next && next.audio_file_name) || (existing && existing.audio_file_name) || null,
+      duration_sec: (next && next.duration_sec) ?? (existing && existing.duration_sec) ?? null,
+      deepgram_cost: (next && next.deepgram_cost) ?? (existing && existing.deepgram_cost) ?? null,
+      llm_cost: (next && next.llm_cost) ?? (existing && existing.llm_cost) ?? null,
     };
   }
   const lastOk = okRuns[okRuns.length - 1];
@@ -1935,6 +1961,7 @@ function mergeIntentRun(existing, next, expected) {
   const inputTokens = okRuns.map(r => r.input_tokens || 0);
   const outputTokens = okRuns.map(r => r.output_tokens || 0);
   const costs = okRuns.map(r => r.cost || 0);
+  const llmCosts = okRuns.map(r => r.llm_cost != null ? r.llm_cost : 0);
   const sttTimes = okRuns.map(r => r.stt_ms).filter(v => v != null);
   const llmTimes = okRuns.map(r => r.llm_ms).filter(v => v != null);
   const ttsTimes = okRuns.map(r => r.tts_ms).filter(v => v != null);
@@ -1942,6 +1969,8 @@ function mergeIntentRun(existing, next, expected) {
   const avgInput = avgArr(inputTokens);
   const avgOutput = avgArr(outputTokens);
   const mode = lastOk.mode || (next && next.mode) || (existing && existing.mode) || (isGemini ? 'live_audio' : null);
+  const deepgramCost = lastOk.deepgram_cost ?? (next && next.deepgram_cost) ?? (existing && existing.deepgram_cost) ?? dgFallback;
+  const durationSec = lastOk.duration_sec ?? (next && next.duration_sec) ?? (existing && existing.duration_sec) ?? null;
   return {
     ok: true,
     model,
@@ -1958,6 +1987,7 @@ function mergeIntentRun(existing, next, expected) {
     avg_input_tokens: Math.round(avgInput),
     avg_output_tokens: Math.round(avgOutput),
     avg_tokens: Math.round(avgInput + avgOutput),
+    llm_cost: avgArr(llmCosts),
     est_cost: avgArr(costs),
     distress: lastOk.distress || null,
     distress_signals: lastOk.distress_signals || null,
@@ -1969,6 +1999,8 @@ function mergeIntentRun(existing, next, expected) {
     transcript: lastOk.transcript || (next && next.transcript) || (existing && existing.transcript) || null,
     stt_confidence: lastOk.stt_confidence != null ? lastOk.stt_confidence : ((next && next.stt_confidence) || (existing && existing.stt_confidence) || null),
     stt_engine: lastOk.stt_engine || (next && next.stt_engine) || (existing && existing.stt_engine) || null,
+    duration_sec: durationSec,
+    deepgram_cost: deepgramCost != null ? Number(deepgramCost) : null,
     runs,
   };
 }
@@ -2262,7 +2294,9 @@ async function panelFileSelected(modelId, input) {
         sttMs: data.sttMs,
         confidence: data.confidence,
         engine: 'gemini',
-        duration: data.duration != null ? data.duration : duration,
+        duration: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : duration),
+        duration_sec: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : duration),
+        deepgram_cost: data.deepgram_cost != null ? data.deepgram_cost : null,
       };
     } else {
       result = await compareAudioStt(file, duration);
@@ -2467,6 +2501,13 @@ function panelRunTotalMs(modelId, r) {
 function renderPanelRuns(modelId, data) {
   const el = document.getElementById('panelRuns-' + modelDomId(modelId));
   if (!el) return;
+  console.log('[renderPanelRuns]', modelId, {
+    est_cost: data && data.est_cost,
+    deepgram_cost: data && data.deepgram_cost,
+    run_costs: (data && data.runs || []).map(r => ({ cost: r.cost, deepgram_cost: r.deepgram_cost })),
+    panel: ensurePanelState(modelId).deepgramCost,
+    shared: cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost,
+  });
   if (!data || !data.ok) {
     el.innerHTML = `<div class="cmp-panel-run-empty">${escapeHtml((data && data.error) || 'Henüz run yok — transcript girip Run’a bas.')}</div>`;
     return;
@@ -2490,15 +2531,10 @@ function renderPanelRuns(modelId, data) {
     const dgCost = r.deepgram_cost != null ? r.deepgram_cost
       : (ensurePanelState(modelId).deepgramCost != null ? ensurePanelState(modelId).deepgramCost
         : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
-    const durSec = r.duration_sec != null ? r.duration_sec
-      : (ensurePanelState(modelId).durationSec != null ? ensurePanelState(modelId).durationSec
-        : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.duration_sec));
-    const dgCostPart = dgCost != null
-      ? ` | DG: $${Number(dgCost).toFixed(6)}${durSec != null ? (' (' + Number(durSec).toFixed(2) + 's)') : ''}`
-      : '';
+    const costHtml = formatCostBreakdownHtml(resolveLlmCost(r), dgCost);
     const bd = isGemini
-      ? `STT: ${stt} | TTFA: ${llm}${dgCostPart}<br>Response: "${escapeHtml(r.response || '')}"`
-      : `STT: ${stt} | LLM: ${llm} | TTS: ${tts}${dgCostPart}<br>Response: "${escapeHtml(r.response || '')}"`;
+      ? `STT: ${stt} | TTFA: ${llm} | Cost: ${costHtml}<br>Response: "${escapeHtml(r.response || '')}"`
+      : `STT: ${stt} | LLM: ${llm} | TTS: ${tts} | Cost: ${costHtml}<br>Response: "${escapeHtml(r.response || '')}"`;
 
     return `<div class="cmp-panel-run" id="panel-run-${modelDomId(modelId)}-${r.run}">
       <div class="cmp-panel-run-main" onclick="this.parentElement.classList.toggle('open')">
@@ -2523,10 +2559,11 @@ function renderPanelRuns(modelId, data) {
     const dgCost = (okRuns.find(r => r.deepgram_cost != null) || {}).deepgram_cost
       ?? ensurePanelState(modelId).deepgramCost
       ?? (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost);
-    const dgPart = dgCost != null ? ` | DG: $${Number(dgCost).toFixed(6)}` : '';
+    const llmCost = okRuns.reduce((s, r) => s + resolveLlmCost(r), 0) / n;
+    const costHtml = formatCostBreakdownHtml(llmCost, dgCost);
     avgHtml = isGemini
-      ? `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | TTFA: ${avgLlm}ms${dgPart}</div>`
-      : `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | LLM: ${avgLlm}ms | TTS: ${avgTts}ms${dgPart}</div>`;
+      ? `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | TTFA: ${avgLlm}ms | Cost: ${costHtml}</div>`
+      : `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | LLM: ${avgLlm}ms | TTS: ${avgTts}ms | Cost: ${costHtml}</div>`;
   }
 
   el.innerHTML = rowsHtml + avgHtml;
@@ -2833,6 +2870,99 @@ function renderLatencyBreakdown(data, model) {
 }
 function fmtCost(n) { return '$' + (n || 0).toFixed(6); }
 function fmtPct(n) { return Math.round((n || 0) * 100) + '%'; }
+
+/** Resolve Deepgram STT cost for a compare result (response → panel → shared meta). */
+function resolveDeepgramCost(data, model) {
+  const pick = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  if (data) {
+    const fromData = pick(data.deepgram_cost) ?? pick(data.deepgramCost) ?? pick(data.dg_cost);
+    if (fromData != null) return fromData;
+  }
+  if (data && Array.isArray(data.runs)) {
+    for (let i = 0; i < data.runs.length; i++) {
+      const r = data.runs[i];
+      if (!r || !r.ok) continue;
+      const fromRun = pick(r.deepgram_cost) ?? pick(r.deepgramCost) ?? pick(r.dg_cost);
+      if (fromRun != null) return fromRun;
+    }
+  }
+  if (model) {
+    const st = ensurePanelState(model);
+    const fromPanel = pick(st.deepgramCost);
+    if (fromPanel != null) return fromPanel;
+  }
+  if (cmpSharedDeepgramMeta) {
+    const fromShared = pick(cmpSharedDeepgramMeta.deepgram_cost);
+    if (fromShared != null) return fromShared;
+  }
+  return null;
+}
+
+/** LLM-only cost (before Deepgram fold). */
+function resolveLlmCost(data) {
+  if (!data) return 0;
+  if (data.llm_cost != null && Number.isFinite(Number(data.llm_cost))) return Number(data.llm_cost);
+  const dg = data.deepgram_cost != null && Number.isFinite(Number(data.deepgram_cost))
+    ? Number(data.deepgram_cost) : null;
+  if (data.est_cost != null && Number.isFinite(Number(data.est_cost))) {
+    return dg != null ? Math.max(0, Number(data.est_cost) - dg) : Number(data.est_cost);
+  }
+  if (data.cost != null && Number.isFinite(Number(data.cost))) {
+    return dg != null ? Math.max(0, Number(data.cost) - dg) : Number(data.cost);
+  }
+  return 0;
+}
+
+/**
+ * Fold Deepgram STT cost into run.cost and result.est_cost (idempotent via llm_cost).
+ * est_cost / cost = llm_cost + deepgram_cost
+ */
+function foldDeepgramIntoCosts(result, dgCost) {
+  if (!result) return result;
+  const pickDg = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  const topDg = pickDg(dgCost) ?? pickDg(result.deepgram_cost);
+
+  (result.runs || []).forEach(r => {
+    if (!r || !r.ok) return;
+    const dg = pickDg(r.deepgram_cost) ?? topDg;
+    if (r.llm_cost == null) r.llm_cost = Number(r.cost) || 0;
+    if (dg != null) {
+      r.deepgram_cost = dg;
+      r.cost = r.llm_cost + dg;
+    }
+  });
+
+  const okRuns = (result.runs || []).filter(r => r && r.ok);
+  if (result.llm_cost == null) {
+    if (okRuns.length) {
+      result.llm_cost = okRuns.reduce((s, r) => s + (Number(r.llm_cost) || 0), 0) / okRuns.length;
+    } else {
+      result.llm_cost = Number(result.est_cost) || 0;
+    }
+  }
+  if (topDg != null) result.deepgram_cost = topDg;
+  if (okRuns.length) {
+    result.est_cost = okRuns.reduce((s, r) => s + (Number(r.cost) || 0), 0) / okRuns.length;
+  } else if (topDg != null) {
+    result.est_cost = (Number(result.llm_cost) || 0) + topDg;
+  }
+  return result;
+}
+
+/** LLM cost with optional (+DG: $X.XXXXXX) suffix — main number is LLM-only; DG shown separately. */
+function formatCostBreakdownHtml(llmCost, dgCost) {
+  const llm = Number(llmCost) || 0;
+  const dg = dgCost != null && Number.isFinite(Number(dgCost)) ? Number(dgCost) : null;
+  let html = fmtCost(llm);
+  if (dg != null) html += ` <span style="color:var(--muted)">(+DG: ${fmtCost(dg)})</span>`;
+  return html;
+}
+
+/** Display helper: llm (+DG) from a result/run object. */
+function formatResultCostHtml(data, model) {
+  const dg = resolveDeepgramCost(data, model);
+  return formatCostBreakdownHtml(resolveLlmCost(data), dg);
+}
 function modelDomId(model) { return String(model).replace(/[^a-zA-Z0-9_-]/g, '_'); }
 
 function renderCmpLoadingRow(model) {
@@ -2868,7 +2998,7 @@ function renderCmpFreeformRow(model, data) {
     <td>${fmtMs(data.min_latency)}</td>
     <td>${fmtMs(data.max_latency)}</td>
     <td>${data.avg_tokens} <span style="color:var(--muted);font-size:10px">(${data.avg_input_tokens}/${data.avg_output_tokens})</span></td>
-    <td>${fmtCost(data.est_cost)}</td>
+    <td>${formatResultCostHtml(data, model)}</td>
   </tr>
   <tr class="cmp-detail" id="${detailId}">
     <td colspan="7"><div class="cmp-detail-inner">
@@ -2888,14 +3018,14 @@ function renderCmpSplitCard(model, intentData, freeformData) {
         const lastRun = (intentData.runs || []).filter(r => r.ok).slice(-1)[0];
         const responseText = lastRun?.response || '';
         return `<div class="split-panel-intent cmp-intent ${intentData.intent}">${intentData.intent} (${fmtPct(intentData.avg_confidence)})</div>
-       <div class="split-panel-meta">Total: ${fmtMs(intentData.avg_latency)} · ${intentData.avg_tokens} tokens · ${fmtCost(intentData.est_cost)}</div>
+       <div class="split-panel-meta">Total: ${fmtMs(intentData.avg_latency)} · ${intentData.avg_tokens} tokens · ${formatResultCostHtml(intentData, model)}</div>
        ${renderLatencyBreakdown(intentData, model)}
        <div class="split-panel-response">"${escapeHtml(responseText)}"</div>`;
       })();
 
   const freeformPanel = !freeformData || !freeformData.ok
     ? `<div class="split-panel-error">${escapeHtml((freeformData && freeformData.error) || 'Free-form run failed')}</div>`
-    : `<div class="split-panel-meta">${fmtMs(freeformData.avg_latency)} · ${freeformData.avg_tokens} tokens · ${fmtCost(freeformData.est_cost)}</div>
+    : `<div class="split-panel-meta">${fmtMs(freeformData.avg_latency)} · ${freeformData.avg_tokens} tokens · ${formatResultCostHtml(freeformData, model)}</div>
        <div class="split-panel-response">"${escapeHtml(freeformData.last_response || '')}"</div>`;
 
   return `<div class="cmp-split-card">
@@ -3084,7 +3214,7 @@ function renderCmpResultRow(model, data) {
     <td>${fmtMs(data.min_latency)}</td>
     <td>${fmtMs(data.max_latency)}</td>
     <td>${data.avg_tokens} <span style="color:var(--muted);font-size:10px">(${data.avg_input_tokens}/${data.avg_output_tokens})</span></td>
-    <td>${fmtCost(data.est_cost)}</td>
+    <td>${formatResultCostHtml(data, model)}</td>
     <td>${correctCell}</td>
   </tr>
   <tr class="cmp-detail" id="${detailId}">
@@ -3465,9 +3595,12 @@ function exportCmpCSV() {
         const dgCost = run.deepgram_cost != null ? run.deepgram_cost
           : (r.deepgram_cost != null ? r.deepgram_cost
             : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
+        const llmOnly = run.llm_cost != null ? Number(run.llm_cost)
+          : (dgCost != null ? Math.max(0, (Number(run.cost) || 0) - Number(dgCost)) : (Number(run.cost) || 0));
+        const totalCost = dgCost != null ? llmOnly + Number(dgCost) : (Number(run.cost) || 0);
         lines.push([
           model, run.run, run.ok ? 1 : 0, run.intent || '', run.confidence ?? '', run.latency || 0,
-          run.input_tokens || 0, run.output_tokens || 0, run.cost || 0,
+          run.input_tokens || 0, run.output_tokens || 0, totalCost,
           dur != null ? dur : '',
           dgCost != null ? dgCost : '',
           r.correct === true ? 1 : r.correct === false ? 0 : '',
@@ -3527,6 +3660,35 @@ async function fetchModelCompare(transcript, model, runs, expected, opts) {
   if (!res.ok) {
     throw new Error(data.error || 'compare-intent failed');
   }
+  // Debug: verify Deepgram cost keys on /compare-intent response
+  const costKeys = Object.keys(data).filter(k => /cost|deepgram|duration/i.test(k));
+  const modelRow = data.results && data.results[model];
+  console.log('[compare-intent] cost keys:', costKeys, {
+    deepgram_cost: data.deepgram_cost,
+    duration_sec: data.duration_sec,
+    model_deepgram_cost: modelRow && modelRow.deepgram_cost,
+    model_est_cost: modelRow && modelRow.est_cost,
+    run0_deepgram_cost: modelRow && modelRow.runs && modelRow.runs[0] && modelRow.runs[0].deepgram_cost,
+    opts_deepgramCost: opts.deepgramCost,
+    panel_deepgramCost: ensurePanelState(model).deepgramCost,
+    shared: cmpSharedDeepgramMeta,
+  });
+  // Prefer server-measured Deepgram duration/cost when audio_base64 was transcribed in /compare-intent
+  if (data.duration_sec != null || data.deepgram_cost != null) {
+    cmpSharedDeepgramMeta = {
+      duration_sec: data.duration_sec != null ? data.duration_sec : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.duration_sec),
+      deepgram_cost: data.deepgram_cost != null ? data.deepgram_cost : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost),
+      audioFileName: (opts.audioFileName) || (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.audioFileName) || null,
+    };
+    if (opts.durationSec == null && data.duration_sec != null) opts.durationSec = data.duration_sec;
+    if (opts.deepgramCost == null && data.deepgram_cost != null) opts.deepgramCost = data.deepgram_cost;
+    CMP_MODEL_ORDER.forEach(m => {
+      const st = ensurePanelState(m);
+      if (data.duration_sec != null) st.durationSec = data.duration_sec;
+      if (data.deepgram_cost != null) st.deepgramCost = data.deepgram_cost;
+      updatePanelSttUI(m);
+    });
+  }
   const result = (data.results && data.results[model]) || { ok: false, error: data.error || 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model };
   const sttMs = opts.realSttMs != null
     ? opts.realSttMs
@@ -3567,6 +3729,11 @@ async function fetchModelCompare(transcript, model, runs, expected, opts) {
     if (opts.deepgramCost != null) applied.deepgram_cost = opts.deepgramCost;
     else if (cmpSharedDeepgramMeta) applied.deepgram_cost = cmpSharedDeepgramMeta.deepgram_cost;
   }
+  // est_cost / run.cost = llm_cost + deepgram_cost (Excel + tables use these)
+  const dgForFold = opts.deepgramCost != null ? opts.deepgramCost
+    : (applied && applied.deepgram_cost != null ? applied.deepgram_cost
+      : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
+  foldDeepgramIntoCosts(applied, dgForFold);
   return applied;
 }
 
@@ -3640,7 +3807,17 @@ async function fetchCompareIntentBatch(transcript, models, runs, expected) {
   if (!res.ok) throw new Error(data.error || 'compare-intent failed');
   const sttMs = data.real_stt_ms ?? data.stt_ms ?? cmpLastSttMs;
   const sttSource = data.stt_source || (typeof cmpLastSttMs === 'number' ? 'real' : 'estimated');
-  return applyCompareSttMs(data.results || {}, sttMs, sttSource);
+  const results = applyCompareSttMs(data.results || {}, sttMs, sttSource);
+  const dg = data.deepgram_cost != null ? data.deepgram_cost
+    : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost);
+  Object.keys(results).forEach(m => {
+    const row = results[m];
+    if (!row) return;
+    if (data.duration_sec != null) row.duration_sec = data.duration_sec;
+    if (dg != null) row.deepgram_cost = dg;
+    foldDeepgramIntoCosts(row, dg);
+  });
+  return results;
 }
 
 async function fetchCompareFreeformBatch(transcript, models, runs) {
