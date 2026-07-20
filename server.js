@@ -39,6 +39,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl } = require('./db');
 const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
+const { createNoiseEstimator } = require("./noiseEstimator");
+const { createSileroVad } = require("./sileroVad");
+const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
+const { off } = require('cluster');
 
 const CACHE_DIR = path.join(__dirname, 'audio_cache');
 function loadAudioCache() {
@@ -151,6 +155,37 @@ PRIORITY: If the message contains ANY unsafe signal (injury, pain, danger, "help
 
 Respond with ONLY one word, nothing else, no punctuation:
 safe OR delayed OR request_human OR unsafe OR ambiguous`;
+
+const MASKED_WORD_PROMPT = `You are a transcript-trust auditor for a Voice AI Safety Assistant. A field worker triggered a safety alert and is answering a safety check call. Noise bursts overlapped parts of the worker's utterance, so parts of the transcript may be misheard or missing.
+
+You will receive:
+- Agent question: what the assistant last asked the worker.
+- Transcript: the utterance. [word] marks a word the noise overlapped (may be misheard). [NOISE 0.8s] marks lost audio — between words, or at the very start/end of the utterance (a trailing [NOISE] right after an unfinished clause often hides the words that decide the classification).
+- Masked items: the overlapped words and missing spots.
+
+The call outcome is decided by classifying the utterance as one of: safe, delayed, request_human, unsafe, ambiguous.
+
+Decide: does the masked or missing content genuinely block the classification, OR does it hide a concrete detail the system needs to act on it (e.g. the NUMBER of minutes for delayed — the safety timer cannot be extended without it)?
+- For each [word], imagine realistic alternatives (similar-sounding words: "stepped"/"slipped", "fine"/"fell"; negations: "can"/"can't").
+- For each [NOISE], imagine realistic words that could fill the gap, given the agent's question.
+- Weigh each alternative against the INTACT words: an alternative only counts if the whole utterance stays coherent with it. If the intact words already form a complete, consistent account that fits exactly one classification, the meaning is recovered — reply "unimportant".
+- Reply "important" if a coherent reading of the full utterance changes the classification — especially toward unsafe — or if the masked content hides a required actionable detail, or if so much is masked that the overall meaning is not recoverable.
+
+Tie-break: if after weighing coherence you still cannot tell, reply "important" — but a filling that contradicts the intact context is not genuine uncertainty.
+
+Respond with exactly one word, nothing else: important or unimportant`;
+
+async function classifyMaskedWordImportance(transcript, maskedWords, agentQuestion) {
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5',
+    max_tokens: 4,
+    temperature: 0,
+    system: [{ type: 'text', text: MASKED_WORD_PROMPT, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: 'Agent question: "' + (agentQuestion || '(unknown)') + '"\nTranscript: "' + transcript + '"\nMasked items: ' + maskedWords.join(', ') }],
+  }, { timeout: 2500, maxRetries: 0 });
+  const raw = ((response.content[0] && response.content[0].text) || '').trim().toLowerCase();
+  return { important: raw.startsWith('important') };
+}
 
 const VALID_INTENTS_SET = new Set(['safe', 'delayed', 'request_human', 'unsafe', 'ambiguous']);
 const DURATION_REGEX = /(\d+)\s*(min(?:ute)?s?|hours?|hrs?|h)\b/i;
@@ -492,11 +527,18 @@ twilioWss.on('connection', function(ws) {
   let callFinalIntent = null;
   let callTranscript = [];
   let workerPhone = null;
+  const noise = createNoiseEstimator({ frameMs: 20 });
+  const vad = createSileroVad({ sampleRate: 8000 });
+  let dgClockMs = 0;
+  let agentPlaybackUntil = 0;
+  let uttWords = [];
 
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
 
   function sendAudioToTwilio(audioBuffer) {
     if (ws.readyState !== WebSocket.OPEN || !streamSid) return;
+    const durMs = audioBuffer.length / 8;
+    agentPlaybackUntil = Math.max(agentPlaybackUntil, Date.now()) + durMs;
     ws.send(JSON.stringify({
       event: 'media',
       streamSid: streamSid,
@@ -533,6 +575,11 @@ twilioWss.on('connection', function(ws) {
 
   async function handleTwilioTranscript(finalTranscript) {
     if (!finalTranscript || finalTranscript.trim() === '') return;
+    const speechSpans = uttWords.map(function(w) { return { startMs: w.start * 1000, endMs: w.end * 1000, word: w.word }; });
+    uttWords = [];
+    const m = noise.endTurn({ speechSpans: speechSpans.length ? speechSpans : null });
+    console.log("[Noise] snr=" + (m.snrDb != null ? m.snrDb.toFixed(1) : "n/a") + "floor=" + 
+    (m.floorDbfs != null ? m.floorDbfs.toFixed(1) : "n/a") + "noisy=" + m.noisy);
     console.log('[Twilio Transcript]', finalTranscript);
     callTranscript.push({ role: 'worker', text: finalTranscript, time: new Date().toISOString() });
     sessionState = 'PROCESSING';
@@ -544,17 +591,19 @@ twilioWss.on('connection', function(ws) {
 
       const CONFIDENCE_THRESHOLD = 0.6;
       const criticalIntents = ['SAFE_CONFIRMATION', 'DELAYED_CHECKIN'];
-      if (callLastConfidence !== null && callLastConfidence < CONFIDENCE_THRESHOLD
-          && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
+      const lowConf = callLastConfidence !== null && callLastConfidence < CONFIDENCE_THRESHOLD;
+      const noisyEnv = m.noisy;
+      if ((lowConf || noisyEnv) && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
         safetyConfirmPending = true;
-        const confirmText = result.intent === 'SAFE_CONFIRMATION'
-          ? "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?"
-          : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
-        console.log('[Confidence] Low confidence (' + callLastConfidence.toFixed(2) + ') for', result.intent, '— asking to confirm');
-        callLastConfidence = null;
-        await speakText(confirmText, null, false);
-        sessionState = 'LISTENING';
-        return;
+        const confirmText = result.intent === "SAFE_CONFIRMATION" ? (noisyEnv ?
+           "Sorry, it's a bit noisy. Can you confirm clearly that you are safe?" : 
+           "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?")
+           : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
+           console.log("[Confidence] lowConf=" + lowConf + "noisy=" + noisyEnv + "for", result.intent, "-asking to confirm");
+           callLastConfidence = null;
+           await speakText(confirmText, null, false);
+           sessionState = "LISTENING";
+           return;
       }
       safetyConfirmPending = false;
       callLastConfidence = null;
@@ -593,6 +642,7 @@ twilioWss.on('connection', function(ws) {
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const alt = msg.channel.alternatives[0];
           const text = alt.transcript;
+          if (msg.is_final && alt.words && alt.words.length) uttWords.push(...alt.words);
           if (text && text.trim()) {
             if (msg.is_final && typeof alt.confidence === 'number') {
               callLastConfidence = alt.confidence;
@@ -645,7 +695,12 @@ twilioWss.on('connection', function(ws) {
       }
       if (msg.event === 'media' && deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
         lastMediaAt = Date.now();
-        deepgramWs.send(Buffer.from(msg.media.payload, 'base64'));
+        const buf = Buffer.from(msg.media.payload, "base64");
+        noise.setAgentSpeaking(Date.now() < agentPlaybackUntil + 200);
+        vad.processMulaw(buf);
+        noise.pushFrame({ ...frameStatsMulaw(buf), speechProb: vad.prob() }, dgClockMs);
+        dgClockMs += buf.length / 8;
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.send(buf);
       }
       if (msg.event === 'stop') {
         console.log('[Twilio] Stream stopped');
@@ -715,6 +770,14 @@ browserWss.on('connection', function(ws) {
   let deepFilter = null;
   let dfPreferred = true;  // Noise Cancel ON by default
   let dfEnabled = true;
+  const noise = createNoiseEstimator({ frameMs: 20 });
+  const vad = createSileroVad({ sampleRate: 16000 });
+  let audioClockMs = 0;
+  let vadChain = Promise.resolve();
+  let uttWords = [];
+  let lastAgentText = null;
+  const SNR_HARD_MIN = 5;
+  const LOWCONF_RATIO_MAX = 0.5;
   const SILENCE_MS = 4000;
 
   function send(obj) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
@@ -748,6 +811,22 @@ browserWss.on('connection', function(ws) {
 
   async function handleTranscript(finalTranscript, sttMs) {
     if (!finalTranscript || finalTranscript.trim() === '') return;
+    const speechSpans = uttWords.map(function(w, i) {
+      return { startMs: (w.start || 0) * 1000, endMs: (w.end || 0) * 1000, word: w.word, idx: i,
+         conf: (w.confidence != null ? w.confidence : null) };
+    });
+    uttWords = [];
+    const m = noise.endTurn({ speechSpans: speechSpans.length ? speechSpans : null });
+    const totalWords = Math.max(speechSpans.length, 1);
+    const hitIdx = new Set(m.collisions.filter(function(c) { 
+      return c.type === "overlap" && c.idx != null; }).map(function(c) { return c.idx; }));
+    const lowConfRatio = speechSpans.filter(function(s) { return s.conf != null && s.conf < 0.6; }).length / totalWords;
+    const untrusted = m.speechFallback
+     || (m.snrReliable && m.snrDb != null && m.snrDb <= SNR_HARD_MIN)
+     || lowConfRatio >= LOWCONF_RATIO_MAX;
+     console.log('[Noise] snr=' + (m.snrDb != null ? m.snrDb.toFixed(1) : 'n/a') + ' noisy=' + m.noisy
+      + ' collisions=' + m.collisions.length + ' lowConfRatio=' + lowConfRatio.toFixed(2)
+       + ' untrusted=' + untrusted); 
     if (snrBlocked) {
       console.log('[SNR] Transcript blocked due to bad SNR:', finalTranscript);
       snrBlocked = false;
@@ -764,15 +843,42 @@ browserWss.on('connection', function(ws) {
       const llmMs = Date.now() - llmStart;
       let result = intentToResult(intent, duration);
 
-      const CONFIDENCE_THRESHOLD = 0.6;
+            const CONFIDENCE_THRESHOLD = 0.6;
       const criticalIntents = ['SAFE_CONFIRMATION', 'DELAYED_CHECKIN'];
-      if (lastConfidence !== null && lastConfidence < CONFIDENCE_THRESHOLD
-          && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
+      const lowConf = lastConfidence !== null && lastConfidence < CONFIDENCE_THRESHOLD;
+
+      let maskImportant = false;
+      if (!untrusted && m.hasCollision && criticalIntents.includes(result.intent)) {
+        const maskedItems = [...new Set(m.collisions.map(function(c) {
+          return c.type === 'overlap' && c.word ? c.word
+            : '[MISSING between "' + (c.prevWord || '<start>') + '" and "' + (c.nextWord || '<end>') + '"]';
+        }))];
+        const gaps = m.collisions.filter(function(c) { return c.type === 'gap'; })
+          .sort(function(a, b) { return a.tMs - b.tMs; });
+        const parts = [];
+        let gi = 0;
+        for (const s of speechSpans) {
+          while (gi < gaps.length && gaps[gi].tMs < s.startMs) { parts.push('[NOISE ' + (gaps[gi].durationMs / 1000).toFixed(1) + 's]'); gi++; }
+          if (s.word) parts.push(hitIdx.has(s.idx) ? '[' + s.word + ']' : s.word);
+        }
+        while (gi < gaps.length) { parts.push('[NOISE ' + (gaps[gi].durationMs / 1000).toFixed(1) + 's]'); gi++; }
+        const annotated = parts.join(' ');
+        try {
+          const maskRes = await classifyMaskedWordImportance(annotated, maskedItems, lastAgentText);
+          maskImportant = maskRes.important;
+        } catch (e) { maskImportant = true; }
+        console.log('[Mask] annotated="' + annotated + '" important=' + maskImportant);
+      }
+
+      const noisyTurn = m.noisy || untrusted || maskImportant;
+      if ((lowConf || noisyTurn) && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
         safetyConfirmPending = true;
         const confirmText = result.intent === 'SAFE_CONFIRMATION'
-          ? "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?"
+          ? (noisyTurn ? "Sorry, it's a bit noisy. Can you confirm clearly that you are safe?"
+                       : "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?")
           : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
-        console.log('[Confidence] Low confidence (' + lastConfidence.toFixed(2) + ') for', result.intent, '— asking to confirm');
+        lastAgentText = confirmText;
+        console.log('[Confidence] lowConf=' + lowConf + ' noisyTurn=' + noisyTurn + ' for', result.intent);
         send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
         send({ type: 'response', text: confirmText, audio: null, resolved: false, escalate: false });
         try {
@@ -802,6 +908,7 @@ browserWss.on('connection', function(ws) {
 
       if (!result.distress) applyCachedResponse(result);
       console.log('[Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none', '| LLM:', llmMs + 'ms');
+      lastAgentText = result.response;
       send({ type: 'intent', data: result, client_e2e_ms: clientE2eMs });
       clientE2eMs = null;
       send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
@@ -894,6 +1001,7 @@ browserWss.on('connection', function(ws) {
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const alt = msg.channel.alternatives[0];
           const text = alt.transcript;
+          if (msg.is_final && alt.words && alt.words.length) uttWords.push(...alt.words);
           if (text && text.trim()) {
             if (msg.is_final && typeof alt.confidence === 'number') {
               lastConfidence = alt.confidence;
@@ -972,6 +1080,7 @@ browserWss.on('connection', function(ws) {
           }
           send({ type: 'stage', stage: 'tts', status: 'done' });
           send({ type: 'greeting', text: WORKER_INTRO, audio: introAudio });
+                    lastAgentText = WORKER_INTRO;
           sessionState = 'LISTENING';
         }
         if (msg.type === 'snr_block') {
@@ -1083,6 +1192,53 @@ browserWss.on('connection', function(ws) {
               '| ch:', fullBuffer.readUInt16LE(22),
               '| bits:', fullBuffer.readUInt16LE(34));
           }
+                    let fileStartMs = null;
+          if (!isMp3) {
+            const sr = isRiff ? fullBuffer.readUInt32LE(24) : 16000;
+            const ch = isRiff ? fullBuffer.readUInt16LE(22) : 1;
+            const bits = isRiff ? fullBuffer.readUInt16LE(34) : 16;
+            let dataOff = 0;
+            if (isRiff) {
+              dataOff = 44;
+              for (let i = 12; i + 8 <= fullBuffer.length;) {
+                const id = fullBuffer.toString("ascii", i, i + 4);
+                const sz = fullBuffer.readUInt32LE(i + 4);
+                if (id === "data") { dataOff = i + 8; break; }
+                i += 8 + sz + (sz % 2);
+              }
+            }
+            const pcm = fullBuffer.subarray(dataOff);
+            if (bits === 16 && ch >= 1 && pcm.length >= 2 * ch) {
+              // stereo -> mono ortalama, sonra 16k'ya lineer resample
+              const n = Math.floor(pcm.length / 2 / ch);
+              const monoF = new Float32Array(n);
+              for (let i = 0; i < n; i++) {
+                let s = 0;
+                for (let c = 0; c < ch; c++) s += pcm.readInt16LE((i * ch + c) * 2);
+                monoF[i] = s / ch;
+              }
+              const outN = sr === 16000 ? n : Math.floor(n * 16000 / sr);
+              const mono = Buffer.alloc(outN * 2);
+              for (let i = 0; i < outN; i++) {
+                const src = i * sr / 16000;
+                const i0 = Math.floor(src), frac = src - i0;
+                const v = monoF[i0] * (1 - frac) + (monoF[Math.min(i0 + 1, n - 1)] || 0) * frac;
+                mono.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v))), i * 2);
+              }
+              const fileVad = createSileroVad({ sampleRate: 16000 });
+              const FRAME_BYTES = 640;
+              await vadChain;
+              fileStartMs = audioClockMs;
+              for (let off = 0; off + 2 <= mono.length; off += FRAME_BYTES) {
+                const sub = mono.subarray(off, Math.min(off + FRAME_BYTES, mono.length));
+                const t = audioClockMs;
+                audioClockMs += sub.length / 32;
+                fileVad.processPcm16(sub);
+                const p = await fileVad.flush();
+                noise.pushFrame({ ...frameStatsPcm16(sub), speechProb: p }, t);
+              }
+            }
+          }
           console.log('[Server] Audio file received — Deepgram REST (axios)');
           send({ type: 'log', message: 'Sending to Deepgram STT (' + contentType + ')...' });
           send({ type: 'stage', stage: 'stt', status: 'processing' });
@@ -1126,6 +1282,18 @@ browserWss.on('connection', function(ws) {
                 duration: fileDurationSec,
                 transcript: String(fileTranscript).trim(),
               });
+              if (fileStartMs != null && alt.words && alt.words.length) {
+                const offSec = fileStartMs / 1000;
+                uttWords = alt.words.map(function(w) {
+                  return {
+                    word: w.punctuated_word || w.word,
+                    start: (w.start || 0) + offSec,
+                    end: (w.end || 0) + offSec,
+                    confidence: (w.confidence != null ? w.confidence : null),
+                  };
+                });
+              }
+              if (typeof alt.confidence === "number") lastConfidence = alt.confidence;
               await handleTranscript(fileTranscript, null);
             } else {
               console.warn('[Deepgram] Empty transcript. alt=', JSON.stringify(alt));
@@ -1166,6 +1334,19 @@ browserWss.on('connection', function(ws) {
         } else {
           lastMediaAt = Date.now();
           const raw = Buffer.from(data);
+          const SUB_BYTES = 640;
+          for (let off = 0; off < raw.length; off += SUB_BYTES) {
+            const sub = raw.subarray(off, Math.min(off + SUB_BYTES, raw.length));
+            if (sub.length < 2) break;
+            const t = audioClockMs;
+            audioClockMs += sub.length / 32;
+            const stats = frameStatsPcm16(sub);
+            vadChain = vadChain.then(async function() {
+              vad.processPcm16(sub);
+              const p = await vad.flush();
+              noise.pushFrame({ ...stats, speechProb: p}, t);
+            }).catch(function(e) { console.error("[VAD] chain error:", e.message); });
+          }
           if (dfEnabled && deepFilter) {
             deepFilter.processPcm16(raw).then(function(cleanBuf) {
               sendAudioToDeepgram(cleanBuf);
