@@ -44,6 +44,10 @@ const { createSileroVad } = require("./sileroVad");
 const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
 const { off } = require('cluster');
 
+// TEMP: DeepFilter bypass — mic PCM goes straight to Deepgram.
+// Re-enable with DEEPFILTER_ENABLED=true in .env (or flip default below).
+const DEEPFILTER_ENABLED = process.env.DEEPFILTER_ENABLED === 'true';
+
 const CACHE_DIR = path.join(__dirname, 'audio_cache');
 function loadAudioCache() {
   const cache = {};
@@ -768,8 +772,8 @@ browserWss.on('connection', function(ws) {
   let safetyConfirmPending = false;
   let clientE2eMs = null;
   let deepFilter = null;
-  let dfPreferred = true;  // Noise Cancel ON by default
-  let dfEnabled = true;
+  let dfPreferred = DEEPFILTER_ENABLED;  // TEMP: off unless DEEPFILTER_ENABLED=true
+  let dfEnabled = DEEPFILTER_ENABLED;
   const noise = createNoiseEstimator({ frameMs: 20 });
   const vad = createSileroVad({ sampleRate: 16000 });
   let audioClockMs = 0;
@@ -784,6 +788,11 @@ browserWss.on('connection', function(ws) {
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
 
   function ensureDeepFilter() {
+    if (!DEEPFILTER_ENABLED) {
+      deepFilter = null;
+      dfEnabled = false;
+      return false;
+    }
     if (!isDeepFilterReady()) {
       deepFilter = null;
       dfEnabled = false;
@@ -796,8 +805,10 @@ browserWss.on('connection', function(ws) {
     return dfEnabled;
   }
 
-  // Activate Noise Cancel immediately on connect (no toggle required)
-  if (ensureDeepFilter()) {
+  // Activate Noise Cancel immediately on connect (no toggle required) — skipped when DEEPFILTER_ENABLED=false
+  if (!DEEPFILTER_ENABLED) {
+    console.log('[DeepFilter] DISABLED (DEEPFILTER_ENABLED=false) — raw mic → Deepgram');
+  } else if (ensureDeepFilter()) {
     console.log('[DeepFilter] Session filter ready (active=true)');
   } else {
     console.warn('[DeepFilter] Model not ready — denoise inactive until model loads');
@@ -1040,11 +1051,18 @@ browserWss.on('connection', function(ws) {
         if (msg.type === 'set_model') { selectedModel = msg.model; console.log('[Model]', selectedModel); }
         if (msg.type === 'tts_mode') { ttsMode = msg.mode; }
         if (msg.type === 'toggle_denoise') {
-          dfPreferred = msg.enabled !== false; // default ON unless explicitly false
-          ensureDeepFilter();
-          if (!dfPreferred) dfEnabled = false;
-          console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
-          send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
+          if (!DEEPFILTER_ENABLED) {
+            dfPreferred = false;
+            dfEnabled = false;
+            console.log('[DeepFilter] toggle ignored — DEEPFILTER_ENABLED=false (forced bypass)');
+            send({ type: 'log', message: 'Noise cancellation disabled (server bypass for transcript test)' });
+          } else {
+            dfPreferred = msg.enabled !== false; // default ON unless explicitly false
+            ensureDeepFilter();
+            if (!dfPreferred) dfEnabled = false;
+            console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
+            send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
+          }
         }
         if (msg.type === 'client_metrics') {
           clientE2eMs = msg.total;
@@ -1347,13 +1365,36 @@ browserWss.on('connection', function(ws) {
               noise.pushFrame({ ...stats, speechProb: p}, t);
             }).catch(function(e) { console.error("[VAD] chain error:", e.message); });
           }
-          if (dfEnabled && deepFilter) {
-            deepFilter.processPcm16(raw).then(function(cleanBuf) {
-              sendAudioToDeepgram(cleanBuf);
-            }).catch(function(e) {
-              console.error('[DeepFilter] process error:', e.message);
-              sendAudioToDeepgram(raw);
-            });
+          if (DEEPFILTER_ENABLED && dfEnabled && deepFilter) {
+            console.log('[DeepFilter] raw size:', raw.length);
+            const DF_CHUNK = 640; // 320 samples @ 16 kHz PCM16 ≈ 20 ms
+            if (raw.length <= DF_CHUNK) {
+              deepFilter.processPcm16(raw).then(function(cleanBuf) {
+                console.log('[DeepFilter] processPcm16 resolved | in:', raw.length, '| out:', cleanBuf ? cleanBuf.length : 0);
+                sendAudioToDeepgram(cleanBuf);
+              }).catch(function(e) {
+                console.error('[DeepFilter] process error:', e.message);
+                sendAudioToDeepgram(raw);
+              });
+            } else {
+              // Large WS frames → feed DeepFilter in 640-byte slices (same as VAD framing)
+              const nChunks = Math.ceil(raw.length / DF_CHUNK);
+              console.log('[DeepFilter] splitting into', nChunks, 'x', DF_CHUNK, 'byte chunks');
+              let chain = Promise.resolve();
+              for (let off = 0; off < raw.length; off += DF_CHUNK) {
+                const chunk = Buffer.from(raw.subarray(off, Math.min(off + DF_CHUNK, raw.length)));
+                if (chunk.length < 2) break;
+                chain = chain.then(function() {
+                  return deepFilter.processPcm16(chunk).then(function(cleanBuf) {
+                    console.log('[DeepFilter] processPcm16 resolved | chunk in:', chunk.length, '| out:', cleanBuf ? cleanBuf.length : 0);
+                    if (cleanBuf && cleanBuf.length) sendAudioToDeepgram(cleanBuf);
+                  });
+                }).catch(function(e) {
+                  console.error('[DeepFilter] process error (chunk):', e.message);
+                  sendAudioToDeepgram(chunk);
+                });
+              }
+            }
           } else {
             sendAudioToDeepgram(raw);
           }
@@ -3061,17 +3102,23 @@ function startServer() {
     console.log('\n🎙️  Voice AI Demo: http://localhost:' + PORT);
     console.log('📞  Twilio webhook: ' + PUBLIC_URL + '/incoming-call');
     console.log('🔌  Twilio WS path: ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio');
+    console.log('[DeepFilter] ' + (DEEPFILTER_ENABLED ? 'ENABLED' : 'DISABLED (raw mic → Deepgram)'));
     console.log('Cascaded Pipeline: Deepgram nova-2 -> Claude -> ElevenLabs\n');
   });
 }
-Promise.all([
+const bootTasks = [
   loadMulawCache().catch(function(e) {
     console.error('[Mulaw Cache] Init error:', e.message);
   }),
-  preloadDeepFilter().catch(function(e) {
+];
+if (DEEPFILTER_ENABLED) {
+  bootTasks.push(preloadDeepFilter().catch(function(e) {
     console.error('[DeepFilter] Model load failed:', e.message);
     console.error('[DeepFilter] Denoise will be disabled until model is available');
-  }),
-]).then(function() {
+  }));
+} else {
+  console.log('[DeepFilter] Preload skipped — DEEPFILTER_ENABLED=false');
+}
+Promise.all(bootTasks).then(function() {
   startServer();
 });
