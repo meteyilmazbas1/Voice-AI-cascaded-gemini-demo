@@ -1926,6 +1926,7 @@ async function classifyWithGeminiLive(transcript, model, opts) {
     let promptTokens = 0;
     let responseTokens = 0;
     let settled = false;
+    let sttIdleTimer = null;
     const timeoutMs = audioBuffer ? 25000 : 15000;
 
     const timeout = setTimeout(function() {
@@ -1950,6 +1951,32 @@ async function classifyWithGeminiLive(transcript, model, opts) {
       clearTimeout(timeout);
       try { ws.close(); } catch (e) {}
       reject(err);
+    }
+
+    function resolveSttOnly() {
+      if (settled) return;
+      const sttMs = Math.max(0, (firstInputTranscriptAt || Date.now()) - (audioSendStart || Date.now()));
+      const tx = inputTranscript.trim();
+      console.log('[Gemini Live Compare] STT-only resolve (full transcript):', sttMs + 'ms |', tx.slice(0, 100));
+      finishOk({
+        transcript: tx,
+        sttMs: sttMs,
+        stt_ms: sttMs,
+        stt_source: "gemini_live",
+        stt_engine: "gemini",
+        inputTranscript: tx,
+        input_transcript: tx,
+        latency: sttMs,
+        ttfa: null,
+        lmm_ms: null,
+        mode: "stt-only",
+        intent: null,
+        confidence: null,
+        response: "",
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+      });
     }
 
     // PCM16 mono 16kHz — same mimeType as server_gemini.js
@@ -2076,40 +2103,17 @@ async function classifyWithGeminiLive(transcript, model, opts) {
             console.log('[Gemini Live Compare] inputTranscription start:', String(inputTxText).slice(0, 80));
           }
           if (sttOnly) {
-            if (!audioSendStart || firstInputTranscriptAt == null) return;
-            const sttMs = Math.max(0, firstInputTranscriptAt - audioSendStart);
-            const tx = inputTranscript.trim();
-            console.log('[Gemini Live Compare] STT-only resolve on inputTranscription:', sttMs + 'ms',
-              '| firstInputTranscriptAt - audioSendStart');
-            clearTimeout(timeout);
-            try { ws.close(); } catch (e) {}
-            if (!settled) {
-              settled = true;
-              resolve({
-                transcript: tx,
-                sttMs: sttMs,
-                stt_ms: sttMs,
-                stt_source: 'gemini_live',
-                stt_engine: 'gemini',
-                inputTranscript: tx,
-                input_transcript: tx,
-                latency: sttMs,
-                ttfa: null,
-                llm_ms: null,
-                mode: 'stt_only',
-                intent: null,
-                confidence: null,
-                response: '',
-                input_tokens: 0,
-                output_tokens: 0,
-                total_tokens: 0,
-              });
-            }
-            return; // ignore subsequent messages (turnComplete / audio)
+            // Parçaları biriktir; son parçadan 1.2s sonra veya turnComplete'te tam transkriptle resolve et
+            if (sttIdleTimer) clearTimeout(sttIdleTimer);
+            sttIdleTimer = setTimeout(resolveSttOnly, 1200);
+            return;
           }
         }
 
-        if (sttOnly) return; // STT-only: ignore turnComplete / generationComplete / audio out
+        if (sttOnly) {
+          if (serverContent && (serverContent.turnComplete || serverContent.turn_complete)) resolveSttOnly();
+          return;
+        }
 
         function markFirstAudio(reason) {
           if (firstAudioMs === null && turnStartTime) {
