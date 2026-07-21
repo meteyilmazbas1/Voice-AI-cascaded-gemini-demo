@@ -282,6 +282,13 @@
     line-height: 1.45;
   }
   .cmp-panel-run.open .cmp-panel-run-bd { display: block; }
+  .cmp-panel-run-tx {
+    padding: 2px 10px 8px;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.35;
+    word-break: break-word;
+  }
   .cmp-panel-run-empty { font-size: 11px; color: var(--muted); padding: 8px 0; }
   .cmp-panel-run-avg {
     margin-top: 10px;
@@ -1842,7 +1849,15 @@ let cmpMicStream = null;
 let cmpMicProcessor = null;
 let cmpLastSttMs = null; // mic Deepgram WS or audio-file STT latency (ms) for /compare-intent
 let cmpStopFlag = false;
-let cmpHistory = JSON.parse(localStorage.getItem('cmp_history') || '[]');
+let cmpHistory = (function() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('cmp_history') || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('[cmpHistory] bad localStorage on boot:', e);
+    return [];
+  }
+})();
 
 function switchView(view) {
   const demo = document.getElementById('view-demo');
@@ -2562,7 +2577,11 @@ function renderPanelRuns(modelId, data) {
     const costHtml = formatCostBreakdownHtml(resolveLlmCost(r), dgCost);
     const wer = (refTxt && r.transcript) ? wordErrorRate(refTxt, r.transcript) : null;
     const werPart = wer != null ? ` | WER: %${Math.round(wer * 100)}` : '';
-    const txPart = r.transcript ? `<br>Transcript: "${escapeHtml(r.transcript)}"` : '';
+    const tx = (r.transcript || r.input_transcript || '').trim();
+    const txLine = tx
+      ? `<div class="cmp-panel-run-tx">Run ${r.run}: ${total}ms | "${escapeHtml(tx)}"</div>`
+      : `<div class="cmp-panel-run-tx">Run ${r.run}: ${total}ms | <em>transcript yok</em></div>`;
+    const txPart = tx ? `<br>Transcript: "${escapeHtml(tx)}"` : '';
     const bd = isGemini
       ? `STT: ${stt} | TTFA: ${llm} | Cost: ${costHtml}${werPart}${txPart}<br>Response: "${escapeHtml(r.response || '')}"`
       : `STT: ${stt} | LLM: ${llm} | TTS: ${tts} | Cost: ${costHtml}${werPart}${txPart}<br>Response: "${escapeHtml(r.response || '')}"`;
@@ -2576,6 +2595,7 @@ function renderPanelRuns(modelId, data) {
           }</span>
         <span>${fmtPct(r.confidence)}</span>
       </div>
+      ${txLine}
       <div class="cmp-panel-run-bd">${bd}</div>
     </div>`;
   }).join('');
@@ -3586,10 +3606,58 @@ function renderBatchTable(models, rows) {
   document.getElementById('cmpBatchTableWrap').classList.add('show');
 }
 
+function loadCmpHistoryFromStorage() {
+  try {
+    const raw = localStorage.getItem('cmp_history');
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('[cmpHistory] localStorage read failed:', e);
+    return [];
+  }
+}
+
+/** Deep-clone so history entries do not share live cmpResults / rows references. */
+function snapshotCmpHistoryEntry(entry) {
+  try {
+    return JSON.parse(JSON.stringify(entry));
+  } catch (e) {
+    console.error('[cmpHistory] snapshot failed (circular/large?):', e);
+    // Fallback: shallow copy of top-level + clone results if possible
+    const copy = Object.assign({}, entry);
+    try {
+      if (entry.results) copy.results = JSON.parse(JSON.stringify(entry.results));
+      if (entry.freeformResults) copy.freeformResults = JSON.parse(JSON.stringify(entry.freeformResults));
+      if (entry.rows) copy.rows = JSON.parse(JSON.stringify(entry.rows));
+      if (entry.metrics) copy.metrics = JSON.parse(JSON.stringify(entry.metrics));
+    } catch (e2) {
+      console.error('[cmpHistory] partial snapshot failed:', e2);
+    }
+    return copy;
+  }
+}
+
 function saveCmpHistory(entry) {
-  cmpHistory.unshift(entry);
-  if (cmpHistory.length > 10) cmpHistory = cmpHistory.slice(0, 10);
-  localStorage.setItem('cmp_history', JSON.stringify(cmpHistory));
+  // Always append onto what's already in localStorage (not a shared live object graph)
+  const stored = loadCmpHistoryFromStorage();
+  const snapshot = snapshotCmpHistoryEntry(entry);
+  if (!snapshot.timestamp) snapshot.timestamp = new Date().toISOString();
+  stored.unshift(snapshot);
+  if (stored.length > 30) stored.length = 30; // keep more sessions; was 10 and felt like overwrite
+  cmpHistory = stored;
+  try {
+    localStorage.setItem('cmp_history', JSON.stringify(cmpHistory));
+  } catch (e) {
+    console.error('[cmpHistory] localStorage write failed (quota?):', e);
+    // Drop oldest until it fits
+    while (cmpHistory.length > 1) {
+      cmpHistory.pop();
+      try {
+        localStorage.setItem('cmp_history', JSON.stringify(cmpHistory));
+        break;
+      } catch (e2) { /* keep trimming */ }
+    }
+  }
   renderCmpHistory();
 }
 
@@ -3685,7 +3753,7 @@ function loadCmpHistory(idx) {
 
 function clearCmpHistory() {
   cmpHistory = [];
-  localStorage.removeItem('cmp_history');
+  try { localStorage.removeItem('cmp_history'); } catch (e) {}
   renderCmpHistory();
 }
 
@@ -3720,10 +3788,10 @@ function exportCmpCSV() {
     csv = lines.join('\n');
   } else {
     const results = (payload && payload.results) || cmpResults;
-    const lines = [['model', 'run', 'ok', 'intent', 'confidence', 'latency_ms', 'input_tokens', 'output_tokens', 'cost', 'duration_sec', 'deepgram_cost', 'correct', 'error'].join(',')];
+    const lines = [['model', 'run', 'ok', 'intent', 'confidence', 'latency_ms', 'input_tokens', 'output_tokens', 'cost', 'duration_sec', 'deepgram_cost', 'transcript', 'correct', 'error'].join(',')];
     Object.keys(results).forEach(model => {
       const r = results[model];
-      (r.runs || [{ run: 1, ok: r.ok, intent: r.intent, confidence: r.avg_confidence, latency: r.avg_latency, input_tokens: r.avg_input_tokens, output_tokens: r.avg_output_tokens, cost: r.est_cost, duration_sec: r.duration_sec, deepgram_cost: r.deepgram_cost, error: r.error }]).forEach(run => {
+      (r.runs || [{ run: 1, ok: r.ok, intent: r.intent, confidence: r.avg_confidence, latency: r.avg_latency, input_tokens: r.avg_input_tokens, output_tokens: r.avg_output_tokens, cost: r.est_cost, duration_sec: r.duration_sec, deepgram_cost: r.deepgram_cost, transcript: r.transcript, error: r.error }]).forEach(run => {
         const dur = run.duration_sec != null ? run.duration_sec
           : (r.duration_sec != null ? r.duration_sec
             : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.duration_sec));
@@ -3733,11 +3801,13 @@ function exportCmpCSV() {
         const llmOnly = run.llm_cost != null ? Number(run.llm_cost)
           : (dgCost != null ? Math.max(0, (Number(run.cost) || 0) - Number(dgCost)) : (Number(run.cost) || 0));
         const totalCost = dgCost != null ? llmOnly + Number(dgCost) : (Number(run.cost) || 0);
+        const tx = run.transcript || run.input_transcript || r.transcript || '';
         lines.push([
           model, run.run, run.ok ? 1 : 0, run.intent || '', run.confidence ?? '', run.latency || 0,
           run.input_tokens || 0, run.output_tokens || 0, totalCost,
           dur != null ? dur : '',
           dgCost != null ? dgCost : '',
+          JSON.stringify(tx),
           r.correct === true ? 1 : r.correct === false ? 0 : '',
           JSON.stringify(run.error || r.error || ''),
         ].join(','));
@@ -4528,7 +4598,7 @@ async function runComparisonSeries(seriesCount) {
   const entry = {
     mode: 'single',
     compareMode,
-    transcript,
+    transcript: firstTx,
     expected,
     models,
     runs: totalRunsShown,
