@@ -44,6 +44,10 @@ const { createSileroVad } = require("./sileroVad");
 const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
 const { off } = require('cluster');
 
+// TEMP: DeepFilter bypass — mic PCM goes straight to Deepgram.
+// Re-enable with DEEPFILTER_ENABLED=true in .env (or flip default below).
+const DEEPFILTER_ENABLED = process.env.DEEPFILTER_ENABLED === 'true';
+
 const CACHE_DIR = path.join(__dirname, 'audio_cache');
 function loadAudioCache() {
   const cache = {};
@@ -99,32 +103,8 @@ ambiguous: unclear, contradictory, or unrecognised
 
 Confidence: >0.90 clear | <0.60 hesitation/unclear.`;
 
-// Live compare: same system prompt + setup as server_gemini.js voice agent
-const COMPARE_LIVE_PROMPT = `CRITICAL LANGUAGE RULE: This call is in English only. The worker speaks English. Always transcribe and interpret audio as English, even if the audio quality is poor, words are unclear, or the accent is unfamiliar. Never output text in Korean, Japanese, Chinese, or any language other than English. If you cannot understand the worker's English, respond with the UNCLEAR script in English.
-
-SYSTEM: language=en-US. All input and output in English only.
-
-You are an automated safety monitoring system for Aware360...
-
-Your persona: "Aware360 Monitoring Center" — efficient, neutral, direct.
-
-When the worker speaks:
-1. Listen carefully to their response
-2. Classify their intent: safe confirmation, needs more time, wants human agent, or unclear
-3. Respond appropriately and concisely
-
-Rules:
-- SAFE: "Got it — I've reset your safety timer. Stay safe."
-- DELAYED: "Understood. I've extended your check-in timer. Please check in when ready."  
-- HUMAN AGENT: "Of course. I'm flagging this for a live agent — someone will call you back shortly."
-- UNCLEAR: Always respond with exactly this phrase, nothing else: "Sorry, I didn't catch that. Could you repeat?"
-
-CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or distress — even with positive statements — immediately escalate to human agent.
-
-Keep responses short (under 15 words). Be direct and professional.
-
-IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
-CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
+// Live compare: same intent-only prompt as Claude compare (no language/persona fluff)
+const COMPARE_LIVE_PROMPT = COMPARE_INTENT_PROMPT;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
@@ -768,8 +748,8 @@ browserWss.on('connection', function(ws) {
   let safetyConfirmPending = false;
   let clientE2eMs = null;
   let deepFilter = null;
-  let dfPreferred = true;  // Noise Cancel ON by default
-  let dfEnabled = true;
+  let dfPreferred = DEEPFILTER_ENABLED;  // TEMP: off unless DEEPFILTER_ENABLED=true
+  let dfEnabled = DEEPFILTER_ENABLED;
   const noise = createNoiseEstimator({ frameMs: 20 });
   const vad = createSileroVad({ sampleRate: 16000 });
   let audioClockMs = 0;
@@ -784,6 +764,11 @@ browserWss.on('connection', function(ws) {
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
 
   function ensureDeepFilter() {
+    if (!DEEPFILTER_ENABLED) {
+      deepFilter = null;
+      dfEnabled = false;
+      return false;
+    }
     if (!isDeepFilterReady()) {
       deepFilter = null;
       dfEnabled = false;
@@ -796,8 +781,10 @@ browserWss.on('connection', function(ws) {
     return dfEnabled;
   }
 
-  // Activate Noise Cancel immediately on connect (no toggle required)
-  if (ensureDeepFilter()) {
+  // Activate Noise Cancel immediately on connect (no toggle required) — skipped when DEEPFILTER_ENABLED=false
+  if (!DEEPFILTER_ENABLED) {
+    console.log('[DeepFilter] DISABLED (DEEPFILTER_ENABLED=false) — raw mic → Deepgram');
+  } else if (ensureDeepFilter()) {
     console.log('[DeepFilter] Session filter ready (active=true)');
   } else {
     console.warn('[DeepFilter] Model not ready — denoise inactive until model loads');
@@ -1040,11 +1027,18 @@ browserWss.on('connection', function(ws) {
         if (msg.type === 'set_model') { selectedModel = msg.model; console.log('[Model]', selectedModel); }
         if (msg.type === 'tts_mode') { ttsMode = msg.mode; }
         if (msg.type === 'toggle_denoise') {
-          dfPreferred = msg.enabled !== false; // default ON unless explicitly false
-          ensureDeepFilter();
-          if (!dfPreferred) dfEnabled = false;
-          console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
-          send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
+          if (!DEEPFILTER_ENABLED) {
+            dfPreferred = false;
+            dfEnabled = false;
+            console.log('[DeepFilter] toggle ignored — DEEPFILTER_ENABLED=false (forced bypass)');
+            send({ type: 'log', message: 'Noise cancellation disabled (server bypass for transcript test)' });
+          } else {
+            dfPreferred = msg.enabled !== false; // default ON unless explicitly false
+            ensureDeepFilter();
+            if (!dfPreferred) dfEnabled = false;
+            console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
+            send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
+          }
         }
         if (msg.type === 'client_metrics') {
           clientE2eMs = msg.total;
@@ -1347,13 +1341,36 @@ browserWss.on('connection', function(ws) {
               noise.pushFrame({ ...stats, speechProb: p}, t);
             }).catch(function(e) { console.error("[VAD] chain error:", e.message); });
           }
-          if (dfEnabled && deepFilter) {
-            deepFilter.processPcm16(raw).then(function(cleanBuf) {
-              sendAudioToDeepgram(cleanBuf);
-            }).catch(function(e) {
-              console.error('[DeepFilter] process error:', e.message);
-              sendAudioToDeepgram(raw);
-            });
+          if (DEEPFILTER_ENABLED && dfEnabled && deepFilter) {
+            console.log('[DeepFilter] raw size:', raw.length);
+            const DF_CHUNK = 640; // 320 samples @ 16 kHz PCM16 ≈ 20 ms
+            if (raw.length <= DF_CHUNK) {
+              deepFilter.processPcm16(raw).then(function(cleanBuf) {
+                console.log('[DeepFilter] processPcm16 resolved | in:', raw.length, '| out:', cleanBuf ? cleanBuf.length : 0);
+                sendAudioToDeepgram(cleanBuf);
+              }).catch(function(e) {
+                console.error('[DeepFilter] process error:', e.message);
+                sendAudioToDeepgram(raw);
+              });
+            } else {
+              // Large WS frames → feed DeepFilter in 640-byte slices (same as VAD framing)
+              const nChunks = Math.ceil(raw.length / DF_CHUNK);
+              console.log('[DeepFilter] splitting into', nChunks, 'x', DF_CHUNK, 'byte chunks');
+              let chain = Promise.resolve();
+              for (let off = 0; off < raw.length; off += DF_CHUNK) {
+                const chunk = Buffer.from(raw.subarray(off, Math.min(off + DF_CHUNK, raw.length)));
+                if (chunk.length < 2) break;
+                chain = chain.then(function() {
+                  return deepFilter.processPcm16(chunk).then(function(cleanBuf) {
+                    console.log('[DeepFilter] processPcm16 resolved | chunk in:', chunk.length, '| out:', cleanBuf ? cleanBuf.length : 0);
+                    if (cleanBuf && cleanBuf.length) sendAudioToDeepgram(cleanBuf);
+                  });
+                }).catch(function(e) {
+                  console.error('[DeepFilter] process error (chunk):', e.message);
+                  sendAudioToDeepgram(chunk);
+                });
+              }
+            }
           } else {
             sendAudioToDeepgram(raw);
           }
@@ -1418,22 +1435,42 @@ function calcTokenCost(model, inputTokens, outputTokens) {
   return (inputTokens / 1e6) * rates.input + (outputTokens / 1e6) * rates.output;
 }
 
-/** Normalize Gemini usageMetadata — do not subtract modality details (e.g. audio). */
+/** Sum tokenCount for a single modality in Gemini *TokensDetails arrays. */
+function sumGeminiModalityTokens(details, modality) {
+  if (!Array.isArray(details) || !details.length) return null;
+  const want = String(modality || '').toUpperCase();
+  let sum = 0;
+  for (let i = 0; i < details.length; i++) {
+    const d = details[i];
+    if (!d) continue;
+    const m = String(d.modality || d.Modality || '').toUpperCase();
+    if (m !== want) continue;
+    sum += Number(d.tokenCount != null ? d.tokenCount : d.token_count) || 0;
+  }
+  return sum;
+}
+
+/**
+ * Normalize Gemini usageMetadata for billing/compare.
+ * input_tokens: TEXT modality only from promptTokensDetails (AUDIO excluded).
+ * output_tokens: raw responseTokenCount (unchanged; do not filter by modality).
+ */
 function parseGeminiUsageMetadata(usageMetadata) {
   const u = usageMetadata || {};
-  const input = Number(u.promptTokenCount) || 0;
-  const output = Number(u.candidatesTokenCount) || 0;
-  const total = (typeof u.totalTokenCount === 'number' && Number.isFinite(u.totalTokenCount))
-    ? u.totalTokenCount
-    : (input + output);
-  // Log details for debugging but never subtract them from the totals we report
+  let input = Number(u.promptTokenCount) || 0;
+  // Prefer responseTokenCount for Live; fall back to candidatesTokenCount for REST
+  const output = Number(u.responseTokenCount) || Number(u.candidatesTokenCount) || 0;
+
   if (Array.isArray(u.promptTokensDetails) && u.promptTokensDetails.length) {
     console.log('[Compare] Gemini promptTokensDetails:', JSON.stringify(u.promptTokensDetails));
+    // TEXT only for input — do not include AUDIO in cost
+    input = sumGeminiModalityTokens(u.promptTokensDetails, 'TEXT') || 0;
   }
+
   return {
     input_tokens: input,
     output_tokens: output,
-    total_tokens: total,
+    total_tokens: input + output,
   };
 }
 
@@ -2109,10 +2146,13 @@ async function classifyWithGeminiLive(transcript, model, opts) {
         }
 
         if (msg.usageMetadata) {
-          promptTokens = msg.usageMetadata.promptTokenCount || promptTokens;
-          responseTokens = msg.usageMetadata.responseTokenCount
-            || msg.usageMetadata.candidatesTokenCount
-            || responseTokens;
+          const usage = parseGeminiUsageMetadata(msg.usageMetadata);
+          promptTokens = usage.input_tokens;
+          responseTokens = usage.output_tokens;
+          console.log('[Gemini Live Compare] usage in(TEXT)/out(responseTokenCount):',
+            promptTokens + '/' + responseTokens,
+            '| raw promptTokenCount:', msg.usageMetadata.promptTokenCount,
+            '| raw responseTokenCount:', msg.usageMetadata.responseTokenCount);
         }
 
         if (serverContent && (serverContent.turnComplete || serverContent.turn_complete)) {
@@ -2502,12 +2542,19 @@ app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), asy
       return res.status(400).json({ error: 'audio body required' });
     }
     const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
-    const durationHeader = req.headers['x-audio-duration'];
-    const duration = durationHeader != null && Number.isFinite(parseFloat(durationHeader))
-      ? parseFloat(durationHeader)
-      : null;
+
+    // Prefer ffmpeg duration; fall back to client X-Audio-Duration header
+    let durationSec = await getAudioDurationSec(buf);
+    if (durationSec == null) {
+      const durationHeader = req.headers['x-audio-duration'];
+      if (durationHeader != null && Number.isFinite(parseFloat(durationHeader))) {
+        durationSec = parseFloat(durationHeader);
+      }
+    }
+    const deepgramCost = durationSec != null ? (durationSec / 60) * 0.0043 : null;
+
     console.log('[Compare Gemini STT] Converting to PCM16k...', buf.length, 'bytes | model:', model,
-      duration != null ? ('| duration: ' + duration + 's') : '');
+      '| duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
     const pcm = await audioToPcm16kMono(buf);
     if (!pcm || !pcm.length) {
       return res.status(400).json({ error: 'Audio conversion produced empty PCM' });
@@ -2520,7 +2567,9 @@ app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), asy
       sttMs: r.stt_ms != null ? r.stt_ms : null,
       confidence: null,
       engine: 'gemini',
-      duration: duration,
+      duration_sec: durationSec,
+      deepgram_cost: deepgramCost,
+      duration: durationSec,
     });
   } catch (e) {
     console.error('[Compare Gemini STT] Error:', e.message);
@@ -2697,6 +2746,8 @@ app.post('/compare-intent', async function(req, res) {
   );
   const compareOpts = realSttMs != null ? { realSttMs: realSttMs, geminiMode: 'live' } : { geminiMode: 'live' };
   let deepgramFromAudio = false;
+  let durationSec = null;
+  let deepgramCost = null;
 
   // Optional audio: Deepgram Nova-3 STT → transcript text → Gemini Live (no audio buffer to Live)
   const audioB64 = req.body && (req.body.audio_base64 || req.body.audioBuffer);
@@ -2705,6 +2756,10 @@ app.post('/compare-intent', async function(req, res) {
     try {
       const rawAudio = Buffer.from(audioB64, 'base64');
       console.log('[Compare Intent] Audio received — Deepgram STT first...', rawAudio.length, 'bytes');
+      durationSec = await getAudioDurationSec(rawAudio);
+      deepgramCost = durationSec != null ? (durationSec / 60) * 0.0043 : null;
+      console.log('[Compare Intent] duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
+
       const stt = await transcribeCompareAudioDeepgram(rawAudio, req.body.audio_mime || 'audio/wav');
       if ((stt.transcript || '').trim()) {
         transcript = stt.transcript.trim();
@@ -2787,6 +2842,21 @@ app.post('/compare-intent', async function(req, res) {
   const results = {};
   for (const row of settled) results[row.model] = row;
 
+  // Attach duration/cost onto each model result when audio was transcribed here
+  if (durationSec != null || deepgramCost != null) {
+    Object.keys(results).forEach(function(model) {
+      const row = results[model];
+      if (!row) return;
+      if (durationSec != null) row.duration_sec = durationSec;
+      if (deepgramCost != null) row.deepgram_cost = deepgramCost;
+      (row.runs || []).forEach(function(run) {
+        if (!run || !run.ok) return;
+        if (durationSec != null) run.duration_sec = durationSec;
+        if (deepgramCost != null) run.deepgram_cost = deepgramCost;
+      });
+    });
+  }
+
   res.json({
     transcript: transcript,
     expected: expected,
@@ -2796,6 +2866,8 @@ app.post('/compare-intent', async function(req, res) {
     stt_source: realSttMs != null ? (deepgramFromAudio ? 'deepgram' : 'real') : 'estimated',
     stt_engine: deepgramFromAudio ? 'deepgram' : undefined,
     audio_used: deepgramFromAudio,
+    duration_sec: durationSec,
+    deepgram_cost: deepgramCost,
     results: results,
   });
 });
@@ -3065,17 +3137,23 @@ function startServer() {
     console.log('\n🎙️  Voice AI Demo: http://localhost:' + PORT);
     console.log('📞  Twilio webhook: ' + PUBLIC_URL + '/incoming-call');
     console.log('🔌  Twilio WS path: ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio');
+    console.log('[DeepFilter] ' + (DEEPFILTER_ENABLED ? 'ENABLED' : 'DISABLED (raw mic → Deepgram)'));
     console.log('Cascaded Pipeline: Deepgram nova-2 -> Claude -> ElevenLabs\n');
   });
 }
-Promise.all([
+const bootTasks = [
   loadMulawCache().catch(function(e) {
     console.error('[Mulaw Cache] Init error:', e.message);
   }),
-  preloadDeepFilter().catch(function(e) {
+];
+if (DEEPFILTER_ENABLED) {
+  bootTasks.push(preloadDeepFilter().catch(function(e) {
     console.error('[DeepFilter] Model load failed:', e.message);
     console.error('[DeepFilter] Denoise will be disabled until model is available');
-  }),
-]).then(function() {
+  }));
+} else {
+  console.log('[DeepFilter] Preload skipped — DEEPFILTER_ENABLED=false');
+}
+Promise.all(bootTasks).then(function() {
   startServer();
 });
