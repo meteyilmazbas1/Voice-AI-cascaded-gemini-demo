@@ -158,7 +158,7 @@
   .cmp-field label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
   .cmp-field textarea { width: 420px; min-height: 64px; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical; }
   .cmp-field textarea:focus, .cmp-field select:focus, .cmp-field input:focus { outline: none; border-color: var(--accent); }
-  .cmp-field select, .cmp-field input[type=number] { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 10px; font-size: 12px; }
+  .cmp-field select, .cmp-field input[type=number], .cmp-field input[type=text] { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 10px; font-size: 12px; }
   .cmp-field input[type=number] { width: 70px; }
   .cmp-panels {
     display: flex;
@@ -854,6 +854,24 @@
           <button type="button" class="cmp-preset" onclick="setCmpRuns(20)">Uzun (20)</button>
         </div>
       </div>
+      <div class="cmp-field">
+        <label>Accuracy — WER referansı + expected intent</label>
+        <input type="text" id="cmpRefText" placeholder="Ground truth cümle (temiz sesten veya elle)" style="min-width:280px" oninput="refreshAllPanelRuns()">
+        <div class="cmp-presets" style="margin-top:6px;align-items:center;flex-wrap:wrap">
+          <label class="cmp-preset" style="cursor:pointer;margin:0">
+            📁 Temiz sesten doldur
+            <input type="file" accept=".wav,.mp3,.webm,audio/*" style="display:none" onchange="fillRefFromCleanAudio(this)">
+          </label>
+          <select id="cmpExpectedSel" onchange="onExpectedIntentSelect()" title="Expected intent (intent accuracy için)">
+            <option value="">Expected intent —</option>
+            <option value="SAFE_CONFIRMATION">SAFE_CONFIRMATION</option>
+            <option value="DELAYED_CHECKIN">DELAYED_CHECKIN</option>
+            <option value="REQUEST_HUMAN">REQUEST_HUMAN</option>
+            <option value="UNRECOGNISED">UNRECOGNISED</option>
+          </select>
+          <span id="cmpRefStatus" style="font-size:11px;color:var(--muted)"></span>
+        </div>
+      </div>
       <div class="cmp-actions" style="align-self:flex-end">
         <button class="btn primary" id="cmpRunBtn" onclick="runComparison()">▶ Run</button>
         <button class="btn" id="cmpBatchBtn" onclick="runBatchScenarios()" title="Tüm hazır senaryoları çalıştır">📋 Batch All</button>
@@ -970,6 +988,14 @@
     <div class="cmp-chart-card">
       <div class="cmp-chart-title">Estimated cost ($ / run)</div>
       <canvas id="chartCost"></canvas>
+    </div>
+    <div class="cmp-chart-card" id="cardAccuracy">
+      <div class="cmp-chart-title">Gürültü dayanıklılığı - Intent accuracy & Transcript accuracy (1-WER)</div>
+      <canvas id="chartAccuracy"></canvas>
+    </div>
+    <div class="cmp-chart-card" id="cardAccuracyTrend" style="grid-column:1 / -1">
+      <div class="cmp-chart-title">Run bazında doğruluk (gürültüde kararlılık)</div>
+      <canvas id="chartAccuracyTrend"></canvas>
     </div>
   </div>
 
@@ -2518,6 +2544,8 @@ function renderPanelRuns(modelId, data) {
     return;
   }
   const isGemini = String(modelId).startsWith('gemini');
+  const refTxt = ((document.getElementById("cmpRefText") || {}).value || "").trim();
+  const expected = cmpExpected || null;
   const rowsHtml = runs.map((r, idx) => {
     if (!r.ok) {
       return `<div class="cmp-panel-run"><div class="cmp-panel-run-main"><span>#${r.run || idx + 1}</span><span style="color:var(--danger)">ERROR</span><span></span><span></span></div>
@@ -2532,15 +2560,20 @@ function renderPanelRuns(modelId, data) {
       : (ensurePanelState(modelId).deepgramCost != null ? ensurePanelState(modelId).deepgramCost
         : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
     const costHtml = formatCostBreakdownHtml(resolveLlmCost(r), dgCost);
+    const wer = (refTxt && r.transcript) ? wordErrorRate(refTxt, r.transcript) : null;
+    const werPart = wer != null ? ` | WER: %${Math.round(wer * 100)}` : '';
+    const txPart = r.transcript ? `<br>Transcript: "${escapeHtml(r.transcript)}"` : '';
     const bd = isGemini
-      ? `STT: ${stt} | TTFA: ${llm} | Cost: ${costHtml}<br>Response: "${escapeHtml(r.response || '')}"`
-      : `STT: ${stt} | LLM: ${llm} | TTS: ${tts} | Cost: ${costHtml}<br>Response: "${escapeHtml(r.response || '')}"`;
+      ? `STT: ${stt} | TTFA: ${llm} | Cost: ${costHtml}${werPart}${txPart}<br>Response: "${escapeHtml(r.response || '')}"`
+      : `STT: ${stt} | LLM: ${llm} | TTS: ${tts} | Cost: ${costHtml}${werPart}${txPart}<br>Response: "${escapeHtml(r.response || '')}"`;
 
     return `<div class="cmp-panel-run" id="panel-run-${modelDomId(modelId)}-${r.run}">
       <div class="cmp-panel-run-main" onclick="this.parentElement.classList.toggle('open')">
         <span>#${r.run}</span>
         <span>Total: ${total}ms</span>
-        <span class="intent cmp-intent ${r.intent}">${r.intent || '—'}</span>
+        <span class="intent cmp-intent ${r.intent}">${r.intent || '—'}
+          ${expected && r.intent ? (r.intent === expected ? ' <span style="color:#3fb950">✓</span>' : ' <span style="color:var(--danger,#f85149)">✗</span>') : ''
+          }</span>
         <span>${fmtPct(r.confidence)}</span>
       </div>
       <div class="cmp-panel-run-bd">${bd}</div>
@@ -2561,9 +2594,20 @@ function renderPanelRuns(modelId, data) {
       ?? (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost);
     const llmCost = okRuns.reduce((s, r) => s + resolveLlmCost(r), 0) / n;
     const costHtml = formatCostBreakdownHtml(llmCost, dgCost);
+    const werVals = okRuns
+      .map(r => (refTxt && r.transcript) ? wordErrorRate(refTxt, r.transcript) : null)
+      .filter(v => v != null);
+    const avgWerPart = werVals.length
+      ? ` | Ort. WER: %${Math.round(werVals.reduce((s, v) => s + v, 0) / werVals.length * 100)}`
+      : '';
+    let accPart = '';
+    if (expected) {
+      const correct = okRuns.filter(r => r.intent === expected).length;
+      accPart = ` | Intent acc: ${correct}/${n} (%${Math.round((correct / n) * 100)})`;
+    }
     avgHtml = isGemini
-      ? `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | TTFA: ${avgLlm}ms | Cost: ${costHtml}</div>`
-      : `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | LLM: ${avgLlm}ms | TTS: ${avgTts}ms | Cost: ${costHtml}</div>`;
+      ? `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | TTFA: ${avgLlm}ms | Cost: ${costHtml}${accPart}${avgWerPart}</div>`
+      : `<div class="cmp-panel-run-avg">Ortalama — Total: ${avgTotal}ms | STT: ${avgStt}ms | LLM: ${avgLlm}ms | TTS: ${avgTts}ms | Cost: ${costHtml}${accPart}${avgWerPart}</div>`;
   }
 
   el.innerHTML = rowsHtml + avgHtml;
@@ -2574,6 +2618,13 @@ function refreshAllPanelRuns() {
     renderPanelRuns(m, cmpResults[m]);
   });
   updateTranscriptDiffWarningFromPanels();
+  const chartsEl = document.getElementById('cmpCharts');
+  if (chartsEl && chartsEl.classList.contains('show')) {
+    renderCmpCharts(
+      compareMode === 'freeform' ? cmpFreeformResults : cmpResults,
+      { showConfidence: compareMode !== 'freeform' }
+    );
+  }
 }
 
 function initModelAudioUploads() {
@@ -2645,11 +2696,21 @@ function onCmpTranscriptInput() {
 
 function onScenarioSelect() {
   const idx = document.getElementById('cmpScenario').value;
-  if (idx === '') { cmpExpected = null; return; }
+  if (idx === '') {
+    cmpExpected = null;
+    const expSel = document.getElementById('cmpExpectedSel');
+    if (expSel) expSel.value = '';
+    return;
+  }
   const s = cmpScenarios[parseInt(idx, 10)];
   if (!s) return;
   document.getElementById('cmpTranscript').value = s.text;
   cmpExpected = s.expected || null;
+  // Senaryo metni ground truth'tur: WER referansı + expected intent otomatik dolsun
+  const refEl = document.getElementById('cmpRefText');
+  if (refEl) refEl.value = s.text;
+  const expSel = document.getElementById('cmpExpectedSel');
+  if (expSel) expSel.value = s.expected || '';
   cmpLastSttMs = null;
   cmpAccumTranscript = null;
   cmpResults = {};
@@ -3131,6 +3192,80 @@ function transcriptWordDiffRatio(a, b) {
     }
   }
   return 1 - (matches / longer);
+}
+function wordErrorRate(ref, hyp) {
+  const r = tokenizeTranscript(ref);
+  const h = tokenizeTranscript(hyp);
+  if (!r.length) return h.length ? 1 : 0;
+  const d = Array.from({ length: r.length + 1 }, (_, i) => {
+    const row = new Array(h.length + 1).fill(0);
+    row[0] = i;
+    return row;
+  });
+  for (let j = 0; j <= h.length; j++) d[0][j] = j;
+  for (let i = 1; i <= r.length; i++) {
+    for (let j = 1; j <= h.length; j++) {
+      d[i][j] = Math.min(
+        d[i - 1][j - 1] + (r[i - 1] === h[j - 1] ? 0 : 1),
+        d[i - 1][j] + 1,
+        d[i][j - 1] + 1
+      );
+    }
+  }
+  return d[r.length][h.length] / r.length;
+}
+
+function computeAccuracyStats(results) {
+  const refTxt = ((document.getElementById("cmpRefText") || {}).value || "").trim();
+  const expected = cmpExpected || null;
+  const models = [];
+  orderedCmpResults(results).filter(r => r && r.ok).forEach(r => {
+    const runs = (r.runs || []).filter(x => x.ok);
+    const wers = refTxt
+    ? runs.map(x => x.transcript ? wordErrorRate(refTxt, x.transcript) : null).filter(v => v != null) : [];
+  const intentRuns = expected ? runs.filter(x => x.intent) : [];
+  const correct = intentRuns.filter(x => x.intent === expected).length;
+  const avgWer = wers.length ? wers.reduce((s, v) => s + v, 0) / wers.length : null;
+  models.push({
+    model: r.model,
+    label: r.label,
+    color: (CMP_MODEL_META[r.model] || {}).color || '#58a6ff',
+    intentAcc: intentRuns.length ? (correct / intentRuns.length) * 100 : null,
+    intentCorrect: correct,
+    intentTotal: intentRuns.length,
+    avgWer: avgWer != null ? avgWer * 100 : null,
+    transcriptAcc: avgWer != null ? Math.max(0, (1 - avgWer) * 100) : null,
+    perRunWer: refTxt
+    ? runs.map(x => x.transcript ? Math.round(wordErrorRate(refTxt, x.transcript) * 100) : null)
+    : [],
+    perRunIntentOk: expected
+    ? runs.map(x => x.intent ? (x.intent === expected ? 1 : 0) : null)
+    : [],
+  });
+  });
+  return { hasRef: !!refTxt, hasExpected: !!expected, models };
+}
+
+function onExpectedIntentSelect() {
+  const sel = document.getElementById("cmpExpectedSel");
+  cmpExpected = (sel && sel.value) || null;
+  refreshAllPanelRuns();
+}
+
+async function fillRefFromCleanAudio(input) {
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!file) return;
+  const statusEl = document.getElementById("cmpRefStatus");
+  if (statusEl) statusEl.textContent = "Referans STT: " + file.name + "...";
+  try {
+    const stt = await compareAudioStt(file);
+    document.getElementById("cmpRefText").value = stt.transcript;
+    if (statusEl) statusEl.textContent = '✓ Referans hazır: ' + file.name;
+    refreshAllPanelRuns();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "Referans STT hatası: " + e.message;
+  }
 }
 
 function updateTranscriptDiffWarning(results) {
@@ -3767,27 +3902,45 @@ function getModelAudioFile(modelId) {
 
 async function runSingleModelCompare(modelId, transcript, expected) {
   const st = ensurePanelState(modelId);
-  const tx = (st.transcript || transcript || '').trim();
-  const hasAudio = !!(st.audioFile && String(modelId).startsWith('gemini'));
+  let tx = (st.transcript || transcript || '').trim();
+  const hasAudio = !!st.audioFile;
   if (!tx && !hasAudio) throw new Error('Panel transcript boş');
   const opts = {};
   if (st.audioFileName) opts.audioFileName = st.audioFileName;
-  if (typeof st.sttConfidence === 'number') opts.sttConfidence = st.sttConfidence;
 
-  // Gemini: panel STT already filled transcript (Gemini Live) — use text + that STT timing.
-  // Only re-send audio when transcript is missing (Deepgram fallback on server).
-  if (hasAudio && !tx) {
-    setPanelStatus(modelId, 'Audio → Deepgram STT → Gemini...');
-    const buf = await st.audioFile.arrayBuffer();
-    opts.audioBase64 = await arrayBufferToBase64(buf);
-    opts.audioMime = st.audioFile.type || 'audio/webm';
-    opts.sttEngine = 'deepgram';
-  } else {
-    if (st.sttMs != null) {
-      opts.realSttMs = st.sttMs;
-      opts.sttEngine = st.sttEngine || panelSttEngine(modelId);
+  if (hasAudio) {
+    // Ses dosyası varsa her run kendi STT'sini yapar (gürültüde run başına farklı transkript)
+    if (panelSttEngine(modelId) === 'gemini') {
+      setPanelStatus(modelId, 'Run STT (Gemini Live)...');
+      const buf = await st.audioFile.arrayBuffer();
+      const res = await fetch('/compare-gemini-stt?model=' + encodeURIComponent(modelId), {
+        method: 'POST',
+        headers: { 'Content-Type': st.audioFile.type || 'audio/wav', 'X-Compare-Model': modelId },
+        body: buf,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.transcript) throw new Error(data.error || 'Gemini STT boş');
+      tx = data.transcript.trim();
+      opts.realSttMs = data.sttMs;
+      opts.sttEngine = 'gemini';
+    } else {
+      setPanelStatus(modelId, 'Run STT (Deepgram)...');
+      const sttRes = await compareAudioStt(st.audioFile, st.durationSec);
+      tx = (sttRes.transcript || '').trim();
+      opts.realSttMs = sttRes.sttMs;
+      if (typeof sttRes.confidence === 'number') opts.sttConfidence = sttRes.confidence;
+      opts.sttEngine = 'deepgram';
     }
+    // Panelde son run'ın transkripti görünsün
+    st.transcript = tx;
+    st.sttMs = opts.realSttMs;
+    updatePanelSttUI(modelId);
+  } else if (st.sttMs != null) {
+    opts.realSttMs = st.sttMs;
+    opts.sttEngine = st.sttEngine || panelSttEngine(modelId);
+    if (typeof st.sttConfidence === 'number') opts.sttConfidence = st.sttConfidence;
   }
+
   if (st.durationSec != null) opts.durationSec = st.durationSec;
   else if (cmpSharedDeepgramMeta) opts.durationSec = cmpSharedDeepgramMeta.duration_sec;
   if (st.deepgramCost != null) opts.deepgramCost = st.deepgramCost;
@@ -3974,6 +4127,89 @@ function renderCmpCharts(results, opts) {
       }
     }
   });
+
+  const acc = computeAccuracyStats(results);
+  const accCard = document.getElementById("cardAccuracy");
+  const trendCard = document.getElementById("cardAccuracyTrend");
+  const showAcc = acc.models.some(m => m.intentAcc != null || m.transcriptAcc != null);
+  if (accCard) accCard.style.display = showAcc ? "" : "none";
+  if (trendCard) trendCard.style.display = showAcc ? "" : "none";
+  if (!showAcc) return;
+
+  cmpCharts.accuracy = new Chart(document.getElementById("chartAccuracy"), {
+    type: "bar",
+    data: {
+      labels: acc.models.map(m => m.label),
+      datasets: [
+        { label: "Intent accuracy %", data: acc.models.map(m => m.intentAcc),
+          backgroundColor: '#3fb95099', borderColor: '#3fb950', borderWidth: 1 },
+          { label: "Transcript accuracy % (1-WER)", data: acc.models.map(m => m.transcriptAcc),
+            backgroundColor: '#58a6ff99', borderColor: '#58a6ff', borderWidth: 1 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#7d8590' } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const m = acc.models[ctx.dataIndex];
+              return ctx.datasetIndex === 0 ? `Intent: ${m.intentCorrect}/${m.intentTotal} (%${Math.round(m.intentAcc ?? 0)})`
+              : `Ort. WER %${Math.round(m.avgWer ?? 0)} → doğruluk %${Math.round(m.transcriptAcc ?? 0)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero:true, max: 100, ticks: { color: '#7d8590', callback: v => v + "%" }, grid: { color: '#30363d' } },
+        x: { ticks: { color: '#7d8590' }, grid: { display: false} }
+      }
+    }
+  });
+
+  const maxRuns = Math.max(0, ...acc.models.map(m => Math.max(m.perRunWer.length, m.perRunIntentOk.length)));
+  if (maxRuns < 2) { if (trendCard) trendCard.style.display = "none"; return; }
+
+  cmpCharts.accuracyTrend = new Chart(document.getElementById("chartAccuracyTrend"), {
+    type: "line",
+    data: {
+      labels: Array.from({ length: maxRuns }, (_, i) => "#" + (i + 1)),
+      datasets: acc.models.map(m => ({
+        label: m.label,
+        data: Array.from({ length: maxRuns }, (_, i) => {
+          if ( acc.hasRef && m.perRunWer[i] != null) return Math.max(0, 100 - m.perRunWer[i]);
+          if (acc.hasExpected && m.perRunIntentOk[i] != null) return m.perRunIntentOk[i] * 100;
+          return null;
+        }),
+        borderColor: m.color,
+        backgroundColor: m.color + '33',
+        pointBackgroundColor: Array.from({ length: maxRuns }, (_, i) =>
+          m.perRunIntentOk[i] == null ? m.color : (m.perRunIntentOk[i] ? '#3fb950' : '#f85149')),
+        pointRadius: 4,
+        tension: 0.25,
+        spanGaps: true,
+      }))
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#7d8590' } },
+        tooltip: {
+          callbacks: {
+            afterLabel: (ctx) => {
+              const ok = acc.models[ctx.datasetIndex].perRunIntentOk[ctx.dataIndex];
+              return ok == null ? '' : (ok ? 'Intent ✓' : 'Intent ✗');
+            }
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true, max: 100, ticks: { color: '#7d8590', callback: v => v + '%' }, grid: { color: '#30363d' } },
+        x: { ticks: { color: '#7d8590' }, grid: { display: false } }
+      }
+    }
+  });
 }
 
 async function runComparison() {
@@ -3994,9 +4230,7 @@ async function runComparisonSeries(seriesCount) {
   });
   const missing = models.filter(m => {
     const st = ensurePanelState(m);
-    const hasTx = !!(st.transcript || '').trim();
-    const hasAudio = !!(st.audioFile && String(m).startsWith('gemini'));
-    return !hasTx && !hasAudio;
+    return !(st.transcript || '').trim() && !st.audioFile;
   });
   if (missing.length) {
     alert('Transcript gerekli: ' + missing.map(m => (CMP_MODEL_META[m] || {}).label || m).join(', '));
@@ -4012,7 +4246,10 @@ async function runComparisonSeries(seriesCount) {
   cmpStopFlag = false;
   cmpBatchData = null;
 
-  const accumKey = models.map(m => m + ':' + (ensurePanelState(m).transcript || '').trim()).join('||');
+  const accumKey = models.map(m => {
+    const st = ensurePanelState(m);
+    return m + ":" + (st.audioFileName || (st.transcript || "").trim());
+  }).join("||");
   if (cmpAccumTranscript !== accumKey) {
     cmpResults = {};
     cmpFreeformResults = {};
