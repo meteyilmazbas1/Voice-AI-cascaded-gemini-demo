@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
       "port": 3000
+    },
+    {
+      "name": "gemini-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server_gemini.js"],
+      "port": 3001
     }
   ]
 }

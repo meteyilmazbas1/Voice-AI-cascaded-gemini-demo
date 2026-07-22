@@ -814,8 +814,8 @@
         </div>
         <div class="latency-row">
           <div>
-            <div class="latency-label">Client E2E <span class="breakdown-tip" data-tip="Worker konuşmayı bitirdiği andan AI sesinin gerçekten duyulmaya başladığı ana kadar — network gecikmesi dahil gerçek kullanıcı deneyimi.">ⓘ</span></div>
-            <div class="target-note">Speech end → first audio heard</div>
+            <div class="latency-label">Client E2E <span class="breakdown-tip" data-tip="Ses dosyasının tamamı gönderildiği andan AI sesinin ilk duyulduğu ana kadar. DeepFilter + Gemini + network + decode dahil.">ⓘ</span></div>
+            <div class="target-note">Audio sent → first audio heard</div>
           </div>
           <span class="latency-val" id="lat-client-e2e">—</span>
         </div>
@@ -1210,6 +1210,21 @@ let audioChunks = [];
 let audioChunkMimeType = null;
 let isStreaming = false;
 
+// Streaming PCM player state (Gemini)
+let pcmNextTime = 0;          // AudioContext saatinde bir sonraki chunk'in baslama ani
+let pcmLeftoverByte = null;   // 16-bit sample ortasindan bolunen tek byte
+let pcmScheduledCount = 0;    // planlanmis ama henuz bitmemis chunk sayisi
+let pcmStreamEnded = false;   // audio_stream_end geldi mi
+let pcmFirstScheduled = false;// ilk chunk planlandi mi (Client E2E tetigi)
+
+function resetPcmStream() {
+  pcmNextTime = 0;
+  pcmLeftoverByte = null;
+  pcmScheduledCount = 0;
+  pcmStreamEnded = false;
+  pcmFirstScheduled = false;
+}
+
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
@@ -1219,6 +1234,7 @@ function resetStreamPlayer() {
   audioChunks = [];
   audioChunkMimeType = null;
   isStreaming = false;
+  resetPcmStream();
 }
 
 // Play raw PCM audio (from Gemini — audio/pcm;rate=24000)
@@ -1250,6 +1266,73 @@ async function playPCMChunks(chunks) {
     src.start();
     onFirstAudioPlayback();
   } catch(e) { console.warn('[PCM] Decode error:', e.message); }
+}
+
+// Chunk gelir gelmez cal — kuyruga ekleyerek kesintisiz zincir kurar.
+// Client E2E'nin bitis noktasi burasi: ilk chunk gercekten duyulmaya basladigi an.
+function playPCMChunkStreaming(b64) {
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const sampleRate = 24000;
+
+    const bin = atob(b64);
+    let bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+    // onceki chunk'tan artan tek byte varsa basa ekle
+    if (pcmLeftoverByte !== null) {
+      const merged = new Uint8Array(bytes.length + 1);
+      merged[0] = pcmLeftoverByte;
+      merged.set(bytes, 1);
+      bytes = merged;
+      pcmLeftoverByte = null;
+    }
+    // tek sayida byte kaldiysa sonuncuyu bir sonraki chunk'a devret
+    if (bytes.length % 2 === 1) {
+      pcmLeftoverByte = bytes[bytes.length - 1];
+      bytes = bytes.subarray(0, bytes.length - 1);
+    }
+    if (bytes.length === 0) return;
+
+    // PCM16 LE -> float32 (byte hizalamasi icin DataView)
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const n = bytes.byteLength >> 1;
+    const float32 = new Float32Array(n);
+    for (let i = 0; i < n; i++) float32[i] = view.getInt16(i * 2, true) / 32768;
+
+    const audioBuffer = ctx.createBuffer(1, n, sampleRate);
+    audioBuffer.getChannelData(0).set(float32);
+    const src = ctx.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(ctx.destination);
+
+    // kuyruk: ilk chunk hemen, sonrakiler bir oncekinin arkasina
+    const now = ctx.currentTime;
+    const startAt = pcmNextTime > now ? pcmNextTime : now;
+    src.start(startAt);
+    pcmNextTime = startAt + audioBuffer.duration;
+
+    pcmScheduledCount++;
+    src.onended = function () {
+      pcmScheduledCount--;
+      if (pcmStreamEnded && pcmScheduledCount <= 0) {
+        aiSpeaking = false;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'playback_done' }));
+        }
+      }
+    };
+
+    // ILK ses gercekten duyulmaya basladigi an -> Client E2E saati durur
+    if (!pcmFirstScheduled) {
+      pcmFirstScheduled = true;
+      const delayMs = Math.max(0, (startAt - now) * 1000);
+      setTimeout(onFirstAudioPlayback, delayMs);
+    }
+  } catch (e) {
+    console.warn('[PCM stream] Decode error:', e.message);
+  }
 }
 
 // Merge all base64 chunks into one and play (MP3/ElevenLabs)
@@ -1358,8 +1441,8 @@ function connectWS() {
   ws.onopen = () => {
     if (pipelineMode !== 'gemini') {
       ws.send(JSON.stringify({ type: 'mime_type', mimeType: 'audio/pcm;rate=16000' }));
-      ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
     }
+    ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
     ws.send(JSON.stringify({ type: 'set_model', model: currentModel }));
     ws.send(JSON.stringify({ type: 'start' }));
   };
@@ -1486,16 +1569,32 @@ function connectWS() {
       if (msg.resolved) { document.getElementById('workerStatus').textContent = '✓ Resolved'; document.getElementById('workerStatus').style.color = 'var(--pipeline-tts)'; }
       if (msg.escalate) { document.getElementById('workerStatus').textContent = '⬆ Escalated'; document.getElementById('workerStatus').style.color = 'var(--danger)'; }
     }
-    if (msg.type === 'audio_chunk') {
+        if (msg.type === 'audio_chunk') {
   if (!aiSpeaking) {
     audioChunks = [];
+    resetPcmStream();
   }
   aiSpeaking = true;
-  audioChunks.push(msg.chunk);
   if (msg.mimeType) audioChunkMimeType = msg.mimeType;
+  if (audioChunkMimeType && audioChunkMimeType.startsWith('audio/pcm')) {
+    // Gemini PCM: bekleme yok, chunk gelir gelmez kuyruga at
+    playPCMChunkStreaming(msg.chunk);
+  } else {
+    // MP3/ElevenLabs: eski batch yolu (decodeAudioData tam dosya ister)
+    audioChunks.push(msg.chunk);
+  }
 }
 if (msg.type === 'audio_stream_end') {
-  if (audioChunks.length > 0) {
+  if (audioChunkMimeType && audioChunkMimeType.startsWith('audio/pcm')) {
+    pcmStreamEnded = true;
+    // hic chunk planlanmadiysa ya da hepsi coktan bittiyse playback_done'i burada gonder
+    if (pcmScheduledCount <= 0) {
+      aiSpeaking = false;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'playback_done' }));
+      }
+    }
+  } else if (audioChunks.length > 0) {
     // hand the buffer to the player and clear it, so a trailing
     // audio_stream_end (no new chunks) cannot replay the same turn
     const pending = audioChunks;
@@ -1523,6 +1622,7 @@ function startSession() {
     if (el) { el.textContent = '—'; el.className = 'latency-val'; }
   });
   speechEndClientMs = null;
+  resetPcmStream();
   document.getElementById('workerStatus').textContent = 'Overdue';
   sessionInputTokens = 0; sessionOutputTokens = 0; turnCount = 0;
   document.getElementById('tokenCard').style.display = 'none';
@@ -1563,20 +1663,16 @@ async function toggleMic() {
 
       if (pipelineMode === 'gemini') {
   const ctx = getAudioContext();
-  console.log('[Gemini Mic] AudioContext actual sampleRate:', ctx.sampleRate);
+  console.log('[Gemini Mic] AudioContext sampleRate:', ctx.sampleRate, '-> 16000 (analiz + Gemini)');
   if (ws && ws.readyState === WebSocket.OPEN) {
-  ws.send(JSON.stringify({ type: 'gemini_sample_rate', rate: ctx.sampleRate }));
+  ws.send(JSON.stringify({ type: 'gemini_sample_rate', rate: 16000 }));
 }
-  window._geminiSampleRate = ctx.sampleRate;
+  window._geminiSampleRate = 16000;
   const source = ctx.createMediaStreamSource(audioStream);
   const processor = ctx.createScriptProcessor(4096, 1, 1);
         processor.onaudioprocess = (e) => {
           if (ws && ws.readyState === WebSocket.OPEN && !aiSpeaking) {
-            const float32 = e.inputBuffer.getChannelData(0);
-            const int16 = new Int16Array(float32.length);
-            for (let i = 0; i < float32.length; i++) {
-              int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
-            }
+            const int16 = floatToPcm16Resampled(e.inputBuffer.getChannelData(0), ctx.sampleRate, 16000);
             lastMicSendTime = Date.now();
             ws.send(int16.buffer);
           }
@@ -1765,7 +1861,12 @@ async function sendAudioFile() {
       const durationSec = audioDurationSec != null
         ? audioDurationSec
         : Number((mono.length / TARGET_RATE).toFixed(2));
+      ws.send(JSON.stringify({ type: 'audio_upload', bytes: pcmBuffer.byteLength, filename: file.name }));
       ws.send(pcmBuffer.buffer.slice(pcmBuffer.byteOffset, pcmBuffer.byteOffset + pcmBuffer.byteLength));
+      // Client E2E baslangici: ses dosyasinin bittigi (= tamaminin gonderildigi) an
+      resetPcmStream();
+      speechEndClientMs = Date.now();
+      console.log('[Client E2E] clock started at upload end');
       status.textContent = `✓ Sent ${durationSec}s to Gemini`;
       await audioCtx.close();
       return;

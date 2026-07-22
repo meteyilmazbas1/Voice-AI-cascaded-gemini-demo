@@ -151,3 +151,6 @@ gemini_comparison_results.json
 pipeline_latency_results.json
 *.pcm
 
+# metrics
+noise_test_results.csv
+
