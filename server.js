@@ -2039,6 +2039,11 @@ async function classifyWithGeminiLive(transcript, model, opts) {
             }
           },
           realtime_input_config: {
+            // VAD note (known limitation for safety-critical compare):
+            // Gemini Live only accepts END/START_SENSITIVITY_HIGH|LOW — there is no MEDIUM.
+            // Tuned silence (1800–2500) and HIGH/LOW swaps still left mid-utterance
+            // inputTranscription truncation on noisy audio. Treat Gemini Live STT/VAD
+            // as NOT production-ready for safety check-in; prefer Deepgram for STT.
             automatic_activity_detection: {
               disabled: false,
               end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
