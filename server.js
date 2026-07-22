@@ -2485,18 +2485,37 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
   }
 
   const sttStart = Date.now();
-  const response = await axios.post(
-    'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true',
-    audioBuffer,
-    {
-      headers: { Authorization: 'Token ' + dgApiKey, 'Content-Type': dgContentType },
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-      transformRequest: [function(data) { return data; }],
-      responseType: 'json',
-      timeout: 60000,
+  const dgUrl = 'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true';
+  const dgAxiosOpts = {
+    headers: { Authorization: 'Token ' + dgApiKey, 'Content-Type': dgContentType },
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+    transformRequest: [function(data) { return data; }],
+    responseType: 'json',
+    timeout: 8000,
+  };
+
+  function isTimeoutError(err) {
+    if (!err) return false;
+    const code = err.code || '';
+    const msg = String(err.message || '').toLowerCase();
+    return code === 'ECONNABORTED' || code === 'ETIMEDOUT'
+      || msg.indexOf('timeout') !== -1;
+  }
+
+  let response;
+  try {
+    response = await axios.post(dgUrl, audioBuffer, dgAxiosOpts);
+  } catch (err) {
+    if (!isTimeoutError(err)) throw err;
+    console.warn('[Compare Audio STT] Deepgram timeout (' + (err.code || err.message) + ') — retrying once...');
+    try {
+      response = await axios.post(dgUrl, audioBuffer, dgAxiosOpts);
+    } catch (err2) {
+      console.error('[Compare Audio STT] Retry failed:', err2.code || err2.message);
+      throw err2;
     }
-  );
+  }
   const sttMs = Date.now() - sttStart;
   const alt = (((response.data || {}).results || {}).channels || [])[0] || {};
   const best = (alt.alternatives || [])[0] || {};
