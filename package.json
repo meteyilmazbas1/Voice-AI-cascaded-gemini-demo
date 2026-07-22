@@ -4,7 +4,7 @@
   "description": "Deepgram Nova-3 (STT) → Claude Sonnet (LLM) → ElevenLabs (TTS) pipeline'ını kullanan, Missed Check-In alert'larını işleyen, PRD v1.2 ve Orion önerisine uygun demo uygulama.",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "echo \"No automated tests specified\"",
     "start": "node server.js",
     "call": "node make_call.js",
     "test:gemini-audio": "node gemini_noisy_audio_test.js"
