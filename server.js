@@ -39,14 +39,20 @@ app.use(express.static(path.join(__dirname, 'public')));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl } = require('./db');
 const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
+const { createRnnoise, preloadRnnoise, isRnnoiseReady } = require("./rnnoiseWrapper");
 const { createNoiseEstimator } = require("./noiseEstimator");
 const { createSileroVad } = require("./sileroVad");
 const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
 const { off } = require('cluster');
+const e = require('express');
 
-// TEMP: DeepFilter bypass — mic PCM goes straight to Deepgram.
-// Re-enable with DEEPFILTER_ENABLED=true in .env (or flip default below).
-const DEEPFILTER_ENABLED = process.env.DEEPFILTER_ENABLED === 'true';
+const DENOISE_ENGINE = (process.env.DENOISE_ENGINE || (process.env.DEEPFILTER_ENABLED === "true" ? "deepfilter" : "off")).toLowerCase();
+const DEEPFILTER_ENABLED = DENOISE_ENGINE !== "off";
+const DENOISE_LABEL = DENOISE_ENGINE === "rnnoise" ? "RNNoise" : "DeepFilterNet3";
+
+function isDenoiserReady() {
+  return DENOISE_ENGINE === "rnnoise" ? isRnnoiseReady() : isDeepFilterReady();
+}
 
 const CACHE_DIR = path.join(__dirname, 'audio_cache');
 function loadAudioCache() {
@@ -775,7 +781,9 @@ browserWss.on('connection', function(ws) {
       return false;
     }
     if (!deepFilter) {
-      deepFilter = createDeepFilter({ inputRate: 16000, outputRate: 16000 });
+      deepFilter = DENOISE_ENGINE === "rnnoise"
+      ? createRnnoise({ inputRate: 16000, outputRate: 16000 })
+      : createDeepFilter({ inputRate: 16000, outputRate: 16000 });
     }
     dfEnabled = !!dfPreferred;
     return dfEnabled;
@@ -1030,15 +1038,16 @@ browserWss.on('connection', function(ws) {
           if (!DEEPFILTER_ENABLED) {
             dfPreferred = false;
             dfEnabled = false;
-            console.log('[DeepFilter] toggle ignored — DEEPFILTER_ENABLED=false (forced bypass)');
+            console.log('[DeepFilter] toggle ignored — DENOISE_ENGINE=off (forced bypass)');
             send({ type: 'log', message: 'Noise cancellation disabled (server bypass for transcript test)' });
           } else {
             dfPreferred = msg.enabled !== false; // default ON unless explicitly false
             ensureDeepFilter();
             if (!dfPreferred) dfEnabled = false;
-            console.log('[DeepFilter]', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
+            console.log('[' + DENOISE_LABEL + ']', dfPreferred ? 'preferred ON' : 'preferred OFF', '| active=', dfEnabled);
             send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
           }
+          send({ type: 'denoise_engine', engine: DENOISE_ENGINE, label: DENOISE_LABEL, active: dfEnabled });
         }
         if (msg.type === 'client_metrics') {
           clientE2eMs = msg.total;
@@ -1054,7 +1063,7 @@ browserWss.on('connection', function(ws) {
           send({
             type: 'log',
             message: dfEnabled
-              ? 'Noise cancellation enabled (DeepFilterNet3)'
+              ? 'Noise cancellation enabled (' + DENOISE_LABEL + ')'
               : 'Noise cancellation unavailable — raw PCM to Deepgram',
           });
           let introAudio = null;
@@ -1066,9 +1075,11 @@ browserWss.on('connection', function(ws) {
               try {
                 const apiKey = process.env.ELEVENLABS_API_KEY;
                 const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
-                const chunks = [];
-                for await (const chunk of streamTTS(WORKER_INTRO, apiKey, voiceId)) chunks.push(chunk);
-                introAudio = chunks.join('');
+                const parts = [];
+                for await (const chunk of streamTTS(WORKER_INTRO, apiKey, voiceId)) {
+                  parts.push(Buffer.from(chunk, "base64"));
+                }
+                introAudio = Buffer.concat(parts).toString("base64");
               } catch (e) { console.error('[Greeting TTS Error]', e.message); }
             }
           }
@@ -3142,7 +3153,7 @@ function startServer() {
     console.log('\n🎙️  Voice AI Demo: http://localhost:' + PORT);
     console.log('📞  Twilio webhook: ' + PUBLIC_URL + '/incoming-call');
     console.log('🔌  Twilio WS path: ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio');
-    console.log('[DeepFilter] ' + (DEEPFILTER_ENABLED ? 'ENABLED' : 'DISABLED (raw mic → Deepgram)'));
+    console.log('[Denoise] engine=' + DENOISE_ENGINE);
     console.log('Cascaded Pipeline: Deepgram nova-2 -> Claude -> ElevenLabs\n');
   });
 }
@@ -3151,13 +3162,17 @@ const bootTasks = [
     console.error('[Mulaw Cache] Init error:', e.message);
   }),
 ];
-if (DEEPFILTER_ENABLED) {
-  bootTasks.push(preloadDeepFilter().catch(function(e) {
-    console.error('[DeepFilter] Model load failed:', e.message);
-    console.error('[DeepFilter] Denoise will be disabled until model is available');
+if (DENOISE_ENGINE === "rnnoise") {
+  bootTasks.push(preloadRnnoise().catch(function (e) {
+    console.error("[RNNoise] WASM load failed", e.message);
+  }));
+} else if (DENOISE_ENGINE === "deepfilter") {
+  bootTasks.push(preloadDeepFilter().catch(function (e) {
+    console.error("[DeepFilter] Model load failed:", e.message);
+    console.error("[DeepFilter] Denoise will be disabled until model is available");
   }));
 } else {
-  console.log('[DeepFilter] Preload skipped — DEEPFILTER_ENABLED=false');
+  console.log('[DeepFilter] Preload skipped — DENOISE_ENGINE=off');
 }
 Promise.all(bootTasks).then(function() {
   startServer();

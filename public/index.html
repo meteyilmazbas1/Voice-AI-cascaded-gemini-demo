@@ -1022,6 +1022,8 @@
 <script>
 let ws = null, mediaRecorder = null, audioStream = null;
 let denoiseEnabled = true;
+let denoiseLabel = '';   // sunucudan gelen motor adi: RNNoise / DeepFilterNet3
+let denoiseEngine = '';  // rnnoise | deepfilter | off
 let sessionActive = false, micActive = false;
 let stageTimers = {};
 let currentModel = 'claude-haiku-4-5';
@@ -1411,10 +1413,19 @@ function changeTtsMode(useElevenLabs) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tts_mode', mode: ttsMode }));
 }
 
+function updateDenoiseBtn() {
+  const btn = document.getElementById('denoiseBtn');
+  if (!btn) return;
+  // Motor adi sunucudan gelmediyse eski etikete geri dus
+  const suffix = denoiseEngine === 'off'
+    ? ' (server bypass)'
+    : (denoiseLabel ? ' · ' + denoiseLabel : '');
+  btn.textContent = '🎙️ Noise Cancel: ' + (denoiseEnabled ? 'ON' : 'OFF') + suffix;
+}
+
 function toggleDenoise() {
   denoiseEnabled = !denoiseEnabled;
-  const btn = document.getElementById('denoiseBtn');
-  if (btn) btn.textContent = '🎙️ Noise Cancel: ' + (denoiseEnabled ? 'ON' : 'OFF');
+  updateDenoiseBtn();
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
   }
@@ -1455,22 +1466,36 @@ function connectWS() {
   };
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
+    if (msg.type === 'denoise_engine') {
+      denoiseEngine = msg.engine || '';
+      denoiseLabel = msg.label || '';
+      if (msg.active === false && denoiseEngine === 'off') denoiseEnabled = false;
+      updateDenoiseBtn();
+    }
     if (msg.type === 'stage') setStageState(msg.stage, msg.status, msg.ms);
     if (msg.type === 'stt_latency') updateLatency('stt', msg.ms);
     if (msg.type === 'gemini_turn_latency') updateLatency('gemini', msg.ms);
     if (msg.type === 'client_e2e') updateLatency('client-e2e', msg.ms);
     if (msg.type === 'greeting') {
       addConversationEntry('ai', msg.text);
-      if (msg.audio) {
+      if (ttsMode === "elevenlabs" && msg.audio) {
         try {
           const binary = atob(msg.audio);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          const blob = new Blob([bytes], { type: 'audio/mpeg' });
+          const blob = new Blob([bytes], { type: "audio/mpeg" });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.play().catch(e => console.warn('Greeting audio play failed:', e));
-        } catch (e) { console.warn('Greeting audio decode failed:', e); }
+          audio.onended = () => URL.revokeObjectURL(url);
+          audio.play().catch(e => console.warn("Greeting audio play failed:", e && e.message ? e.message : e));
+        } catch (e) {
+          console.warn("Greeting audio decode failed:", e && e.message ? e.message : e);
+        }
+      } else if (msg.text) {
+        window.speechSynthesis.cancel();
+        const utt = new SpeechSynthesisUtterance(msg.text);
+        utt.lang = "en-US"; utt.rate = 1.05;
+        window.speechSynthesis.speak(utt);
       }
     }
     if (msg.type === 'interim_transcript') {
