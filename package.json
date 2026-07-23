@@ -4,7 +4,7 @@
   "description": "Deepgram Nova-3 (STT) → Claude Sonnet (LLM) → ElevenLabs (TTS) pipeline'ını kullanan, Missed Check-In alert'larını işleyen, PRD v1.2 ve Orion önerisine uygun demo uygulama.",
   "main": "server.js",
   "scripts": {
-    "test": "node --check server.js && node --check server_gemini.js && node --check sileroVad.js && node --check noiseEstimator.js && node --check testLogger.js && node --check deepFilterWrapper.js && node --check db.js",
+    "test": "node --check server.js && node --check server_gemini.js && node --check sileroVad.js && node --check noiseEstimator.js && node --check testLogger.js && node --check deepFilterWrapper.js && node --check db.js && node --check rnnoiseWrapper.js",
     "start": "node server.js",
     "call": "node make_call.js",
     "test:gemini-audio": "node gemini_noisy_audio_test.js"
@@ -24,6 +24,7 @@
     "express": "^5.2.1",
     "onnxruntime-node": "^1.27.0",
     "twilio": "^6.0.2",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "@jitsi/rnnoise-wasm": "^0.2.1"
   }
 }
