@@ -186,8 +186,6 @@ function saveGreetingToDisk(b64Chunks) {
   }
 }
 
-loadGreetingFromDisk();
-
 wss.on('connection', function(ws) {
   console.log('[Gemini WS] Client connected');
 
@@ -212,8 +210,7 @@ wss.on('connection', function(ws) {
     geminiWs.send(JSON.stringify({
       client_content: {
         turns: [
-          { role: 'user',  parts: [{ text: '[SYSTEM] The greeting has already been played to the worker from a recording. Do not greet again. Stay completely silent until the worker speaks.' }] },
-          { role: 'model', parts: [{ text: introText }] }
+          { role: 'user', parts: [{ text: '[SYSTEM] The greeting has already been played to the worker from a recording. Do not greet again. Stay completely silent until the worker speaks.' }] }
         ],
         turn_complete: false
       }
@@ -639,13 +636,14 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
 
         if (isFileUpload) {
           let ready = sessionState === "LISTENING";
-          for (let attempt = 0; !ready && attempt < 3; attempt++){
-            console.log('[Gemini] File upload waiting for LISTENING (attempt ' + (attempt + 1) + '/3), state=' + sessionState);
-            await new Promise(function (r) { setTimeout(r, 500); });
+          const MAX_WAIT_MS = 15000, STEP = 250;
+          for (let waited = 0; !ready && sessionState !== "ENDED" && waited < MAX_WAIT_MS; waited += STEP) {
+            if (waited === 0) console.log('[Gemini] File upload buffered — waiting for greeting to finish (state=' + sessionState + ')');
+            await new Promise(function (r) { setTimeout(r, STEP); });
             ready = sessionState === "LISTENING";
           }
           if (!ready) {
-            console.warn('[Gemini] Dropping file upload — not LISTENING after 3 attempts (state=' + sessionState + ')');
+            console.warn('[Gemini] Dropping file upload — never reached LISTENING (state=' + sessionState + ')');
             return;
           }
           if (!geminiWs || geminiWs.readyState !== WebSocket.OPEN) return;
@@ -797,6 +795,8 @@ function pcmToMulaw(pcm24kBuffer) {
   }
   return out;
 }
+
+loadGreetingFromDisk();
 
 // Twilio mulaw 8kHz → Gemini PCM 16kHz (decode + upsample 1:2)
 function mulawToPcm(mulawBuffer) {
