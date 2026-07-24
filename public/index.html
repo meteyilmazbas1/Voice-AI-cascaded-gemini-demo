@@ -1345,6 +1345,8 @@ async function playAllChunks(chunks) {
     src.onended = function() {
       aiSpeaking = false;
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'playback_done' }));
+
+      if (micActive && (streamingResolved || streamingEscalate)) toggleMic();
     };
     src.start();
     onFirstAudioPlayback();
@@ -1459,7 +1461,7 @@ function connectWS() {
       if (!speechEndClientMs) onWorkerSpeechEnd();
       const ex = document.getElementById('interimEntry'); if (ex) ex.remove();
       stopSNRMonitor();
-      const badSNR = (msg.role !== 'ai') ? checkSNRAndWarn() : false;
+      const badSNR = false;
       if (!badSNR) {
         addConversationEntry(msg.role === 'ai' ? 'ai' : 'worker', msg.text);
       } else {
@@ -1586,6 +1588,7 @@ if (msg.type === 'audio_stream_end') {
     playAllChunks(pending);
   } else {
     aiSpeaking = false;
+    if (micActive && (streamingResolved || streamingEscalate)) toggleMic();
   }
 }
   };
