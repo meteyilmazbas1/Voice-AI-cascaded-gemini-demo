@@ -35,7 +35,7 @@ server.on('upgrade', function(request, socket, head) {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Scenario noise-test audio — serve directly from OneDrive noise-test folder (no copy/symlink).
+// Scenario noise-test audio — serve directly from OneDrive UI-ready scenarios folder (no copy/symlink).
 // Override with SCENARIO_AUDIO_DIR env if needed.
 const SCENARIO_AUDIO_DIR = process.env.SCENARIO_AUDIO_DIR
   || path.join(
@@ -46,7 +46,7 @@ const SCENARIO_AUDIO_DIR = process.env.SCENARIO_AUDIO_DIR
     'Documents',
     'voices',
     'test_voices',
-    'gürültü_testleri'
+    'UI_hazır_senaryolar'
   );
 
 try {
@@ -2266,7 +2266,7 @@ async function classifyWithGeminiLive(transcript, model, opts) {
       }
       if (settled || ws.readyState !== WebSocket.OPEN) return;
       // Trailing silence so VAD can detect end-of-speech
-      const silencePadding = Buffer.alloc(8000, 0);
+      const silencePadding = Buffer.alloc(64000, 0); // 2s @ 16kHz 16-bit PCM — longer than VAD silence_duration_ms
       ws.send(JSON.stringify({
         realtime_input: {
           audio: {
@@ -2301,9 +2301,9 @@ async function classifyWithGeminiLive(transcript, model, opts) {
             // as NOT production-ready for safety check-in; prefer Deepgram for STT.
             automatic_activity_detection: {
               disabled: false,
-              end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
+              end_of_speech_sensitivity: 'END_SENSITIVITY_HIGH',
               start_of_speech_sensitivity: 'START_SENSITIVITY_LOW',
-              silence_duration_ms: 1500,
+              silence_duration_ms: 800,
               prefix_padding_ms: 200,
             }
           },
