@@ -193,4 +193,6 @@ module.exports = {
   preloadDeepFilter,
   isDeepFilterReady,
   MODEL_PATH,
+  createUpsampler,
+  createDownSampler,
 };
