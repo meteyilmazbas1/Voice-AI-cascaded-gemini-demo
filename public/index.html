@@ -313,6 +313,31 @@
     word-break: break-word;
   }
   .cmp-panel-run-empty { font-size: 11px; color: var(--muted); padding: 8px 0; }
+  .cmp-panel-accuracy {
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text);
+  }
+  .cmp-panel-accuracy .acc-line { display: flex; justify-content: space-between; gap: 8px; }
+  .cmp-panel-accuracy .acc-label { color: var(--muted); }
+  .cmp-panel-accuracy .acc-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cmp-panel-accuracy .acc-val.good { color: #3fb950; }
+  .cmp-panel-accuracy .acc-val.mid { color: #d29922; }
+  .cmp-panel-accuracy .acc-val.bad { color: var(--danger, #f85149); }
+  .cmp-settings-run-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .cmp-settings-run-row .cmp-field { margin: 0; }
+  .cmp-settings-run-row .cmp-actions { align-self: flex-end; display: flex; gap: 8px; flex-wrap: wrap; }
   .cmp-panel-run-avg {
     margin-top: 10px;
     padding: 10px 12px;
@@ -884,11 +909,15 @@
     <div class="cmp-config-row">
       <div class="cmp-field">
         <label>Select Test Scenario</label>
-        <select id="cmpScenario" style="min-width:280px" onchange="onScenarioSelect()">
-          <option value="">— Manual Upload / Microphone —</option>
-        </select>
+        <div class="cmp-presets" style="align-items:center;flex-wrap:wrap;gap:8px">
+          <select id="cmpScenario" style="min-width:280px" onchange="onScenarioSelect()">
+            <option value="">— Manual Upload / Microphone —</option>
+          </select>
+          <button type="button" class="btn" id="cmpListenBtn" disabled onclick="toggleScenarioListenPreview()" title="Preview the noisy scenario audio (does not run benchmark)">🔊 Listen</button>
+        </div>
+        <audio id="scenarioPreviewAudio" preload="none" style="display:none"></audio>
         <div style="font-size:11px;color:var(--muted);margin-top:6px;max-width:300px">
-          Selecting a scenario fills the reference transcript (clean version) and loads the noisy audio file as the shared input for all models.
+          Selecting a scenario fills the reference transcript (clean version) and loads the noisy audio file as the shared input for all models. Use Listen to preview noise before Run.
         </div>
       </div>
       <div class="cmp-field">
@@ -933,9 +962,9 @@
 
   <!-- ======== TAB 2: RUN SETTINGS ======== -->
   <div class="cmp-tab-page" id="cmpPage-settings">
-  <div class="cmp-config" style="position:static">
+  <div class="cmp-config run-settings" style="position:static">
     <div class="cmp-config-row">
-      <div class="cmp-field" style="flex:1;min-width:320px">
+      <div class="cmp-field mode-select" style="flex:1;min-width:320px">
         <label>Mode</label>
         <div class="mode-toggle" style="margin-top:4px">
           <button type="button" class="mode-btn active" id="mode-intent" onclick="setCompareMode('intent')">
@@ -952,6 +981,8 @@
           </button>
         </div>
       </div>
+    </div>
+    <div class="cmp-settings-run-row">
       <div class="cmp-field">
         <label>Run Count</label>
         <input type="number" id="cmpRuns" value="5" min="1" max="20">
@@ -962,7 +993,7 @@
           <button type="button" class="cmp-preset" onclick="setCmpRuns(20)">Long (20)</button>
         </div>
       </div>
-      <div class="cmp-actions" style="align-self:flex-end">
+      <div class="cmp-actions">
         <button class="btn primary" id="cmpRunBtn" onclick="onRunStopClick()">▶ Run</button>
         <button type="button" class="btn" onclick="clearCmpAccumulated()">🗑 Clear Results</button>
       </div>
@@ -1891,7 +1922,7 @@ function clearAudioFile() {
   onAudioFilePicked(input);
 }
 
-const SCENARIOS = [
+const DEMO_SCENARIOS = [
   { group: "text", label: "I'm fine", kind: "text", value: "I am fine"},
   { group: "text", label: "Running late 15 min", kind: "text", value: "Running late, give me 15 minutes"},
   { group: "text", label: "Need human agent", kind: "text", value: "I need a human agent please" },
@@ -1928,7 +1959,7 @@ function initScenarioSelect() {
   const order = ["text", "clean", "noisy"];
   menu.innerHTML = "";
   order.forEach(g => {
-    const rows = SCENARIOS
+    const rows = DEMO_SCENARIOS
     .map((s, i) => ({s, i}))
     .filter(x => x.s.group === g);
     if (!rows.length) return;
@@ -1984,11 +2015,11 @@ function scenarioOutsideClick(e) {
 
 function selectScenario(i) {
   selectedScenario = i;
-  document.getElementById("scenarioDdLabel").textContent = SCENARIOS[i].label;
+  document.getElementById("scenarioDdLabel").textContent = DEMO_SCENARIOS[i].label;
   document.querySelectorAll('.scenario-opt').forEach(el =>
     el.classList.toggle('selected', el.dataset.idx === String(i)));
   const box = document.getElementById("expectedBox");
-  const exp = SCENARIOS[i].expected;
+  const exp = DEMO_SCENARIOS[i].expected;
   if (exp) {
     document.getElementById("expectedText").textContent = '"' + exp + '"';
     box.hidden = false;
@@ -1999,7 +2030,7 @@ function selectScenario(i) {
 }
 
 function previewScenario(i) {
-  const s = SCENARIOS[i];
+  const s = DEMO_SCENARIOS[i];
   if(!s || s.kind !== "audio") return;
   if (previewAudio && previewIdx === i && !previewAudio.paused) {
     previewAudio.pause();
@@ -2106,7 +2137,7 @@ async function sendAudioBlob(blob, name) {
 async function runScenario() {
   const status = document.getElementById("audioFileStatus");
   if (selectedScenario === null) { alert("Select a scenario first"); return; }
-  const s = SCENARIOS[selectedScenario];
+  const s = DEMO_SCENARIOS[selectedScenario];
   if (!s) return;
   if(!ws || ws.readyState !== WebSocket.OPEN) { alert("Start a call first"); return; }
 
@@ -2175,8 +2206,8 @@ let cmpAccumTranscript = null; // accumulate runs while transcript unchanged
 let compareMode = 'intent';
 let cmpBatchData = null; // { mode:'batch', models, scenarios, rows, metrics, timestamp }
 
-/** Noise-test scenarios for Tab 1 dropdown — audio under /scenario_audio/ (OneDrive gürültü_testleri) */
-const SCENARIOS = {
+/** Noise-test scenarios (OneDrive UI_hazır_senaryolar) — served via /scenario_audio/ */
+const LEGACY_SCENARIOS = {
   "not_okay_short": {
     label: "Not Okay - Short Noise",
     audioFile: "Im_not_okay_ani_gürültü.mp3",
@@ -2238,6 +2269,104 @@ const SCENARIOS = {
     expectedIntent: "DELAYED_CHECKIN"
   }
 };
+/** @deprecated alias — prefer LEGACY_SCENARIOS / getCmpScenario */
+const SCENARIOS = LEGACY_SCENARIOS;
+
+/**
+ * Repo public/scenarios list (text + clean + noisy). Audio via /scenarios/<file>.
+ * `expected` = ground-truth transcript for WER (not intent).
+ */
+const GITHUB_SCENARIOS = [
+  { group: "text", label: "I'm fine", kind: "text", value: "I am fine"},
+  { group: "text", label: "Running late 15 min", kind: "text", value: "Running late, give me 15 minutes"},
+  { group: "text", label: "Need human agent", kind: "text", value: "I need a human agent please" },
+  { group: "text", label: "Reset check-in", kind: "text", value: "Reset my check-in" },
+  { group: "text", label: "SOS / Help", kind: "text", value: "HELP ME PLEASE SOS" },
+  { group: "text", label: "Unclear response", kind: "text", value: "blah blah xyzasdadssadd" },
+  { group: "clean", label: "Safe", kind: "audio", value: "safe_test.mp3", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert." },
+  { group: "clean", label: "Delayed", kind: "audio", value: "delayed_test.mp3", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
+  { group: "clean", label: "Human agent request", kind: "audio", value: "human_request_test.mp3", expected: "Look, I don't really want to talk to an automated system right now. Can you please connect me to an actual person?" },
+  { group: "clean", label: "Ambigous", kind: "audio", value: "ambigous_test.mp3", expected: "Um, uh, hang on. It's pretty loud out here and I'm not totally sure what you're asking me about." },
+  { group: "clean", label: "Unsafe (injured)", kind: "audio", value: "unsafe(injured)_test.mp3", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: "clean", label: "Unsafe (shorter)", kind: "audio", value: "unsafe_temiz_kisa.mp3", expected: "I am not safe." },
+  { group: "noisy", label: "Safe(1s noise)", kind: "audio", value: "1s gurultu_safe.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert."  },
+  { group: "noisy", label: "Safe(constant, high noise)", kind: "audio", value: "safe_sabit_yuksek_gurultu.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert." },
+  { group: "noisy", label: "Delayed(1s noise)", kind: "audio", value: "delayed_1sgurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
+  { group: "noisy", label: "Delayed(noisy end)", kind: "audio", value: "delayed_sonu_gurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
+  { group: 'noisy', label: 'Unsafe_shorter(instantaneous noise)', kind: 'audio', value: 'unsafe_anlik.wav', expected: "I am not safe." },
+  { group: "noisy", label: "Unsafe(injured, high noise)", kind: "audio", value: "unsafe(injured)_test + noise.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: "noisy", label: "Unsafe(injured, -5dB noise)", kind: "audio", value: "unsafe(injured)_test + noise -5db.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: 'noisy', label: 'Unsafe(injured, variable noise)', kind: 'audio', value: 'unsafe(injured)_test+ degisken gurultu.wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: 'noisy', label: 'Unsafe(injured, speech +5dB)', kind: 'audio', value: 'unsafe(injured)_test_(speech+5db).wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+];
+
+/** Unified Tab-1 scenario catalog keyed by dropdown option value. */
+let CMP_SCENARIO_BY_ID = {};
+
+function slugifyScenarioId(prefix, label, idx) {
+  const base = String(label || 'item').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 48);
+  return prefix + '_' + (base || 'item') + '_' + idx;
+}
+
+function buildCmpScenarioCatalog() {
+  const map = {};
+  GITHUB_SCENARIOS.forEach(function(s, idx) {
+    const id = slugifyScenarioId('gh_' + (s.group || 'x'), s.label, idx);
+    const isText = s.kind === 'text';
+    map[id] = {
+      id: id,
+      source: 'github',
+      group: s.group || (isText ? 'text' : 'noisy'),
+      kind: isText ? 'text' : 'audio',
+      label: s.label,
+      transcript: isText ? String(s.value || '') : null,
+      audioFile: isText ? null : s.value,
+      audioUrlBase: '/scenarios/',
+      groundTruth: isText ? null : (s.expected || null),
+      expectedIntent: null,
+      skipAccuracy: isText,
+    };
+  });
+  Object.keys(LEGACY_SCENARIOS).forEach(function(id) {
+    const s = LEGACY_SCENARIOS[id];
+    map[id] = {
+      id: id,
+      source: 'legacy',
+      group: 'legacy',
+      kind: 'audio',
+      label: s.label,
+      transcript: null,
+      audioFile: s.audioFile,
+      audioUrlBase: '/scenario_audio/',
+      groundTruth: s.groundTruth || null,
+      expectedIntent: s.expectedIntent || null,
+      skipAccuracy: false,
+    };
+  });
+  CMP_SCENARIO_BY_ID = map;
+  return map;
+}
+
+function getCmpScenario(id) {
+  if (!id) return null;
+  if (!Object.keys(CMP_SCENARIO_BY_ID).length) buildCmpScenarioCatalog();
+  return CMP_SCENARIO_BY_ID[id] || null;
+}
+
+function selectedCmpScenario() {
+  const sel = document.getElementById('cmpScenario');
+  return getCmpScenario(sel && sel.value);
+}
+
+function setPanelAccuracyVisible(visible) {
+  CMP_MODEL_ORDER.forEach(function(modelId) {
+    const el = document.getElementById('panelAcc-' + modelDomId(modelId));
+    if (el) el.style.display = visible ? '' : 'none';
+  });
+}
 let cmpLastExport = null;
 let cmpCharts = {};
 let cmpLastSttMs = null; // mic Deepgram WS or audio-file STT latency (ms) for /compare-intent
@@ -2540,7 +2669,8 @@ function showCmpAudioError(message) {
 }
 
 /**
- * Scenario runs require a real audio file. Ground truth is WER-only — never a transcript substitute.
+ * Scenario runs require a real audio file (except kind:text scenarios which skip STT).
+ * Ground truth is WER-only — never a transcript substitute for audio scenarios.
  * Returns an error string if the run must be blocked, else null.
  */
 function getScenarioAudioBlockReason() {
@@ -2554,7 +2684,8 @@ function getScenarioAudioBlockReason() {
     }
     return null;
   }
-  const s = SCENARIOS[scenarioId];
+  const s = getCmpScenario(scenarioId);
+  if (s && s.kind === 'text') return null; // text path: STT intentionally skipped
   const fileName = (s && s.audioFile) || (cmpAudioSource && cmpAudioSource.fileName) || scenarioId;
   if (!cmpAudioSource || cmpAudioSource.kind !== 'scenario' || !cmpAudioSource.file) {
     return 'Audio file not found: ' + fileName + '. Cannot run scenario without audio.';
@@ -2660,6 +2791,10 @@ function initCmpPanels() {
         <div class="cmp-panel-status" id="panelStatus-${domId}"></div>
       </div>
       <div class="cmp-panel-results">
+        <div class="cmp-panel-accuracy" id="panelAcc-${domId}">
+          <div class="acc-line"><span class="acc-label">Transcript Accuracy</span><span class="acc-val" id="panelTxAcc-${domId}">—</span></div>
+          <div class="acc-line"><span class="acc-label">Intent Accuracy</span><span class="acc-val" id="panelIntentAcc-${domId}">—</span></div>
+        </div>
         <div class="cmp-panel-results-title">Run results</div>
         <div id="panelRuns-${domId}"><div class="cmp-panel-run-empty">No runs yet — select a source and press Run.</div></div>
       </div>
@@ -3034,6 +3169,91 @@ function panelRunTotalMs(modelId, r) {
   return stt + llm + tts;
 }
 
+/** Per-model accuracy from ground truth + expected intent (auto after runs). */
+function computePanelAccuracy(modelId, data) {
+  const refTxt = ((document.getElementById('cmpRefText') || {}).value || '').trim();
+  const expected = cmpExpected || null;
+  const okRuns = ((data && data.runs) || []).filter(r => r && r.ok);
+  const out = {
+    transcriptPct: null,
+    intentCorrect: null,
+    intentTotal: null,
+    intentPct: null,
+  };
+  if (!okRuns.length) return out;
+
+  if (refTxt) {
+    const wers = okRuns
+      .map(r => {
+        const tx = (r.transcript || r.input_transcript || '').trim();
+        return tx ? wordErrorRate(refTxt, tx) : null;
+      })
+      .filter(v => v != null);
+    if (wers.length) {
+      const avgWer = wers.reduce((s, v) => s + v, 0) / wers.length;
+      out.transcriptPct = Math.max(0, Math.round((1 - avgWer) * 100));
+    }
+  }
+
+  if (expected) {
+    const scored = okRuns.filter(r => r.intent);
+    out.intentTotal = scored.length;
+    out.intentCorrect = scored.filter(r => r.intent === expected).length;
+    out.intentPct = scored.length
+      ? Math.round((out.intentCorrect / scored.length) * 100)
+      : null;
+  }
+  return out;
+}
+
+function accToneClass(pct) {
+  if (pct == null || !Number.isFinite(pct)) return '';
+  if (pct >= 90) return 'good';
+  if (pct >= 60) return 'mid';
+  return 'bad';
+}
+
+function updatePanelAccuracyUI(modelId, data) {
+  const domId = modelDomId(modelId);
+  const txEl = document.getElementById('panelTxAcc-' + domId);
+  const intentEl = document.getElementById('panelIntentAcc-' + domId);
+  if (!txEl || !intentEl) return;
+
+  const selected = selectedCmpScenario();
+  if (selected && selected.skipAccuracy) {
+    txEl.textContent = '—';
+    txEl.className = 'acc-val';
+    intentEl.textContent = '—';
+    intentEl.className = 'acc-val';
+    return;
+  }
+
+  if (!data || !(data.runs || []).some(r => r && r.ok)) {
+    txEl.textContent = '—';
+    txEl.className = 'acc-val';
+    intentEl.textContent = '—';
+    intentEl.className = 'acc-val';
+    return;
+  }
+
+  const acc = computePanelAccuracy(modelId, data);
+  if (acc.transcriptPct != null) {
+    txEl.textContent = acc.transcriptPct + '%';
+    txEl.className = 'acc-val ' + accToneClass(acc.transcriptPct);
+  } else {
+    txEl.textContent = '—';
+    txEl.className = 'acc-val';
+  }
+
+  if (acc.intentPct != null && acc.intentTotal > 0) {
+    intentEl.textContent = acc.intentCorrect + '/' + acc.intentTotal + ' (' + acc.intentPct + '%)';
+    intentEl.className = 'acc-val ' + accToneClass(acc.intentPct);
+  } else {
+    intentEl.textContent = '—';
+    intentEl.className = 'acc-val';
+  }
+}
+
 function renderPanelRuns(modelId, data) {
   const el = document.getElementById('panelRuns-' + modelDomId(modelId));
   if (!el) return;
@@ -3046,16 +3266,19 @@ function renderPanelRuns(modelId, data) {
   });
   if (!data) {
     el.innerHTML = `<div class="cmp-panel-run-empty">No runs yet — select a source and press Run.</div>`;
+    updatePanelAccuracyUI(modelId, null);
     return;
   }
   const runs = data.runs || [];
   // Show failed runs even when aggregate ok=false (so error_detail is visible)
   if (!data.ok && !runs.length) {
     el.innerHTML = `<div class="cmp-panel-run-empty" style="color:var(--danger)">${formatErrorDetailHtml(data.error_detail, data.error || 'Run failed')}</div>`;
+    updatePanelAccuracyUI(modelId, data);
     return;
   }
   if (!runs.length) {
     el.innerHTML = `<div class="cmp-panel-run-empty">No runs yet.</div>`;
+    updatePanelAccuracyUI(modelId, data);
     return;
   }
   const isGemini = String(modelId).startsWith('gemini');
@@ -3132,6 +3355,7 @@ function renderPanelRuns(modelId, data) {
   }
 
   el.innerHTML = rowsHtml + avgHtml;
+  updatePanelAccuracyUI(modelId, data);
 }
 
 function refreshAllPanelRuns() {
@@ -3142,6 +3366,15 @@ function refreshAllPanelRuns() {
   const chartsEl = document.getElementById('cmpCharts');
   if (chartsEl && chartsEl.classList.contains('show')) {
     renderCmpCharts(compareMode === 'freeform' ? cmpFreeformResults : cmpResults);
+  }
+  const box = document.getElementById('cmpSummaryBox');
+  if (box && box.classList.contains('show') && compareMode !== 'freeform' && compareMode !== 'batch') {
+    renderCmpSummaryText({
+      results: cmpResults,
+      freeformResults: cmpFreeformResults,
+      compareMode: compareMode,
+      expected: cmpExpected,
+    });
   }
 }
 
@@ -3214,26 +3447,50 @@ async function compareAudioStt(file, durationSec) {
 }
 
 async function loadCmpScenarios() {
-  // Dropdown is built from local SCENARIOS (noise-test audio packs)
   const sel = document.getElementById('cmpScenario');
   if (!sel) return;
+  const catalog = buildCmpScenarioCatalog();
   sel.innerHTML = '<option value="">— Manual Upload / Microphone —</option>';
-  Object.keys(SCENARIOS).forEach(id => {
-    const s = SCENARIOS[id];
-    const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = s.label;
-    sel.appendChild(opt);
+
+  const groups = [
+    { key: 'text', label: 'Text Input' },
+    { key: 'clean', label: 'Clean Audio' },
+    { key: 'noisy', label: 'Noisy Audio' },
+    { key: 'legacy', label: 'Legacy Scenarios' },
+  ];
+  groups.forEach(function(g) {
+    const items = Object.keys(catalog).filter(function(id) { return catalog[id].group === g.key; });
+    if (!items.length) return;
+    const og = document.createElement('optgroup');
+    og.label = g.label;
+    items.forEach(function(id) {
+      const s = catalog[id];
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = s.label;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
   });
+
   // Keep cmpScenarios in sync for history / expected matching
-  cmpScenarios = Object.keys(SCENARIOS).map(id => ({
-    id,
-    text: SCENARIOS[id].groundTruth,
-    expected: SCENARIOS[id].expectedIntent,
-    category: 'Noise tests',
-    audioFile: SCENARIOS[id].audioFile,
-    label: SCENARIOS[id].label,
-  }));
+  cmpScenarios = Object.keys(catalog).map(function(id) {
+    const s = catalog[id];
+    return {
+      id: id,
+      text: s.groundTruth || s.transcript || '',
+      groundTruth: s.groundTruth || null,
+      expected: s.expectedIntent || null,
+      expectedIntent: s.expectedIntent || null,
+      category: s.group,
+      audioFile: s.audioFile,
+      label: s.label,
+      kind: s.kind,
+      source: s.source,
+    };
+  });
+  updateScenarioListenButton();
+  setPanelAccuracyVisible(!(selectedCmpScenario() && selectedCmpScenario().skipAccuracy));
 }
 
 function onCmpTranscriptInput() {
@@ -3247,9 +3504,10 @@ function onCmpTranscriptInput() {
   }
 }
 
-/** Fetch a scenario audio file from /scenario_audio/ (URL-encode Turkish chars / spaces). */
-async function fetchScenarioAudioFile(audioFileName) {
-  const url = '/scenario_audio/' + encodeURIComponent(audioFileName);
+/** Fetch scenario audio from /scenario_audio/ or /scenarios/ (URL-encode spaces / parentheses). */
+async function fetchScenarioAudioFile(audioFileName, urlBase) {
+  const base = urlBase || '/scenario_audio/';
+  const url = base.replace(/\/?$/, '/') + encodeURIComponent(audioFileName);
   const res = await fetch(url);
   if (!res.ok) {
     let serverMsg = '';
@@ -3287,25 +3545,96 @@ async function fetchScenarioAudioFile(audioFileName) {
   return new File([blob], audioFileName, { type: mime });
 }
 
+function scenarioPreviewAudioUrl(scenarioOrFileName, urlBase) {
+  if (scenarioOrFileName && typeof scenarioOrFileName === 'object') {
+    const s = scenarioOrFileName;
+    if (!s.audioFile) return null;
+    return (s.audioUrlBase || '/scenario_audio/').replace(/\/?$/, '/') + encodeURIComponent(s.audioFile);
+  }
+  const base = urlBase || '/scenario_audio/';
+  return base.replace(/\/?$/, '/') + encodeURIComponent(scenarioOrFileName);
+}
+
+function resetScenarioListenLabel() {
+  const btn = document.getElementById('cmpListenBtn');
+  if (btn) btn.textContent = '🔊 Listen';
+}
+
+function stopScenarioPreview() {
+  const audioEl = document.getElementById('scenarioPreviewAudio');
+  if (!audioEl) return;
+  try {
+    audioEl.pause();
+    audioEl.currentTime = 0;
+    audioEl.removeAttribute('src');
+    audioEl.load();
+  } catch (e) {}
+  resetScenarioListenLabel();
+}
+
+function updateScenarioListenButton() {
+  const btn = document.getElementById('cmpListenBtn');
+  if (!btn) return;
+  const s = selectedCmpScenario();
+  const ok = !!(s && s.kind === 'audio' && s.audioFile);
+  btn.disabled = !ok;
+  if (!ok) resetScenarioListenLabel();
+}
+
+/** Preview scenario audio only — does NOT trigger benchmark / model calls. */
+function toggleScenarioListenPreview() {
+  const scenario = selectedCmpScenario();
+  const btn = document.getElementById('cmpListenBtn');
+  const audioEl = document.getElementById('scenarioPreviewAudio');
+  if (!scenario || scenario.kind !== 'audio' || !scenario.audioFile || !btn || !audioEl) return;
+
+  if (!audioEl.paused && audioEl.src) {
+    stopScenarioPreview();
+    return;
+  }
+
+  const url = scenarioPreviewAudioUrl(scenario);
+  audioEl.onended = function() { resetScenarioListenLabel(); };
+  audioEl.onerror = function() {
+    resetScenarioListenLabel();
+    const msg = 'Could not play scenario audio: ' + scenario.audioFile
+      + ' (check ' + (scenario.audioUrlBase || '/scenario_audio/') + ' path / encoding).';
+    showCmpAudioError(msg);
+    console.error('[Scenario Listen]', msg);
+  };
+  audioEl.src = url;
+  btn.textContent = '⏹ Stop';
+  const playPromise = audioEl.play();
+  if (playPromise && typeof playPromise.then === 'function') {
+    playPromise.catch(function(err) {
+      resetScenarioListenLabel();
+      const msg = 'Playback failed: ' + ((err && err.message) || String(err));
+      showCmpAudioError(msg);
+      console.error('[Scenario Listen]', msg);
+    });
+  }
+}
+
 async function onScenarioSelect() {
   const id = document.getElementById('cmpScenario').value;
   showCmpAudioError('');
+  updateScenarioListenButton();
+  stopScenarioPreview();
 
   // Manual Upload / Microphone — return to manual flow
   if (!id) {
     cmpExpected = null;
     const expSel = document.getElementById('cmpExpectedSel');
     if (expSel) expSel.value = '';
-    // Discard active mic capture — do not finalize WAV (would overwrite cleared source)
     stopSourceMic({ discard: true });
     cmpAudioSource = null;
     cmpSharedDeepgramMeta = null;
     applyAudioSourceToPanels();
     updateSourceExclusivity();
+    setPanelAccuracyVisible(true);
     setSourceStatus('Manual mode — upload a file or record with the microphone. Ground truth can be entered by hand for WER only.');
     CMP_MODEL_ORDER.forEach(modelId => {
       const st = ensurePanelState(modelId);
-      // Do not keep leftover ground-truth text as a fake STT transcript
       st.transcript = '';
       updatePanelSttUI(modelId);
       setPanelStatus(modelId, '');
@@ -3315,35 +3644,83 @@ async function onScenarioSelect() {
     return;
   }
 
-  const s = SCENARIOS[id];
+  const s = getCmpScenario(id);
   if (!s) return;
 
-  // Ground truth → WER / expected intent ONLY (never used as STT substitute)
-  document.getElementById('cmpTranscript').value = '';
-  cmpExpected = s.expectedIntent || null;
-  const refEl = document.getElementById('cmpRefText');
-  if (refEl) refEl.value = s.groundTruth;
-  const expSel = document.getElementById('cmpExpectedSel');
-  if (expSel) expSel.value = s.expectedIntent || '';
   cmpLastSttMs = null;
   cmpAccumTranscript = null;
   cmpResults = {};
   cmpFreeformResults = {};
-  // Discard active mic capture — do not finalize WAV (would race and overwrite scenario audio)
   stopSourceMic({ discard: true });
+
+  // —— Text Input: no audio, STT skipped, transcript = value ——
+  if (s.kind === 'text') {
+    const tx = (s.transcript || '').trim();
+    document.getElementById('cmpTranscript').value = tx;
+    const refEl = document.getElementById('cmpRefText');
+    if (refEl) refEl.value = '';
+    cmpExpected = null;
+    const expSel = document.getElementById('cmpExpectedSel');
+    if (expSel) expSel.value = '';
+    cmpAudioSource = null;
+    cmpSharedDeepgramMeta = null;
+    setPanelAccuracyVisible(false);
+    CMP_MODEL_ORDER.forEach(modelId => {
+      const st = ensurePanelState(modelId);
+      st.transcript = tx;
+      st.audioFile = null;
+      st.audioFileName = null;
+      st.sttMs = null;
+      st.durationSec = null;
+      st.deepgramCost = null;
+      updatePanelSttUI(modelId);
+      setPanelStatus(modelId, 'Text scenario — STT skipped · transcript ready');
+      renderPanelRuns(modelId, null);
+    });
+    applyAudioSourceToPanels();
+    updateSourceExclusivity();
+    setSourceStatus('💬 Text scenario: "' + tx.slice(0, 80) + (tx.length > 80 ? '…' : '')
+      + '" — sent to all models as transcript (no STT). Accuracy metrics hidden.');
+    showCmpAudioError('');
+    updateCmpRunAvailability();
+    return;
+  }
+
+  // —— Audio (GitHub /scenarios or Legacy /scenario_audio) ——
+  setPanelAccuracyVisible(true);
+  document.getElementById('cmpTranscript').value = '';
+  cmpExpected = s.expectedIntent || null;
+  const refEl = document.getElementById('cmpRefText');
+  if (refEl) refEl.value = s.groundTruth || '';
+  const expSel = document.getElementById('cmpExpectedSel');
+  if (expSel) expSel.value = s.expectedIntent || '';
 
   setSourceStatus('Loading scenario audio: ' + s.audioFile + '...');
   try {
-    const file = await fetchScenarioAudioFile(s.audioFile);
+    const file = await fetchScenarioAudioFile(s.audioFile, s.audioUrlBase);
     let durationSec = null;
     try { durationSec = await getAudioFileDurationSeconds(file); } catch (e) {}
-    cmpAudioSource = { kind: 'scenario', file, fileName: file.name, durationSec, scenarioId: id };
+    cmpAudioSource = {
+      kind: 'scenario',
+      file,
+      fileName: file.name,
+      durationSec,
+      scenarioId: id,
+      audioUrlBase: s.audioUrlBase,
+    };
     showCmpAudioError('');
     setSourceStatus('🔊 Scenario audio loaded: ' + file.name
       + (durationSec != null ? ` (${Number(durationSec).toFixed(2)}s)` : '')
       + ' — sent to all models on Run. Ground truth is for WER only.');
   } catch (e) {
-    cmpAudioSource = { kind: 'scenario', file: null, fileName: s.audioFile, durationSec: null, scenarioId: id };
+    cmpAudioSource = {
+      kind: 'scenario',
+      file: null,
+      fileName: s.audioFile,
+      durationSec: null,
+      scenarioId: id,
+      audioUrlBase: s.audioUrlBase,
+    };
     const msg = e.message || (
       'Audio file not found: ' + s.audioFile + '. Cannot run scenario without audio.'
     );
@@ -3356,7 +3733,6 @@ async function onScenarioSelect() {
 
   CMP_MODEL_ORDER.forEach(modelId => {
     const st = ensurePanelState(modelId);
-    // Never seed panel transcript with ground truth — STT must produce it from audio
     st.transcript = '';
     updatePanelSttUI(modelId);
     setPanelStatus(modelId, cmpAudioSource && cmpAudioSource.file
@@ -3869,20 +4245,116 @@ function buildCmpSummary(results, expectedOverride) {
   if (!rows.length) return ['No model results to summarize.'];
 
   const expected = expectedOverride !== undefined ? (expectedOverride || null) : (cmpExpected || null);
+  const refTxt = ((document.getElementById('cmpRefText') || {}).value || '').trim();
   const lines = [];
+
+  // Per-model stats for winner lines + body
+  const stats = [];
+  rows.forEach(modelId => {
+    const r = results[modelId];
+    const meta = CMP_MODEL_META[modelId] || { label: (r && r.label) || modelId, color: '#58a6ff' };
+    const label = (r && r.label) || meta.label || modelId;
+    const short = cmpShortLabel(modelId, label);
+    const avgLat = (r && r.ok) ? modelAvgTotalLatencyMs(modelId, r) : null;
+    let intentCorrect = null;
+    let intentTotal = null;
+    let intentPct = null;
+    let transcriptPct = null;
+    if (r && r.ok) {
+      const acc = computePanelAccuracy(modelId, r);
+      intentCorrect = acc.intentCorrect;
+      intentTotal = acc.intentTotal;
+      intentPct = acc.intentPct;
+      transcriptPct = acc.transcriptPct;
+    }
+    stats.push({
+      modelId, r, meta, label, short, avgLat,
+      intentCorrect, intentTotal, intentPct, transcriptPct,
+      ok: !!(r && r.ok),
+    });
+  });
+
+  const okStats = stats.filter(s => s.ok);
+  const winnerLines = [];
+
+  // Best Intent Accuracy
+  if (expected) {
+    const intentCandidates = okStats.filter(s => s.intentTotal > 0 && s.intentPct != null);
+    if (intentCandidates.length) {
+      intentCandidates.sort(function(a, b) {
+        if (b.intentPct !== a.intentPct) return b.intentPct - a.intentPct;
+        const la = a.avgLat != null ? a.avgLat : Infinity;
+        const lb = b.avgLat != null ? b.avgLat : Infinity;
+        return la - lb;
+      });
+      const best = intentCandidates[0];
+      const topPct = best.intentPct;
+      const tied = intentCandidates.filter(s => s.intentPct === topPct);
+      const tieBroken = tied.length > 1;
+      const others = intentCandidates.filter(s => s.modelId !== best.modelId)
+        .map(s => `${escapeHtml(s.short)} ${s.intentCorrect}/${s.intentTotal}`)
+        .join(', ');
+      winnerLines.push(
+        `<strong>Best Intent Accuracy:</strong> ${escapeHtml(best.label)} `
+        + `(${best.intentCorrect}/${best.intentTotal})`
+        + (others ? ` — ${others}` : '')
+        + (tieBroken ? ' <span style="color:var(--muted)">(tie broken by latency)</span>' : '')
+      );
+    }
+  }
+
+  // Best Latency
+  {
+    const latCandidates = okStats.filter(s => s.avgLat != null);
+    if (latCandidates.length) {
+      latCandidates.sort(function(a, b) { return a.avgLat - b.avgLat; });
+      const best = latCandidates[0];
+      const others = latCandidates.filter(s => s.modelId !== best.modelId)
+        .map(s => `${escapeHtml(s.short)} ${fmtMs(s.avgLat)}`)
+        .join(', ');
+      winnerLines.push(
+        `<strong>Best Latency:</strong> ${escapeHtml(best.label)} `
+        + `(avg ${fmtMs(best.avgLat)})`
+        + (others ? ` — ${others}` : '')
+      );
+    }
+  }
+
+  // Best Transcript Accuracy (only when ground truth / ref text exists)
+  if (refTxt) {
+    const txCandidates = okStats.filter(s => s.transcriptPct != null);
+    if (txCandidates.length) {
+      txCandidates.sort(function(a, b) {
+        if (b.transcriptPct !== a.transcriptPct) return b.transcriptPct - a.transcriptPct;
+        const la = a.avgLat != null ? a.avgLat : Infinity;
+        const lb = b.avgLat != null ? b.avgLat : Infinity;
+        return la - lb;
+      });
+      const best = txCandidates[0];
+      const others = txCandidates.filter(s => s.modelId !== best.modelId)
+        .map(s => `${escapeHtml(s.short)} ${s.transcriptPct}%`)
+        .join(', ');
+      winnerLines.push(
+        `<strong>Best Transcript Accuracy:</strong> ${escapeHtml(best.label)} `
+        + `(${best.transcriptPct}%)`
+        + (others ? ` — ${others}` : '')
+      );
+    }
+  }
+
+  winnerLines.forEach(l => lines.push(l));
+  if (winnerLines.length) lines.push('—');
+
   lines.push('<strong>Model comparison</strong>'
     + (expected ? ` · expected intent: <code>${escapeHtml(expected)}</code>` : ''));
 
   const consistencyParts = [];
 
-  rows.forEach(modelId => {
-    const r = results[modelId];
-    const meta = CMP_MODEL_META[modelId] || { label: (r && r.label) || modelId, color: '#58a6ff' };
-    const label = (r && r.label) || meta.label || modelId;
+  stats.forEach(s => {
+    const { modelId, r, meta, label, short, avgLat, intentCorrect, intentTotal, intentPct } = s;
     const color = meta.color || '#58a6ff';
-    const short = cmpShortLabel(modelId, label);
 
-    if (!r || !r.ok) {
+    if (!s.ok) {
       lines.push(
         `<span class="cmp-dot" style="background:${color};display:inline-block;margin-right:6px"></span>`
         + `<strong>${escapeHtml(label)}</strong> — `
@@ -3894,19 +4366,15 @@ function buildCmpSummary(results, expectedOverride) {
     }
 
     const intent = r.intent || '—';
-    const avgLat = modelAvgTotalLatencyMs(modelId, r);
     const latency = avgLat != null ? fmtMs(avgLat) : '—';
 
     let accHtml = '';
     if (expected) {
-      const okRuns = (r.runs || []).filter(x => x && x.ok && x.intent);
-      if (okRuns.length) {
-        const correctN = okRuns.filter(x => x.intent === expected).length;
-        const pct = Math.round((correctN / okRuns.length) * 100);
-        const allOk = correctN === okRuns.length;
-        const noneOk = correctN === 0;
+      if (intentTotal > 0) {
+        const allOk = intentCorrect === intentTotal;
+        const noneOk = intentCorrect === 0;
         const colorAcc = allOk ? '#3fb950' : noneOk ? 'var(--danger)' : '#d29922';
-        accHtml = ` · Accuracy: <span style="color:${colorAcc}">${correctN}/${okRuns.length} (${pct}%)`
+        accHtml = ` · Accuracy: <span style="color:${colorAcc}">${intentCorrect}/${intentTotal} (${intentPct}%)`
           + (allOk ? ' ✓' : noneOk ? ' ✗' : '') + '</span>';
       } else if (r.correct === true) {
         accHtml = ' · Accuracy: <span style="color:#3fb950">correct ✓</span>';
@@ -5014,11 +5482,20 @@ async function runComparisonSeries(seriesCount) {
   });
 
   const scenarioId = (document.getElementById('cmpScenario') || {}).value;
-  if (scenarioId || (cmpAudioSource && cmpAudioSource.kind === 'scenario')) {
-    // Scenario path: audio is mandatory — STT must produce transcripts
+  const selectedScenario = getCmpScenario(scenarioId);
+  if (selectedScenario && selectedScenario.kind === 'text') {
+    // Text preset: transcript already on panels; no audio required
+    const missingTx = models.filter(m => !(ensurePanelState(m).transcript || '').trim());
+    if (missingTx.length) {
+      alert('Text scenario transcript missing for: ' + missingTx.map(m => (CMP_MODEL_META[m] || {}).label || m).join(', '));
+      return;
+    }
+  } else if (scenarioId || (cmpAudioSource && cmpAudioSource.kind === 'scenario')) {
+    // Audio scenario path: audio is mandatory — STT must produce transcripts
     const missingAudio = models.filter(m => !ensurePanelState(m).audioFile);
     if (missingAudio.length) {
       const name = (cmpAudioSource && cmpAudioSource.fileName)
+        || (selectedScenario && selectedScenario.audioFile)
         || (SCENARIOS[scenarioId] && SCENARIOS[scenarioId].audioFile)
         || 'unknown';
       const msg = 'Audio file not found: ' + name + '. Cannot run scenario without audio.';
