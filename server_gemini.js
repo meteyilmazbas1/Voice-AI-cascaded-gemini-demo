@@ -11,7 +11,20 @@ const twilio = require('twilio');
 const { insertCallStart, updateCallEnd, updateRecordingUrl, updateCallSessionState, listCalls, getCallBySid } = require('./db');
 const { createNoiseEstimator } = require("./noiseEstimator");
 const { createSileroVad } = require("./sileroVad");
-const { frameStatsMulaw } = require("./audioLevel"); 
+const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
+const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
+const { createRnnoise, preloadRnnoise, isRnnoiseReady } = require('./rnnoiseWrapper');
+const { appendTestRow } = require('./testLogger');
+
+// Denoise motoru secimi. server.js'ten farkli olarak burada varsayilan "deepfilter" —
+// bu dosyada DEEPFILTER_ENABLED bypass'i hic olmadi, mevcut davranis korunuyor.
+const DENOISE_ENGINE = (process.env.DENOISE_ENGINE || 'deepfilter').toLowerCase();
+const DENOISE_LABEL = DENOISE_ENGINE === 'rnnoise' ? 'RNNoise' : 'DeepFilterNet3';
+
+function isDenoiserReady() {
+  if (DENOISE_ENGINE === 'off') return false;
+  return DENOISE_ENGINE === 'rnnoise' ? isRnnoiseReady() : isDeepFilterReady();
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -23,6 +36,31 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = 'gemini-3.1-flash-live-preview';
+const GEMINI_REST_MODEL = process.env.GEMINI_REST_MODEL || 'gemini-3.6-flash';
+
+function pcm16ToWav(pcm, rate) {
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8);
+  h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+  h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+
+// Live API'nin inputTranscription yan kanali gurultude sessizce pes edebiliyor —
+// model sesi anlayip dogru cevabi verse bile kayda ne soylendigi gecmiyor.
+// O yuzden transcript bos kaldiginda ayni sesi REST uzerinden bir kez daha transkribe ediyoruz.
+async function transcribeWithRest(pcm, rate) {
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+    + GEMINI_REST_MODEL + ':generateContent?key=' + GEMINI_API_KEY;
+  const body = { contents: [{ parts: [
+    { text: 'Transcribe this English audio verbatim. Output ONLY the transcript text, nothing else. If nothing is intelligible, output exactly: (unintelligible)' },
+    { inline_data: { mime_type: 'audio/wav', data: pcm16ToWav(pcm, rate).toString('base64') } },
+  ] }] };
+  const res = await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
+  const parts = (res.data.candidates[0].content.parts) || [];
+  return parts.map(function (p) { return p.text || ''; }).join('').trim();
+}
 
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
@@ -90,6 +128,17 @@ CRITICAL SAFETY RULE: If the worker mentions ANY physical injury, pain, fall, or
 
 Keep responses short (under 15 words). Be direct and professional.
 
+ACOUSTIC MONITOR:
+Some worker replies are preceded by a message starting with [ACOUSTIC MONITOR]. That message is NOT spoken by the worker — it is an automatic measurement of the audio of their reply. It only appears when the measurement found a real problem, so never dismiss it.
+
+CRITICAL — coherence is not evidence: a reply that sounds complete and sensible is NOT proof that nothing was lost. Deleting one word from "I am not safe" leaves "I am safe", which sounds perfectly coherent and means the opposite. The most dangerous losses are exactly the ones that leave a clean sentence behind. Never reason "what I heard makes sense, so nothing is missing".
+
+When you receive an [ACOUSTIC MONITOR] report:
+- If it reports a noise burst LOUDER than the worker's voice, or a gap, assume one or more words were destroyed at that position. If the words you did hear would classify the reply as safe or as needing more time, you must NOT act on that classification — a negation ("not", "never", "can't", "don't") or a number may have been destroyed. Say exactly: "Sorry, it's a bit noisy. Can you repeat that clearly?"
+- If you could not make out ANY words at all, do not guess, do not classify, and do NOT escalate. Say exactly: "Sorry, I didn't catch that. Could you repeat?"
+
+Never read the measurements out loud, never mention the monitor, and never mention that words were missing.
+
 IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
 CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
 
@@ -97,6 +146,47 @@ const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed 
 
 let cachedGreetingChunks = null;
 let cachedGreetingMimeType = null;
+
+const GREETING_DIR = path.join(__dirname, "audio");
+const GREETING_FILE = path.join(GREETING_DIR, "greeting_24k.pcm");
+
+let GREETING_PCM = null;
+let GREETING_ULAW = null;
+let GREETING_PCM_MS = 0;
+
+function loadGreetingFromDisk() {
+  try {
+    const buf = fs.readFileSync(GREETING_FILE);
+    if (buf.length < 24000) throw new Error("dosya cok kisa: " + buf.length + " bayt");
+    GREETING_PCM = buf;
+    GREETING_PCM_MS = Math.round(buf.length / 48);
+    GREETING_ULAW = pcmToMulaw(buf);
+    console.log("[Greeting] Disk cache yuklendi:", buf.length, "bayt /", GREETING_PCM_MS + "ms");
+    return true;
+  } catch (e) {
+    GREETING_PCM = null; GREETING_ULAW = null; GREETING_PCM_MS = 0;
+    console.log("[Greeeting] Disk cache yok - ilk aramada uretilip kaydedilecek (" + e.message + ")");
+    return false;
+  }
+}
+
+function saveGreetingToDisk(b64Chunks) {
+  try {
+    const buf = Buffer.concat(b64Chunks.map(function (c) { return Buffer.from(c, 'base64'); }));
+    if (buf.length < 24000) {
+      console.warn('[Greeting] Kayit atlandi — ses cok kisa:', buf.length, 'bayt');
+      return;
+    }
+    if (!fs.existsSync(GREETING_DIR)) fs.mkdirSync(GREETING_DIR, { recursive: true });
+    fs.writeFileSync(GREETING_FILE, buf);
+    console.log('[Greeting] Kaydedildi ->', GREETING_FILE, '(' + buf.length + ' bayt)');
+    loadGreetingFromDisk();
+  } catch (e) {
+    console.error("[Greeting] kaydedilemedi:", e.message);
+  }
+}
+
+loadGreetingFromDisk();
 
 wss.on('connection', function(ws) {
   console.log('[Gemini WS] Client connected');
@@ -116,6 +206,19 @@ wss.on('connection', function(ws) {
     greetingAnnounced = true;
     send({ type: 'greeting', text: WORKER_INTRO, audio: null });
   }
+
+  function primeGeminiGreetingContext(introText) {
+    if (!geminiWs || geminiWs.readyState !== WebSocket.OPEN) return;
+    geminiWs.send(JSON.stringify({
+      client_content: {
+        turns: [
+          { role: 'user',  parts: [{ text: '[SYSTEM] The greeting has already been played to the worker from a recording. Do not greet again. Stay completely silent until the worker speaks.' }] },
+          { role: 'model', parts: [{ text: introText }] }
+        ],
+        turn_complete: false
+      }
+    }));
+  }
   let workerSpeechEndTime = null; let turnStartTime = null;
   let workerSpeechActive = false;
   let workerSilenceTimer = null;
@@ -123,21 +226,123 @@ wss.on('connection', function(ws) {
   let setupTime = null;
   let firstAudioTime = null;
   let listeningTransitionTimer = null;
+  const TURN_SILENCE_MS = 900;
+  const noise = createNoiseEstimator({ frameMs: 20 });
+  const vad = createSileroVad({ sampleRate: 16000 });
+  let audioClockMs = 0;
+  let vadChain = Promise.resolve();
+  let activityOpen = false;
+  let expectUpload = 0;
+  let turnHadTranscript = false;  // bu turn icin inputTranscription geldi mi
+  let lastTurnMetrics = null;     // gelmediyse kayda ne yazacagiz
+
+  let dfEnabled = true;        // istemcinin istedigi durum
+  let deepFilter = null;       // session boyunca state tasiyan filtre ornegi
+  let currentAudioFile = '';   // CSV'de hangi kayit oldugu
+  let turnCloseTime = null;    // activityEnd ani — total sure buradan sayilir
+  let turnTtfaMs = null;
+  let turnDfMs = null;
+  let turnWorkerText = '';
+  let lastTurnPcm = null;      // REST fallback transkripsiyonu icin bu turn'un sesi
+
+  function ensureDeepFilter() {
+    if (!dfEnabled) return null;
+    if (!isDenoiserReady()) {
+      console.warn('[' + DENOISE_LABEL + '] model hazir degil — bu turn ham ses gidiyor');
+      return null;
+    }
+    if (!deepFilter) {
+      deepFilter = DENOISE_ENGINE === 'rnnoise'
+        ? createRnnoise({ inputRate: 16000, outputRate: 16000 })
+        : createDeepFilter({ inputRate: 16000, outputRate: 16000 });
+    }
+    return deepFilter;
+  }
 
   function send(obj) {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
 
-  function scheduleListeningTransition(reason) {
+  function scheduleListeningTransition(reason, delayMs) {
     if (listeningTransitionTimer) {
       clearTimeout(listeningTransitionTimer);
       listeningTransitionTimer = null;
     }
     listeningTransitionTimer = setTimeout(function() {
       sessionState = 'LISTENING';
-      console.log('[Gemini] Auto-transition to LISTENING');
+      console.log('[Gemini] Auto-transition to LISTENING (' + reason + ')');
       listeningTransitionTimer = null;
-    }, 2000);
+    }, delayMs || 2000);
+  }
+
+  function analyzePcm(buf) {
+    const FRAME = 640;
+    for (let off = 0; off + 2 <= buf.length; off += FRAME) {
+      const sub = buf.subarray(off, Math.min(off + FRAME, buf.length));
+      const t = audioClockMs;
+      audioClockMs += sub.length / 32;
+      const stats = frameStatsPcm16(sub);
+      vadChain = vadChain.then(async function () {
+        vad.processPcm16(sub);
+        const p = await vad.flush();
+        noise.pushFrame({ ...stats, speechProb: p }, t);
+      }).catch(function (e) { console.error('[VAD] chain error:', e.message); });
+    }
+    return vadChain;
+  }
+
+  function closeTurn() {
+    activityOpen = false;
+    const spans = vad.takeSpans();
+    const m = noise.endTurn({ speechSpans: spans.length ? spans : null });
+
+    const totalSpeechMs = spans.reduce(function (s, sp) { return s + (sp.endMs - sp.startMs); }, 0);
+    turnHadTranscript = false;
+    lastTurnMetrics = {
+      snrDb: m.snrDb, snrReliable: m.snrReliable, noisy: m.noisy, spans: spans.length,
+      speechMs: Math.round(totalSpeechMs),
+      gaps: m.collisions.filter(function (c) { return c.type === 'gap'; }).length,
+    };
+
+    console.log('[Gemini Noise] snr=' + (m.snrDb != null ? m.snrDb.toFixed(1) : 'n/a')
+      + ' noisy=' + m.noisy + ' collisions=' + m.collisions.length + ' spans=' + spans.length
+      + ' speech=' + Math.round(totalSpeechMs) + 'ms');
+
+      if (m.collisions.length) {
+      console.log('[Gemini Collisions] speechP90=' + (m.speechDbfs != null ? m.speechDbfs.toFixed(1) : 'n/a')
+        + ' speechMed=' + (m.speechMedDbfs != null ? m.speechMedDbfs.toFixed(1) : 'n/a')
+        + ' noiseLevel=' + (m.noiseLevelDbfs != null ? m.noiseLevelDbfs.toFixed(1) : 'n/a') + ' dBFS');
+      for (const c of m.collisions) {
+        const margin = m.speechMedDbfs != null ? (c.peakDbfs - m.speechMedDbfs) : null;
+        console.log('   ' + String(c.type).padEnd(7)
+          + ' t=' + Math.round(c.tMs) + 'ms dur=' + Math.round(c.durationMs) + 'ms'
+          + ' peak=' + (c.peakDbfs != null ? c.peakDbfs.toFixed(1) : 'n/a') + 'dB'
+          + (margin != null ? ' margin=' + (margin >= 0 ? '+' : '') + margin.toFixed(1) + 'dB' : ''));
+      }
+    }
+      
+      const gapCount = m.collisions.filter(function (c) { return c.type === "gap";}).length;
+      const burstCount = loudOverlaps(m).length;
+      const snrLow = m.snrReliable && m.snrDb != null && m.snrDb < 12;
+      const degraded = gapCount > 0 || burstCount > 0 || m.noisy || snrLow;      
+      send({ type: "noise_metrics", snrDb: m.snrDb, noisy: m.noisy, injected: degraded });
+
+      if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+        if (degraded) {
+          const report = buildMonitorReport(m, spans);
+          console.log("[Gemini Monitor]", report);
+          geminiWs.send(JSON.stringify({
+            client_content: { turns: [{ role: "user", parts: [{ text: report }] }],
+          turn_complete: false }
+          }));
+        }
+        geminiWs.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+      }
+      turnStartTime = Date.now();
+      firstAudioTime = null;
+      turnCloseTime = Date.now();
+      turnTtfaMs = null;
+      turnWorkerText = '';
   }
 
   function connectGemini() {
@@ -148,7 +353,7 @@ wss.on('connection', function(ws) {
     geminiWs.on('open', function() {
       console.log('[Gemini] Connected at', Date.now());
 
-      const setup = {
+            const setup = {
   setup: {
     model: `models/${GEMINI_MODEL}`,
     generation_config: {
@@ -161,15 +366,8 @@ wss.on('connection', function(ws) {
         }
       }
     },
-    realtime_input_config: {
-  automatic_activity_detection: {
-    disabled: false,
-    end_of_speech_sensitivity: "END_SENSITIVITY_LOW",
-    start_of_speech_sensitivity: "START_SENSITIVITY_LOW",
-    silence_duration_ms: 1500,
-    prefix_padding_ms: 200,
-  }
-},
+    realtime_input_config: { automatic_activity_detection: { disabled: true } },
+    realtimeInputConfig:   { automaticActivityDetection: { disabled: true } },
     // language_codes removed — caused WebSocket 1007 on Gemini Live setup
     input_audio_transcription: {},
     output_audio_transcription: {},
@@ -200,33 +398,39 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
   if (!greetingSent) {
   greetingSent = true;
 
-  if (cachedGreetingChunks) {
-    console.log('[Gemini] Using cached greeting,', cachedGreetingChunks.length, 'chunks');
-    for (const chunk of cachedGreetingChunks) {
-      send({ type: 'audio_chunk', chunk, index: 0, mimeType: cachedGreetingMimeType });
-      await new Promise(r => setTimeout(r, 20));
+  if (GREETING_PCM) {
+    // Disk cache var — Gemini'ye greeting urettirme, dosyadan cal
+    console.log('[Gemini] Greeting disk cache\'ten caliniyor,', GREETING_PCM_MS + 'ms');
+    const CHUNK = 9600; // 200ms @ 24kHz PCM16
+    for (let off = 0; off < GREETING_PCM.length; off += CHUNK) {
+      send({
+        type: 'audio_chunk',
+        chunk: GREETING_PCM.subarray(off, off + CHUNK).toString('base64'),
+        index: 0,
+        mimeType: 'audio/pcm;rate=24000',
+      });
+      await new Promise(r => setTimeout(r, 10));
     }
     send({ type: 'audio_stream_end' });
     announceGreeting();
-    // Stay in GREETING until client has time to play audio — no playback_done wait
-    scheduleListeningTransition('cached greeting');
-    return; // cache hit — do not send greetingMsg to Gemini
-  } else {
-    console.log('[Gemini] No cache, generating greeting fresh');
-    cachedGreetingChunks = [];
-    isCachingGreeting = true;
-    const greetingMsg = {
-      client_content: {
-        turns: [{
-          role: 'user',
-          parts: [{ text: `[SYSTEM] Greet the worker now with exactly this message, word for word, and nothing else: "${WORKER_INTRO}"` }]
-        }],
-        turn_complete: true
-      }
-    };
-    geminiWs.send(JSON.stringify(greetingMsg));
-    // Stay GREETING until turnComplete + 2s timeout
+    primeGeminiGreetingContext(WORKER_INTRO);
+    scheduleListeningTransition('disk greeting', GREETING_PCM_MS + 500);
+    return;
   }
+
+  // Cache yok — bir kereligine Gemini'ye urettir, chunk'lari topla, diske yaz
+  console.log('[Gemini] Disk cache yok — greeting uretiliyor ve kaydedilecek');
+  cachedGreetingChunks = [];
+  isCachingGreeting = true;
+  geminiWs.send(JSON.stringify({
+    client_content: {
+      turns: [{
+        role: 'user',
+        parts: [{ text: `[SYSTEM] Greet the worker now with exactly this message, word for word, and nothing else: "${WORKER_INTRO}"` }]
+      }],
+      turn_complete: true
+    }
+  }));
 }
 }
 
@@ -242,6 +446,7 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
     const ttfa = firstAudioTime - turnStartTime;
     console.log('[Gemini] TTFA (end-of-speech → first audio chunk):', ttfa + 'ms');
     send({ type: 'gemini_turn_latency', ms: ttfa });
+    turnTtfaMs = ttfa;
     turnStartTime = null;
     lastAudioSentTime = null;
   }
@@ -267,16 +472,61 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
 
           if (content.turnComplete) {
             const isGreetingTurn = sessionState === 'GREETING' || isCachingGreeting;
+            // inputTranscription ayri bir ASR yan kanali; gurultude pes edebiliyor.
+            // Ama ses native olarak modele giriyor, yani model anlamis olabilir.
+            // Bos birakip gecmek karari gerekcesiz gosterir — kayda acik bir iz birak.
+            if (!isGreetingTurn && !turnHadTranscript && aiTranscriptBuffer && lastTurnMetrics) {
+              const mk = '(worker audio not transcribed — snr '
+                + (lastTurnMetrics.snrDb != null ? lastTurnMetrics.snrDb.toFixed(1) : 'n/a') + ' dB, '
+                + lastTurnMetrics.speechMs + 'ms speech in ' + lastTurnMetrics.spans + ' span(s)'
+                + (lastTurnMetrics.gaps ? ', ' + lastTurnMetrics.gaps + ' gap(s)' : '') + ')';
+              console.log('[Gemini] NO TRANSCRIPT — model yine de cevapladi ' + mk);
+              console.log('[Gemini]   -> AI:', aiTranscriptBuffer.trim());
+              send({ type: 'transcript', text: mk, role: 'worker' });
+            }
             if (aiTranscriptBuffer) {
-    // greeting turn already renders its own bubble via announceGreeting()
-    if (!isGreetingTurn) send({ type: 'transcript', text: aiTranscriptBuffer, role: 'ai' });
-    aiTranscriptBuffer = '';
-  }
+              // greeting turn already renders its own bubble via announceGreeting()
+              if (!isGreetingTurn) {
+                send({ type: 'transcript', text: aiTranscriptBuffer, role: 'ai' });
+                const row = {
+                  audioFile: currentAudioFile,
+                  deepfilter: dfEnabled && isDenoiserReady(),
+                  transcript: turnWorkerText.trim(),
+                  response: aiTranscriptBuffer.trim(),
+                  ttfaMs: turnTtfaMs,
+                  totalMs: turnCloseTime ? Date.now() - turnCloseTime : null,
+                  dfMs: turnDfMs,
+                  snrDb: lastTurnMetrics ? lastTurnMetrics.snrDb : null,
+                };
+                turnCloseTime = null;
+
+                // Live ASR pes ettiyse sesi REST'e sorup kayda gecir — satiri o zaman yaz
+                if (!row.transcript && lastTurnPcm && lastTurnPcm.length) {
+                  const pcmForRest = lastTurnPcm;
+                  transcribeWithRest(pcmForRest, actualSampleRate).then(function (text) {
+                    row.transcriptRest = text;
+                    console.log('[REST ASR] fallback transcript:', text);
+                    send({ type: 'transcript', text: '(REST) ' + text, role: 'worker' });
+                    appendTestRow(row);
+                  }).catch(function (e) {
+                    console.error('[REST ASR] hata:', e.response ? e.response.status : e.message);
+                    appendTestRow(row);
+                  });
+                } else {
+                  appendTestRow(row);
+                }
+              }
+              aiTranscriptBuffer = '';
+            }
             // a turn that produced no audio must not trigger playback of the previous buffer
             if (turnHadAudio) send({ type: 'audio_stream_end' });
             turnHadAudio = false;
             if (sessionState === 'GREETING' || isCachingGreeting) {
               announceGreeting();
+              if (isCachingGreeting && cachedGreetingChunks && cachedGreetingChunks.length) {
+                saveGreetingToDisk(cachedGreetingChunks);
+                cachedGreetingChunks = null;
+              }
               isCachingGreeting = false;
               console.log('[Gemini] Greeting audio done — auto LISTENING in 2s');
               scheduleListeningTransition('greeting turnComplete');
@@ -286,13 +536,10 @@ console.log('[Gemini RAW]', JSON.stringify(msg).substring(0, 300));
 
         // Input transcription (what worker said)
 if (msg.serverContent && msg.serverContent.inputTranscription) {
+  turnHadTranscript = true;
   console.log('[Gemini] Worker said:', msg.serverContent.inputTranscription.text);
   send({ type: 'transcript', text: msg.serverContent.inputTranscription.text, role: 'worker' });
-  if (sessionState === 'LISTENING') {
-    // inputTranscription fires when Gemini detects end-of-speech — use this as turn start
-    turnStartTime = Date.now();
-    firstAudioTime = null;
-  }
+  turnWorkerText += msg.serverContent.inputTranscription.text;
 }
 
         if (msg.usageMetadata && turnStartTime) {
@@ -313,6 +560,7 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
     geminiWs.on('error', function(e) {
       console.error('[Gemini] Error:', e.message);
       send({ type: 'stage', stage: 'stt', status: 'error' });
+      send({ type: 'log', message: 'Gemini baglantisi kurulamadi: ' + e.message });
     });
 
     geminiWs.on('close', function(code, reason) {
@@ -339,6 +587,18 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
         if (msg.type === 'gemini_sample_rate') {
           actualSampleRate = msg.rate;
           console.log('[Gemini] Client sample rate:', actualSampleRate);
+        }
+
+        if (msg.type === "audio_upload") {
+          expectUpload = msg.bytes || 1;
+          currentAudioFile = msg.filename || '';
+        }
+
+        if (msg.type === 'toggle_denoise') {
+          dfEnabled = !!msg.enabled;
+          deepFilter = null; // ON/OFF gecisinde filtre state'i sifirlansin
+          console.log('[' + DENOISE_LABEL + '] tercih =', dfEnabled ? 'ON' : 'OFF');
+          send({ type: 'denoise_engine', engine: DENOISE_ENGINE, label: DENOISE_LABEL, active: dfEnabled && isDenoiserReady() });
         }
 
         if (msg.type === 'start') {
@@ -373,50 +633,88 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
         }
 
       } else {
-        // Binary audio — file uploads are large PCM blobs; mic chunks are small.
-        // Gate file sends on LISTENING (retry up to 3× with 500ms wait).
         const buf = Buffer.from(data);
-        const CHUNK_SIZE = 3200; // ~100ms @ 16kHz mono 16-bit
-        const isFileUpload = buf.length > CHUNK_SIZE;
+        const isFileUpload = expectUpload > 0 || buf.length > 3200;
+        if (expectUpload > 0) expectUpload = 0;
 
         if (isFileUpload) {
-          let ready = sessionState === 'LISTENING';
-          for (let attempt = 0; !ready && attempt < 3; attempt++) {
+          let ready = sessionState === "LISTENING";
+          for (let attempt = 0; !ready && attempt < 3; attempt++){
             console.log('[Gemini] File upload waiting for LISTENING (attempt ' + (attempt + 1) + '/3), state=' + sessionState);
-            await new Promise(function(r) { setTimeout(r, 500); });
-            ready = sessionState === 'LISTENING';
+            await new Promise(function (r) { setTimeout(r, 500); });
+            ready = sessionState === "LISTENING";
           }
           if (!ready) {
             console.warn('[Gemini] Dropping file upload — not LISTENING after 3 attempts (state=' + sessionState + ')');
             return;
           }
-        } else if (sessionState !== 'LISTENING') {
-          // Drop live mic audio during GREETING / non-listening states
+          if (!geminiWs || geminiWs.readyState !== WebSocket.OPEN) return;
+
+          vad.resetTurn();
+
+          let sendBuf = buf;
+          turnDfMs = null;
+          const df = ensureDeepFilter();
+          if (df) {
+            const t0 = Date.now();
+            const DF_CHUNK = 640;
+            const parts = [];
+            for (let off = 0; off < buf.length; off += DF_CHUNK) {
+              const chunk = buf.subarray(off, Math.min(off + DF_CHUNK, buf.length));
+              const clean = await df.processPcm16(chunk);
+              if (clean && clean.length) parts.push(clean);
+            }
+            sendBuf = Buffer.concat(parts);
+            turnDfMs = Date.now() - t0;
+            console.log('[' + DENOISE_LABEL + '] ON | in:', buf.length, '-> out:', sendBuf.length, 'byte |', turnDfMs + 'ms');
+          } else {
+            console.log('[' + DENOISE_LABEL + '] OFF — ham ses Gemini\'ye gidiyor');
+          }
+
+          await analyzePcm(sendBuf);
+          lastTurnPcm = sendBuf;
+
+          activityOpen = true;
+          geminiWs.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+          const CHUNK_SIZE = 3200;
+          for (let off = 0; off < sendBuf.length; off += CHUNK_SIZE) {
+            const slice = sendBuf.subarray(off, Math.min(off + CHUNK_SIZE, sendBuf.length));
+            geminiWs.send(JSON.stringify({ realtime_input: { audio: {
+              data: slice.toString("base64"), mimeType: "audio/pcm;rate=" + actualSampleRate } } }));
+              lastAudioSentTime = Date.now();
+              if (off + CHUNK_SIZE < sendBuf.length)  await new Promise(function (r) {
+                setTimeout(r, 20); });
+          }
+          closeTurn();
+          console.log('[Gemini] File upload done — activityEnd');
           return;
         }
 
-        if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-          for (let offset = 0; offset < buf.length; offset += CHUNK_SIZE) {
-            const slice = buf.subarray(offset, Math.min(offset + CHUNK_SIZE, buf.length));
-            const audioMsg = {
-              realtime_input: {
-                audio: {
-                  data: slice.toString('base64'),
-                  mimeType: 'audio/pcm;rate=' + actualSampleRate
-                }
-              }
-            };
-            geminiWs.send(JSON.stringify(audioMsg));
-            lastAudioSentTime = Date.now();
-            if (offset + CHUNK_SIZE < buf.length) {
-              await new Promise(function(r) { setTimeout(r, 20); });
-            }
+        if (sessionState === "LISTENING") return;
+        if(!geminiWs || geminiWs.readyState !== WebSocket.OPEN) return;
+        
+        await analyzePcm(buf);
+
+        if (vad.isSpeaking() && !activityOpen) {
+          activityOpen = true;
+          geminiWs.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+          console.log('[Gemini Turn] activityStart @', audioClockMs.toFixed(0) + 'ms');
+        }
+
+        if (activityOpen) {
+          const CHUNK_SIZE = 3200;
+          for (let off = 0; off < buf.length; off += CHUNK_SIZE) {
+            const slice = buf.subarray(off, Math.min(off + CHUNK_SIZE, buf.length));
+            geminiWs.send(JSON.stringify({ realtime_input: {audi0: {
+              data: slice.toString("base64"), mimeType: "audio/pcm;rate=" + actualSampleRate } } }));
+              lastAudioSentTime = Date.now();
+              if (off + CHUNK_SIZE < buf.length) await new Promise(function (r) {
+                setTimeout(r, 20); });
           }
-          // Signal end of audio so Gemini commits the turn (file uploads especially)
-          if (isFileUpload) {
-            geminiWs.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
-            console.log('[Gemini] File upload done — sent audioStreamEnd');
-          }
+        }
+        if (activityOpen && !vad.isSpeaking() && vad.idleMs() >= TURN_SILENCE_MS) {
+          closeTurn();
+          console.log('[Gemini Turn] activityEnd');
         }
       }
     } catch(e) {
@@ -441,6 +739,8 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
 
 // ─── Twilio WebSocket (Gemini pipeline) ───────────────────────────────────────
 const { spawn } = require('child_process');
+const { BuildContextImpl } = require('twilio/lib/rest/serverless/v1/service/build');
+const { InteractionTransferListInstance } = require('twilio/lib/rest/flexApi/v1/interaction/interactionChannel/interactionTransfer');
 const twilioWss = new WebSocket.Server({ noServer: true });
 
 server.on('upgrade', function(request, socket, head) {
@@ -513,6 +813,43 @@ function mulawToPcm(mulawBuffer) {
 
 const TWILIO_WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay?`;
 
+const OVERLAP_MARGIN_DB = 14;
+
+function loudOverlaps(m) {
+  if (m.speechDbfs == null) return [];
+  return m.collisions.filter(function (c) {
+    return c.type === "overlap" && c.peakDbfs != null && (c.peakDbfs - m.speechMedDbfs) >= OVERLAP_MARGIN_DB;
+  });
+}
+
+function buildMonitorReport(m, spans) {
+  const facts = [];
+  if (m.snrDb != null && m.snrReliable && m.snrDb < 20) facts.push("signal-to-noise " + m.snrDb.toFixed(0) + " dB");
+
+  if (spans.length) {
+    const uttStart = Math.min.apply(null, spans.map(function (s) { return s.startMs; }));
+    const uttEnd = Math.max.apply(null, spans.map(function (s) { return s.endMs; }));
+    const width = Math.max(1, uttEnd - uttStart);
+    const placeOf = function (tMs) {
+      const rel = (tMs - uttStart) / width;
+      return rel < 0.15 ? "at the very beginning of the reply"
+        : rel > 0.85 ? "at the very end of the reply"
+        : "in the middle of the reply";
+    };
+
+    for (const g of m.collisions.filter(function (c) { return c.type === "gap"; })) {
+      facts.push("a " + (g.durationMs / 1000).toFixed(1) + " second noise burst " + placeOf(g.tMs));
+    }
+    for (const o of loudOverlaps(m)) {
+      const cover = Math.round(100 * Math.min(1, o.durationMs / width));
+      facts.push("a " + (o.durationMs / 1000).toFixed(1)
+        + " second burst of noise LOUDER than the worker's voice, " + placeOf(o.tMs)
+        + ", covering about " + cover + "% of the reply — one or more words there were drowned out");
+    }
+  }
+  return "[ACOUSTIC MONITOR] " + facts.join("; ") + ".";
+}
+
 twilioWss.on('connection', function(ws) {
   console.log('[Twilio-Gemini WS] Connected');
   let streamSid = null;
@@ -542,6 +879,9 @@ twilioWss.on('connection', function(ws) {
   const vad = createSileroVad({ sampleRate: 8000 });
   let audioClockMs = 0;
   let agentPlaybackUntil = 0;
+  const TURN_SILENCE_MS = 900;
+  const PREROLL_BYTES = 9600;
+  let activityOpen = false;
 
   function isSpuriousUnclearResponse(text) {
     const t = (text || '').toLowerCase();
@@ -552,20 +892,17 @@ twilioWss.on('connection', function(ws) {
   function startAudioFlush() {
     if (flushInterval) return;
     flushInterval = setInterval(function() {
-      if (pcmBuffer.length > 0
-        && geminiWs && geminiWs.readyState === WebSocket.OPEN
-        && sessionState === 'LISTENING') {
-        const toSend = pcmBuffer;
-        pcmBuffer = Buffer.alloc(0);
-        geminiWs.send(JSON.stringify({
-          realtime_input: {
-            audio: {
-              data: toSend.toString('base64'),
-              mimeType: 'audio/pcm;rate=16000'
-            }
-          }
-        }));
+      if (!geminiWs || geminiWs.readyState !== WebSocket.OPEN || sessionState !== "LISTENING") return;
+      if(!activityOpen) {
+        if (pcmBuffer.length > PREROLL_BYTES) pcmBuffer = pcmBuffer.subarray(pcmBuffer.length - PREROLL_BYTES);
+        return;
       }
+      if (pcmBuffer.length === 0) return;
+      const toSend = pcmBuffer;
+      pcmBuffer = Buffer.alloc(0);
+      geminiWs.send(JSON.stringify({
+        realtime_input: { audio: { data: toSend.toString("base64"), mimeType: "audio/pcm;rate=16000" } }
+      }));
     }, 100);
   }
 
@@ -660,15 +997,8 @@ twilioWss.on('connection', function(ws) {
               voice_config: { prebuilt_voice_config: { voice_name: 'Charon' } },
             }
           },
-          realtime_input_config: {
-  automatic_activity_detection: {
-    disabled: false,
-    end_of_speech_sensitivity: "END_SENSITIVITY_LOW",
-    start_of_speech_sensitivity: "START_SENSITIVITY_LOW",
-    silence_duration_ms: 1500,
-    prefix_padding_ms: 200,
-  }
-},
+          realtime_input_config: { automatic_activity_detection: { disabled: true } },
+          realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
           input_audio_transcription: {},
           output_audio_transcription: {},
           system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
@@ -690,6 +1020,38 @@ twilioWss.on('connection', function(ws) {
           pcmBuffer = Buffer.alloc(0);
           twilioAiTranscript = '';
           sessionState = 'GREETING';
+          if (GREETING_ULAW) {
+            console.log('[Twilio-Gemini] Greeting disk cache\'ten caliniyor,', GREETING_PCM_MS + 'ms');
+            if (silenceInterval) { clearInterval(silenceInterval); silenceInterval = null; }
+            twilioFirstAudioTime = Date.now();
+            callLog.ttfa_ms = twilioFirstAudioTime - twilioSetupTime;
+
+            for (let off = 0; off < GREETING_ULAW.length; off += 160) {   // 160 bayt = 20ms
+              sendAudioToTwilio(GREETING_ULAW.subarray(off, off + 160));
+            }
+            callLog.transcript.push({ role: 'ai', text: WORKER_INTRO, time: new Date().toISOString() });
+
+            geminiWs.send(JSON.stringify({
+              client_content: {
+                turns: [
+                  { role: 'user',  parts: [{ text: '[SYSTEM] The greeting has already been played to the worker from a recording. Do not greet again. Stay completely silent until the worker speaks.' }] },
+                  { role: 'model', parts: [{ text: WORKER_INTRO }] }
+                ],
+                turn_complete: false
+              }
+            }));
+
+            setTimeout(function () {
+              pcmBuffer = Buffer.alloc(0);
+              twilioAiTranscript = '';
+              sessionState = 'LISTENING';
+              console.log('[Twilio-Gemini] Now listening');
+              startAudioFlush();
+              startWorkerSilenceTimer();
+            }, GREETING_PCM_MS + 500);
+
+            return;
+          }
           geminiWs.send(JSON.stringify({
             client_content: {
               turns: [{ role: 'user', parts: [{ text: `[SYSTEM] Say this exact greeting word for word and nothing else: "${TWILIO_WORKER_INTRO}"` }] }],
@@ -750,20 +1112,6 @@ twilioWss.on('connection', function(ws) {
             }
           }
           if (content.turnComplete) {
-            if (sessionState === "LISTENING") {
-              const nm = noise.endTurn();
-            console.log('[Gemini Noise] Turn committed | snr=' + (nm.snrDb != null ? nm.snrDb.toFixed(1) : 'n/a')
-                + ' | floor=' + (nm.floorDbfs != null ? nm.floorDbfs.toFixed(1) : 'n/a') + ' | noisy=' + nm.noisy);
-            if (!callLog.noiseTurns) callLog.noiseTurns = [];
-            callLog.noiseTurns.push({
-              time: new Date().toISOString(),
-              snrDb: nm.snrDb,
-              noiseLevelDbfs: nm.noiseLevelDbfs,
-              speechDbfs: nm.speechDbfs,
-              noisy: nm.noisy,
-              snrReliable: nm.snrReliable
-            });
-          }
             // Check for resolution phrases after each AI turn (post-greeting)
             if (sessionState === 'LISTENING' && twilioAiTranscript) {
               const t = twilioAiTranscript.toLowerCase();
@@ -861,18 +1209,59 @@ twilioWss.on('connection', function(ws) {
         startSilenceKeepalive();
       }
 
-      if (msg.event === 'media') {
+            if (msg.event === 'media') {
         const mulawChunk = Buffer.from(msg.media.payload, 'base64');
         noise.setAgentSpeaking(Date.now() < agentPlaybackUntil + 200);
         vad.processMulaw(mulawChunk);
         noise.pushFrame({ ...frameStatsMulaw(mulawChunk), speechProb: vad.prob() }, audioClockMs);
         audioClockMs += mulawChunk.length / 8;
-        if (sessionState === "LISTENING") {
+
+        if (sessionState === 'LISTENING' && geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+          // konusma basladi -> turn ac
+          if (vad.isSpeaking() && !activityOpen) {
+            activityOpen = true;
+            geminiWs.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+            console.log('[Twilio-Gemini Turn] activityStart @', audioClockMs.toFixed(0) + 'ms');
+          }
+
+          // konusma bitti + yeterli sessizlik -> olc, enjekte et, turn'u kapat
+          if (activityOpen && !vad.isSpeaking() && vad.idleMs() >= TURN_SILENCE_MS) {
+            activityOpen = false;
+            const spans = vad.takeSpans();
+            const m = noise.endTurn({ speechSpans: spans.length ? spans : null });
+            console.log('[Twilio-Gemini Noise] snr=' + (m.snrDb != null ? m.snrDb.toFixed(1) : 'n/a')
+              + ' noisy=' + m.noisy + ' collisions=' + m.collisions.length + ' spans=' + spans.length);
+
+            if (!callLog.noiseTurns) callLog.noiseTurns = [];
+            const entry = {
+              time: new Date().toISOString(), snrDb: m.snrDb, noiseLevelDbfs: m.noiseLevelDbfs,
+              speechDbfs: m.speechDbfs, noisy: m.noisy, snrReliable: m.snrReliable,
+              collisions: m.collisions.length, injected: false, report: null,
+            };
+            callLog.noiseTurns.push(entry);
+
+            const gapCount = m.collisions.filter(function (c) { return c.type === "gap";}).length;
+            const snrLow = m.snrReliable && m.snrDb != null && m.snrDb < 12;
+            const degraded = gapCount > 0 || m.noisy || snrLow;
+            
+            if (degraded) {
+              const report = buildMonitorReport(m, spans);
+              console.log('[Twilio-Gemini Monitor]', report);
+              entry.injected = true;
+              entry.report = report;
+              geminiWs.send(JSON.stringify({
+                client_content: { turns: [{ role: 'user', parts: [{ text: report }] }], turn_complete: false }
+              }));
+            }
+
+            geminiWs.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+            console.log('[Twilio-Gemini Turn] activityEnd');
+          }
+
           try {
-            const pcmChunk = mulawToPcm(mulawChunk);
-            pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
+            pcmBuffer = Buffer.concat([pcmBuffer, mulawToPcm(mulawChunk)]);
           } catch (e) {
-            console.error("[DEBUG] mulawToPcm error:", e.message);
+            console.error('[DEBUG] mulawToPcm error:', e.message);
           }
         }
       }
@@ -1103,6 +1492,18 @@ app.get('/health', function(req, res) {
     twilio_twiml: (process.env.PUBLIC_URL || '') + '/outbound-gemini'
   });
 });
+
+if (DENOISE_ENGINE === 'rnnoise') {
+  preloadRnnoise()
+    .then(function () { console.log('[RNNoise] WASM hazir'); })
+    .catch(function (e) { console.error('[RNNoise] WASM yuklenemedi:', e.message); });
+} else if (DENOISE_ENGINE === 'deepfilter') {
+  preloadDeepFilter()
+    .then(function () { console.log('[DeepFilter] model hazir'); })
+    .catch(function (e) { console.error('[DeepFilter] model yuklenemedi:', e.message); });
+} else {
+  console.log('[Denoise] Preload atlandi — DENOISE_ENGINE=off');
+}
 
 const PORT = process.env.GEMINI_PORT || 3001;
 server.listen(PORT, function() {

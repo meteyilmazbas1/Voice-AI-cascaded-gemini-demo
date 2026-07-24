@@ -292,6 +292,13 @@
     line-height: 1.45;
   }
   .cmp-panel-run.open .cmp-panel-run-bd { display: block; }
+  .cmp-panel-run-tx {
+    padding: 2px 10px 8px;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.35;
+    word-break: break-word;
+  }
   .cmp-panel-run-empty { font-size: 11px; color: var(--muted); padding: 8px 0; }
   .cmp-panel-run-avg {
     margin-top: 10px;
@@ -842,8 +849,8 @@
         </div>
         <div class="latency-row">
           <div>
-            <div class="latency-label">Client E2E <span class="breakdown-tip" data-tip="Worker konuşmayı bitirdiği andan AI sesinin gerçekten duyulmaya başladığı ana kadar — network gecikmesi dahil gerçek kullanıcı deneyimi.">ⓘ</span></div>
-            <div class="target-note">Speech end → first audio heard</div>
+            <div class="latency-label">Client E2E <span class="breakdown-tip" data-tip="Ses dosyasının tamamı gönderildiği andan AI sesinin ilk duyulduğu ana kadar. DeepFilter + Gemini + network + decode dahil.">ⓘ</span></div>
+            <div class="target-note">Audio sent → first audio heard</div>
           </div>
           <span class="latency-val" id="lat-client-e2e">—</span>
         </div>
@@ -1076,6 +1083,8 @@
 <script>
 let ws = null, mediaRecorder = null, audioStream = null;
 let denoiseEnabled = true;
+let denoiseLabel = '';   // sunucudan gelen motor adi: RNNoise / DeepFilterNet3
+let denoiseEngine = '';  // rnnoise | deepfilter | off
 let sessionActive = false, micActive = false;
 let stageTimers = {};
 let currentModel = 'claude-haiku-4-5';
@@ -1271,6 +1280,21 @@ let audioChunks = [];
 let audioChunkMimeType = null;
 let isStreaming = false;
 
+// Streaming PCM player state (Gemini)
+let pcmNextTime = 0;          // AudioContext saatinde bir sonraki chunk'in baslama ani
+let pcmLeftoverByte = null;   // 16-bit sample ortasindan bolunen tek byte
+let pcmScheduledCount = 0;    // planlanmis ama henuz bitmemis chunk sayisi
+let pcmStreamEnded = false;   // audio_stream_end geldi mi
+let pcmFirstScheduled = false;// ilk chunk planlandi mi (Client E2E tetigi)
+
+function resetPcmStream() {
+  pcmNextTime = 0;
+  pcmLeftoverByte = null;
+  pcmScheduledCount = 0;
+  pcmStreamEnded = false;
+  pcmFirstScheduled = false;
+}
+
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
@@ -1280,6 +1304,7 @@ function resetStreamPlayer() {
   audioChunks = [];
   audioChunkMimeType = null;
   isStreaming = false;
+  resetPcmStream();
 }
 
 // Play raw PCM audio (from Gemini — audio/pcm;rate=24000)
@@ -1311,6 +1336,73 @@ async function playPCMChunks(chunks) {
     src.start();
     onFirstAudioPlayback();
   } catch(e) { console.warn('[PCM] Decode error:', e.message); }
+}
+
+// Chunk gelir gelmez cal — kuyruga ekleyerek kesintisiz zincir kurar.
+// Client E2E'nin bitis noktasi burasi: ilk chunk gercekten duyulmaya basladigi an.
+function playPCMChunkStreaming(b64) {
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const sampleRate = 24000;
+
+    const bin = atob(b64);
+    let bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+    // onceki chunk'tan artan tek byte varsa basa ekle
+    if (pcmLeftoverByte !== null) {
+      const merged = new Uint8Array(bytes.length + 1);
+      merged[0] = pcmLeftoverByte;
+      merged.set(bytes, 1);
+      bytes = merged;
+      pcmLeftoverByte = null;
+    }
+    // tek sayida byte kaldiysa sonuncuyu bir sonraki chunk'a devret
+    if (bytes.length % 2 === 1) {
+      pcmLeftoverByte = bytes[bytes.length - 1];
+      bytes = bytes.subarray(0, bytes.length - 1);
+    }
+    if (bytes.length === 0) return;
+
+    // PCM16 LE -> float32 (byte hizalamasi icin DataView)
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const n = bytes.byteLength >> 1;
+    const float32 = new Float32Array(n);
+    for (let i = 0; i < n; i++) float32[i] = view.getInt16(i * 2, true) / 32768;
+
+    const audioBuffer = ctx.createBuffer(1, n, sampleRate);
+    audioBuffer.getChannelData(0).set(float32);
+    const src = ctx.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(ctx.destination);
+
+    // kuyruk: ilk chunk hemen, sonrakiler bir oncekinin arkasina
+    const now = ctx.currentTime;
+    const startAt = pcmNextTime > now ? pcmNextTime : now;
+    src.start(startAt);
+    pcmNextTime = startAt + audioBuffer.duration;
+
+    pcmScheduledCount++;
+    src.onended = function () {
+      pcmScheduledCount--;
+      if (pcmStreamEnded && pcmScheduledCount <= 0) {
+        aiSpeaking = false;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'playback_done' }));
+        }
+      }
+    };
+
+    // ILK ses gercekten duyulmaya basladigi an -> Client E2E saati durur
+    if (!pcmFirstScheduled) {
+      pcmFirstScheduled = true;
+      const delayMs = Math.max(0, (startAt - now) * 1000);
+      setTimeout(onFirstAudioPlayback, delayMs);
+    }
+  } catch (e) {
+    console.warn('[PCM stream] Decode error:', e.message);
+  }
 }
 
 // Merge all base64 chunks into one and play (MP3/ElevenLabs)
@@ -1382,10 +1474,19 @@ function changeTtsMode(useElevenLabs) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tts_mode', mode: ttsMode }));
 }
 
+function updateDenoiseBtn() {
+  const btn = document.getElementById('denoiseBtn');
+  if (!btn) return;
+  // Motor adi sunucudan gelmediyse eski etikete geri dus
+  const suffix = denoiseEngine === 'off'
+    ? ' (server bypass)'
+    : (denoiseLabel ? ' · ' + denoiseLabel : '');
+  btn.textContent = '🎙️ Noise Cancel: ' + (denoiseEnabled ? 'ON' : 'OFF') + suffix;
+}
+
 function toggleDenoise() {
   denoiseEnabled = !denoiseEnabled;
-  const btn = document.getElementById('denoiseBtn');
-  if (btn) btn.textContent = '🎙️ Noise Cancel: ' + (denoiseEnabled ? 'ON' : 'OFF');
+  updateDenoiseBtn();
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
   }
@@ -1419,29 +1520,43 @@ function connectWS() {
   ws.onopen = () => {
     if (pipelineMode !== 'gemini') {
       ws.send(JSON.stringify({ type: 'mime_type', mimeType: 'audio/pcm;rate=16000' }));
-      ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
     }
+    ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
     ws.send(JSON.stringify({ type: 'set_model', model: currentModel }));
     ws.send(JSON.stringify({ type: 'start' }));
   };
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
+    if (msg.type === 'denoise_engine') {
+      denoiseEngine = msg.engine || '';
+      denoiseLabel = msg.label || '';
+      if (msg.active === false && denoiseEngine === 'off') denoiseEnabled = false;
+      updateDenoiseBtn();
+    }
     if (msg.type === 'stage') setStageState(msg.stage, msg.status, msg.ms);
     if (msg.type === 'stt_latency') updateLatency('stt', msg.ms);
     if (msg.type === 'gemini_turn_latency') updateLatency('gemini', msg.ms);
     if (msg.type === 'client_e2e') updateLatency('client-e2e', msg.ms);
     if (msg.type === 'greeting') {
       addConversationEntry('ai', msg.text);
-      if (msg.audio) {
+      if (ttsMode === "elevenlabs" && msg.audio) {
         try {
           const binary = atob(msg.audio);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          const blob = new Blob([bytes], { type: 'audio/mpeg' });
+          const blob = new Blob([bytes], { type: "audio/mpeg" });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.play().catch(e => console.warn('Greeting audio play failed:', e));
-        } catch (e) { console.warn('Greeting audio decode failed:', e); }
+          audio.onended = () => URL.revokeObjectURL(url);
+          audio.play().catch(e => console.warn("Greeting audio play failed:", e && e.message ? e.message : e));
+        } catch (e) {
+          console.warn("Greeting audio decode failed:", e && e.message ? e.message : e);
+        }
+      } else if (msg.text) {
+        window.speechSynthesis.cancel();
+        const utt = new SpeechSynthesisUtterance(msg.text);
+        utt.lang = "en-US"; utt.rate = 1.05;
+        window.speechSynthesis.speak(utt);
       }
     }
     if (msg.type === 'interim_transcript') {
@@ -1547,16 +1662,32 @@ function connectWS() {
       if (msg.resolved) { document.getElementById('workerStatus').textContent = '✓ Resolved'; document.getElementById('workerStatus').style.color = 'var(--pipeline-tts)'; }
       if (msg.escalate) { document.getElementById('workerStatus').textContent = '⬆ Escalated'; document.getElementById('workerStatus').style.color = 'var(--danger)'; }
     }
-    if (msg.type === 'audio_chunk') {
+        if (msg.type === 'audio_chunk') {
   if (!aiSpeaking) {
     audioChunks = [];
+    resetPcmStream();
   }
   aiSpeaking = true;
-  audioChunks.push(msg.chunk);
   if (msg.mimeType) audioChunkMimeType = msg.mimeType;
+  if (audioChunkMimeType && audioChunkMimeType.startsWith('audio/pcm')) {
+    // Gemini PCM: bekleme yok, chunk gelir gelmez kuyruga at
+    playPCMChunkStreaming(msg.chunk);
+  } else {
+    // MP3/ElevenLabs: eski batch yolu (decodeAudioData tam dosya ister)
+    audioChunks.push(msg.chunk);
+  }
 }
 if (msg.type === 'audio_stream_end') {
-  if (audioChunks.length > 0) {
+  if (audioChunkMimeType && audioChunkMimeType.startsWith('audio/pcm')) {
+    pcmStreamEnded = true;
+    // hic chunk planlanmadiysa ya da hepsi coktan bittiyse playback_done'i burada gonder
+    if (pcmScheduledCount <= 0) {
+      aiSpeaking = false;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'playback_done' }));
+      }
+    }
+  } else if (audioChunks.length > 0) {
     // hand the buffer to the player and clear it, so a trailing
     // audio_stream_end (no new chunks) cannot replay the same turn
     const pending = audioChunks;
@@ -1584,6 +1715,7 @@ function startSession() {
     if (el) { el.textContent = '—'; el.className = 'latency-val'; }
   });
   speechEndClientMs = null;
+  resetPcmStream();
   document.getElementById('workerStatus').textContent = 'Overdue';
   sessionInputTokens = 0; sessionOutputTokens = 0; turnCount = 0;
   document.getElementById('tokenCard').style.display = 'none';
@@ -1624,20 +1756,16 @@ async function toggleMic() {
 
       if (pipelineMode === 'gemini') {
   const ctx = getAudioContext();
-  console.log('[Gemini Mic] AudioContext actual sampleRate:', ctx.sampleRate);
+  console.log('[Gemini Mic] AudioContext sampleRate:', ctx.sampleRate, '-> 16000 (analiz + Gemini)');
   if (ws && ws.readyState === WebSocket.OPEN) {
-  ws.send(JSON.stringify({ type: 'gemini_sample_rate', rate: ctx.sampleRate }));
+  ws.send(JSON.stringify({ type: 'gemini_sample_rate', rate: 16000 }));
 }
-  window._geminiSampleRate = ctx.sampleRate;
+  window._geminiSampleRate = 16000;
   const source = ctx.createMediaStreamSource(audioStream);
   const processor = ctx.createScriptProcessor(4096, 1, 1);
         processor.onaudioprocess = (e) => {
           if (ws && ws.readyState === WebSocket.OPEN && !aiSpeaking) {
-            const float32 = e.inputBuffer.getChannelData(0);
-            const int16 = new Int16Array(float32.length);
-            for (let i = 0; i < float32.length; i++) {
-              int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
-            }
+            const int16 = floatToPcm16Resampled(e.inputBuffer.getChannelData(0), ctx.sampleRate, 16000);
             lastMicSendTime = Date.now();
             ws.send(int16.buffer);
           }
@@ -1826,7 +1954,12 @@ async function sendAudioFile() {
       const durationSec = audioDurationSec != null
         ? audioDurationSec
         : Number((mono.length / TARGET_RATE).toFixed(2));
+      ws.send(JSON.stringify({ type: 'audio_upload', bytes: pcmBuffer.byteLength, filename: file.name }));
       ws.send(pcmBuffer.buffer.slice(pcmBuffer.byteOffset, pcmBuffer.byteOffset + pcmBuffer.byteLength));
+      // Client E2E baslangici: ses dosyasinin bittigi (= tamaminin gonderildigi) an
+      resetPcmStream();
+      speechEndClientMs = Date.now();
+      console.log('[Client E2E] clock started at upload end');
       status.textContent = `✓ Sent ${durationSec}s to Gemini`;
       await audioCtx.close();
       return;
@@ -1970,7 +2103,15 @@ let cmpLastExport = null;
 let cmpCharts = {};
 let cmpLastSttMs = null; // mic Deepgram WS or audio-file STT latency (ms) for /compare-intent
 let cmpStopFlag = false;
-let cmpHistory = JSON.parse(localStorage.getItem('cmp_history') || '[]');
+let cmpHistory = (function() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('cmp_history') || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('[cmpHistory] bad localStorage on boot:', e);
+    return [];
+  }
+})();
 
 function switchView(view) {
   const demo = document.getElementById('view-demo');
@@ -2799,7 +2940,11 @@ function renderPanelRuns(modelId, data) {
     const wer = (refTxt && r.transcript) ? wordErrorRate(refTxt, r.transcript) : null;
     const werPart = wer != null ? ` | WER: ${Math.round(wer * 100)}%` : '';
     const distressPart = r.distress ? ` | Distress: <span style="color:var(--danger)">${escapeHtml(String(r.distress))}</span>` : '';
-    const txPart = r.transcript ? `<br>Transcript: "${escapeHtml(r.transcript)}"` : '';
+    const tx = (r.transcript || r.input_transcript || '').trim();
+    const txLine = tx
+      ? `<div class="cmp-panel-run-tx">Run ${r.run}: ${total}ms | "${escapeHtml(tx)}"</div>`
+      : '';
+    const txPart = tx ? `<br>Transcript: "${escapeHtml(tx)}"` : '';
     const bd = `Total Latency: ${total}ms | Tokens: ${inTok}/${outTok} | Cost: ${costHtml}${distressPart}${werPart}${txPart}<br>Response: "${escapeHtml(r.response || '')}"`;
 
     return `<div class="cmp-panel-run" id="panel-run-${modelDomId(modelId)}-${r.run}">
@@ -2810,6 +2955,7 @@ function renderPanelRuns(modelId, data) {
           ${expected && r.intent ? (r.intent === expected ? ' <span style="color:#3fb950">✓</span>' : ' <span style="color:var(--danger,#f85149)">✗</span>') : ''
           }</span>
       </div>
+      ${txLine}
       <div class="cmp-panel-run-bd">${bd}</div>
     </div>`;
   }).join('');
@@ -3795,10 +3941,58 @@ function renderBatchTable(models, rows) {
   document.getElementById('cmpBatchTableWrap').classList.add('show');
 }
 
+function loadCmpHistoryFromStorage() {
+  try {
+    const raw = localStorage.getItem('cmp_history');
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('[cmpHistory] localStorage read failed:', e);
+    return [];
+  }
+}
+
+/** Deep-clone so history entries do not share live cmpResults / rows references. */
+function snapshotCmpHistoryEntry(entry) {
+  try {
+    return JSON.parse(JSON.stringify(entry));
+  } catch (e) {
+    console.error('[cmpHistory] snapshot failed (circular/large?):', e);
+    // Fallback: shallow copy of top-level + clone results if possible
+    const copy = Object.assign({}, entry);
+    try {
+      if (entry.results) copy.results = JSON.parse(JSON.stringify(entry.results));
+      if (entry.freeformResults) copy.freeformResults = JSON.parse(JSON.stringify(entry.freeformResults));
+      if (entry.rows) copy.rows = JSON.parse(JSON.stringify(entry.rows));
+      if (entry.metrics) copy.metrics = JSON.parse(JSON.stringify(entry.metrics));
+    } catch (e2) {
+      console.error('[cmpHistory] partial snapshot failed:', e2);
+    }
+    return copy;
+  }
+}
+
 function saveCmpHistory(entry) {
-  cmpHistory.unshift(entry);
-  if (cmpHistory.length > 100) cmpHistory = cmpHistory.slice(0, 100);
-  localStorage.setItem('cmp_history', JSON.stringify(cmpHistory));
+  // Always append onto what's already in localStorage (not a shared live object graph)
+  const stored = loadCmpHistoryFromStorage();
+  const snapshot = snapshotCmpHistoryEntry(entry);
+  if (!snapshot.timestamp) snapshot.timestamp = new Date().toISOString();
+  stored.unshift(snapshot);
+  if (stored.length > 30) stored.length = 30; // keep more sessions; was 10 and felt like overwrite
+  cmpHistory = stored;
+  try {
+    localStorage.setItem('cmp_history', JSON.stringify(cmpHistory));
+  } catch (e) {
+    console.error('[cmpHistory] localStorage write failed (quota?):', e);
+    // Drop oldest until it fits
+    while (cmpHistory.length > 1) {
+      cmpHistory.pop();
+      try {
+        localStorage.setItem('cmp_history', JSON.stringify(cmpHistory));
+        break;
+      } catch (e2) { /* keep trimming */ }
+    }
+  }
   renderCmpHistory();
 }
 
@@ -3965,7 +4159,7 @@ function loadCmpHistory(idx) {
 
 function clearCmpHistory() {
   cmpHistory = [];
-  localStorage.removeItem('cmp_history');
+  try { localStorage.removeItem('cmp_history'); } catch (e) {}
   renderCmpHistory();
 }
 
@@ -5055,7 +5249,7 @@ async function runComparisonSeries(seriesCount) {
   const entry = {
     mode: 'single',
     compareMode,
-    transcript,
+    transcript: firstTx,
     expected,
     models,
     runs: totalRunsShown,

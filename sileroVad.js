@@ -10,7 +10,14 @@ const getSession = () => {
     return sessionPromise;
 };
 
-function createSileroVad({ sampleRate = 8000 } = {}) {
+function createSileroVad({
+    sampleRate = 8000,
+    startProb = 0.5,
+    endProb = 0.35,
+    minSilenceMs = 220,
+    minSpeechMs = 120,
+    speechPadMs = 60,
+} = {}) {
     const windowSize = sampleRate === 16000 ? 512 : 256;
     const contextSize = sampleRate === 16000 ? 64 : 32;
     let state = new Float32Array(2 * 1 * 128);
@@ -19,8 +26,37 @@ function createSileroVad({ sampleRate = 8000 } = {}) {
     let lastProb = 0;
     let queue = Promise.resolve();
     const srTensor = new ort.Tensor("int64", BigInt64Array.from([BigInt(sampleRate)]), []);
+    const frameMs = (windowSize / sampleRate) * 1000;
+    let frameCount = 0;
+    let clockMs = 0;
+    let inSpeech = false;
+    let silenceRun = 0;
+    let curStart = 0, probSum = 0, probN = 0;
+    let spans = [];
+    let lastSpeechEndMs = 0;
 
-    const runChunk = async (chunk) => {
+    const updateSpans = (prob, tMs) => {
+        clockMs = tMs + frameMs;
+        if (!inSpeech) {
+            if (prob >= startProb) {
+                inSpeech = true;
+                curStart = Math.max(0, tMs - speechPadMs);
+                probSum = prob; probN = 1; silenceRun = 0;
+            }
+            return;
+        }
+        probSum += prob; probN++;
+        if (prob >= endProb) { silenceRun = 0; return; }
+        silenceRun += frameMs;
+        if (silenceRun < minSilenceMs) return;
+        const endMs = tMs - silenceRun + speechPadMs;
+        if (endMs - curStart >= minSpeechMs) {
+            spans.push({ startMs: curStart, endMs, conf: probSum / probN });
+        }
+        inSpeech = false; silenceRun = 0; lastSpeechEndMs = endMs;
+    };
+
+    const runChunk = async (chunk, frameIndex) => {
         const session = await getSession();
         const input = new Float32Array(contextSize + windowSize);
         input.set(context, 0);
@@ -33,6 +69,7 @@ function createSileroVad({ sampleRate = 8000 } = {}) {
         state = out.stateN.data;
         context = input.slice(input.length - contextSize);
         lastProb = out.output.data[0];
+        updateSpans(lastProb, frameIndex * frameMs);
     };
 
     const pushSamples = (f32) => {
@@ -43,7 +80,8 @@ function createSileroVad({ sampleRate = 8000 } = {}) {
         while (sampleBuf.length - off >= windowSize) {
             const chunk = sampleBuf.slice(off, off + windowSize);
             off += windowSize;
-            queue = queue.then(() => runChunk(chunk)).catch(() => {});
+            const idx = frameCount++;
+            queue = queue.then(() => runChunk(chunk, idx)).catch(() => {});
         }
         sampleBuf = sampleBuf.slice(off);
     };
@@ -61,6 +99,10 @@ function createSileroVad({ sampleRate = 8000 } = {}) {
             pushSamples(f);
         },
         prob() { return lastProb; },
+        isSpeaking() { return inSpeech; },
+        idleMs() { return inSpeech ? 0 : Math.max(0, clockMs - lastSpeechEndMs); },
+        takeSpans() { const s = spans; spans = []; return s;},
+        resetTurn() { spans = []; inSpeech = false; silenceRun = 0; }, 
         flush() { return queue.then(() => lastProb); },
     };
 }
