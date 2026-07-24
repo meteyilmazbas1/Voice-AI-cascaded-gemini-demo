@@ -921,7 +921,6 @@ browserWss.on('connection', function(ws) {
         lastAgentText = confirmText;
         console.log('[Confidence] lowConf=' + lowConf + ' noisyTurn=' + noisyTurn + ' for', result.intent);
         send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
-        send({ type: 'response', text: confirmText, audio: null, resolved: false, escalate: false });
         try {
           const apiKey = process.env.ELEVENLABS_API_KEY;
           const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
@@ -939,6 +938,8 @@ browserWss.on('connection', function(ws) {
           send({ type: 'audio_stream_end' });
         } catch (e) {
           console.error('[Confirm TTS Error]', e.message);
+          send({ type: "stage", stage: "tts", status: "done", ms: 0 });
+          send({ type: "response", text: confirmText, audio: null, resolved: false, escalate: false });
         }
         sessionState = 'LISTENING';
         lastConfidence = null;
