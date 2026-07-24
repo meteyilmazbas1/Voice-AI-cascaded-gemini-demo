@@ -13,7 +13,7 @@
     --pipeline-stt: #58a6ff; --pipeline-llm: #a371f7; --pipeline-tts: #3fb950;
   }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 14px; min-height: 100vh; display: flex; flex-direction: column; }
-  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; gap: 12px; position: relative; }
   .logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); flex-shrink: 0; }
   header h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
   header span { font-size: 12px; color: var(--muted); margin-left: 4px; }
@@ -55,20 +55,37 @@
   .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
   .btn.primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
   .btn.danger { background: rgba(248,81,73,0.1); border-color: rgba(248,81,73,0.3); color: var(--danger); }
-  .mic-indicator { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-  .mic-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: all 0.3s; }
-  .mic-dot.active { background: var(--danger); box-shadow: 0 0 6px var(--danger); animation: pulse 1s infinite; }
+  .btn.danger:hover { background: rgba(248,81,73,0.25); border-color: var(--danger);}
+  .btn.recording::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 6px var(--danger); margin-right: 8px; vertical-align: middle; animation: pulse 1s infinite; }
   .model-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
   .model-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
   .model-select { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; flex: 1; }
   .model-select:hover { border-color: var(--muted); }
   .model-badge { font-size: 10px; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+  .scenario-dd { position: relative; flex: 0 0 240px; }
+  .scenario-dd-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; }
+  .scenario-dd-caret { color: var(--muted); font-size: 10px; }
+  .scenario-dd-menu { position: absolute; bottom: calc(100% + 4px); left: 0; min-width: 260px; max-height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px; z-index: 30; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .scenario-dd-menu[hidden] { display: none; }
+  .scenario-group { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 8px 8px 4px; }
+  .scenario-opt { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text); }
+  .scenario-opt:hover { background: var(--surface2); }
+  .scenario-opt.selected { background: rgba(29,158,117,0.12); color: var(--accent); }
+  .scenario-play { flex: 0 0 auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; opacity: 0; transition: opacity 0.12s; }
+  .scenario-opt:hover .scenario-play { opacity: 1; }        /* fareyle üstüne gelince beliriyor */
+  .scenario-play.playing { opacity: 1; color: var(--accent); }
+  .scenario-play:hover { background: var(--surface2); color: var(--accent); }
+  .expected-box { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; }
+  .expected-box[hidden] { display: none; }
+  .expected-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .expected-text { font-size: 13px; color: var(--text); font-style: italic; }
   .model-badge.fast { background: rgba(63,185,80,0.1); color: var(--pipeline-tts); border: 1px solid rgba(63,185,80,0.25); }
   .model-badge.accurate { background: rgba(163,113,247,0.1); color: var(--pipeline-llm); border: 1px solid rgba(163,113,247,0.25); }
-  .mock-title { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-  .mock-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
-  .mock-btn { padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 12px; cursor: pointer; transition: all 0.15s; }
-  .mock-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .ctrl-divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+  .file-chip { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 5px 8px 5px 12px; }
+  .file-chip[hidden] { display: none; }
+  .file-chip-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 4px; }
+  .file-chip-x:hover { color: var(--danger); background: rgba(248,81,73,0.1); }
   .intent-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: none; }
   .intent-card.show { display: block; }
   .intent-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
@@ -120,10 +137,6 @@
   .tts-mode-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .tts-mode-badge.elevenlabs { background: rgba(227,179,65,0.1); color: var(--warn); border: 1px solid rgba(227,179,65,0.25); }
   .tts-mode-badge.browser { background: rgba(88,166,255,0.1); color: var(--info); border: 1px solid rgba(88,166,255,0.25); }
-  .audio-quality-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-  .quality-btn { padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); font-size: 11px; cursor: pointer; transition: all 0.15s; }
-  .quality-btn:hover { border-color: var(--muted); color: var(--text); }
-  .quality-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(29,158,117,0.1); }
   audio { display: none; }
   .pipeline-toggle { display: flex; align-items: center; gap: 0; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
   .pipeline-btn { flex: 1; padding: 10px 16px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--muted); }
@@ -144,8 +157,8 @@
   .token-row { display: flex; justify-content: space-between; padding: 2px 0; }
 
   /* ── Comparison Dashboard ── */
-  .view-nav { margin-left: auto; display: flex; gap: 6px; }
-  .view-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; }
+  .view-nav { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+  .view-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; }
   .view-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   .view-btn:hover:not(.active) { border-color: var(--muted); color: var(--text); }
   #view-demo { display: grid; }
@@ -624,9 +637,9 @@
   <div class="logo-dot"></div>
   <h1>Aware360 Voice AI <span id="headerSubtitle">— Cascaded Pipeline Demo</span></h1>
   <div class="view-nav">
-    <a href="/calls.html" class="view-btn" style="text-decoration:none;display:inline-flex;align-items:center">Call History</a>
-    <button class="view-btn active" id="nav-demo" onclick="switchView('demo')">Demo</button>
-    <button class="view-btn" id="nav-compare" onclick="switchView('compare')">Comparison</button>
+    <a href="/calls.html" class="view-btn">Call History</a>
+    <a href="#demo" class="view-btn active" id="nav-demo">Demo</a>
+    <a href="#compare" class="view-btn" id="nav-compare">Comparison</a>
   </div>
   <div class="badge" id="headerBadge">Deepgram Nova-3 · Claude · ElevenLabs</div>
 </header>
@@ -696,8 +709,8 @@
         </select>
         <span class="model-badge fast" id="modelBadge">Haiku</span>
       </div>
-      <div class="tts-row">
-        <span class="tts-label">TTS Ses:</span>
+      <div class="tts-row" id="ttsRow">
+        <span class="tts-label">TTS Voice:</span>
         <div class="toggle-wrap">
           <label class="toggle">
             <input type="checkbox" id="ttsToggle" onchange="changeTtsMode(this.checked)" checked>
@@ -708,46 +721,35 @@
         </div>
       </div>
       <div class="controls-row">
-        <button class="btn primary" id="startBtn" onclick="startSession()">▶ Start Call</button>
+        <button class="btn primary" id="callBtn" onclick="toggleCall()">▶ Start Call</button>
         <button class="btn" id="micBtn" onclick="toggleMic()" disabled>🎤 Mic</button>
-        <button class="btn" id="denoiseBtn" onclick="toggleDenoise()">🎙️ Noise Cancel: ON</button>
-        <button class="btn danger" id="stopBtn" onclick="stopSession()" disabled>■ End Call</button>
-        <div class="mic-indicator">
-          <div class="mic-dot" id="micDot"></div>
-          <span id="micLabel">Not recording</span>
-        </div>
-      </div>
-      <div class="audio-quality-row">
-        <span class="model-label">Audio Quality:</span>
-        <button class="quality-btn active" id="q-high" onclick="setAudioQuality('high')">🎤 Normal (Browser)</button>
-        <button class="quality-btn" id="q-low" onclick="setAudioQuality('low')">📞 Twilio Sim (8kHz)</button>
-        <button class="quality-btn" id="q-noisy" onclick="setAudioQuality('noisy')">🏭 Noisy (8kHz)</button>
-      </div>
-      <div class="mock-title">Quick test scenarios (no microphone needed):</div>
-      <div class="mock-buttons">
-        <button class="mock-btn" onclick="sendMock('I am fine')">✅ I'm fine</button>
-        <button class="mock-btn" onclick="sendMock('All good here')">✅ All good</button>
-        <button class="mock-btn" onclick="sendMock('Running late, give me 15 minutes')">⏱ Running late 15 min</button>
-        <button class="mock-btn" onclick="sendMock('I need a human agent please')">👤 Need human agent</button>
-        <button class="mock-btn" onclick="sendMock('Reset my check-in')">🔄 Reset check-in</button>
-        <button class="mock-btn" onclick="sendMock('blah blah something unclear xyzzy')">❓ Unclear response</button>
-        <button class="mock-btn" onclick="sendMock('umm... I think I am okay')">🔇 Ambiguous (mixed language)</button>
-        <button class="mock-btn" onclick="sendMock('ye')">🔇 Too short (ye)</button>
-        <button class="mock-btn" onclick="sendMock('I am fine ya')">🌐 Mixed language</button>
-        <button class="mock-btn" onclick="sendMock('HELP ME PLEASE SOS')">🆘 SOS / Help</button>
-      </div>
 
-      <div class="mock-title" style="margin-top:14px">Upload audio file (MP3):</div>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
-        <input type="file" id="audioFileInput" accept=".mp3,audio/*"
-          style="font-size:13px;padding:4px 8px;border:1px solid #444;border-radius:6px;background:#1a1a2e;color:#e0e0e0;cursor:pointer">
-        <button class="mock-btn" onclick="sendAudioFile()" style="background:#2e5bff">
-          📤 Send Audio
-        </button>
-        <span id="audioFileStatus" style="font-size:12px;color:#aaa"></span>
+        <span class="ctrl-divider"></span>
+
+        <input type="file" id="audioFileInput" accept=".mp3,audio/*" hidden onchange="onAudioFilePicked(this)">
+        <button class="btn" id="uploadBtn" onclick="document.getElementById('audioFileInput').click()" disabled>📎 Upload MP3</button>
+        <button class="btn" id="sendAudioBtn" onclick="sendAudioFile()" disabled>📤 Send</button>
+        <span class="ctrl-divider"></span>
+
+        <div class="scenario-dd" id="scenarioDd">
+          <button type="button" class="btn scenario-dd-toggle" id="scenarioDdToggle" onclick="toggleScenarioMenu()">
+            <span id="scenarioDdLabel">Hazır senaryo seç…</span>
+            <span class="scenario-dd-caret">▾</span>
+          </button>
+          <div class="scenario-dd-menu" id="scenarioDdMenu" hidden></div>
+        </div>
+        <button class="btn" id="scenarioBtn" onclick="runScenario()" disabled>▶ Run</button>
+      </div>
+      <div class="file-chip" id="audioFileChip" hidden>
+        <span id="audioFileName"></span>
+        <button class="file-chip-x" onclick="clearAudioFile()" title="Kaldır">✕</button>
+        <span id="audioFileStatus"></span>
+      </div>
+      <div class="expected-box" id="expectedBox" hidden>
+        <span class="expected-label">Expected transcript</span>
+        <span class="expected-text" id="expectedText"></span>
       </div>
     </div>
-
     <div class="token-card" id="tokenCard" style="display:none">
       <div class="token-title">Token Usage</div>
       <div class="token-grid">
@@ -792,7 +794,6 @@
       <div class="intent-response" id="aiResponse"></div>
     </div>
   </div>
-
   <div class="right">
     <div class="sidebar-tabs">
       <div class="tab active" onclick="switchTab('conversation')">Conversation</div>
@@ -1021,17 +1022,14 @@
 <audio id="audioPlayer"></audio>
 <script>
 let ws = null, mediaRecorder = null, audioStream = null;
-let denoiseEnabled = true;
-let denoiseLabel = '';   // sunucudan gelen motor adi: RNNoise / DeepFilterNet3
-let denoiseEngine = '';  // rnnoise | deepfilter | off
 let sessionActive = false, micActive = false;
 let stageTimers = {};
 let currentModel = 'claude-haiku-4-5';
 let ttsMode = 'elevenlabs';
 let browserTts = window.speechSynthesis;
-let audioQuality = 'high'; 
 let aiSpeaking = false; let lastMicSendTime = null;
-let pipelineMode = 'cascaded'; // 'cascaded' or 'gemini'
+let greetingAudioEl = null;
+let pipelineMode = 'cascaded';
 
 function switchPipeline(mode) {
   pipelineMode = mode;
@@ -1046,6 +1044,9 @@ function switchPipeline(mode) {
     const wrapper = modelRow.closest('div');
     if (wrapper) wrapper.style.display = mode === 'gemini' ? 'none' : '';
   }
+
+  const ttsRow = document.getElementById("ttsRow");
+  if (ttsRow) ttsRow.style.display = mode === "gemini" ? "none" : "";
 
   const badge = document.querySelector('.badge');
   if (mode === 'gemini') {
@@ -1156,39 +1157,6 @@ function onFirstAudioPlayback() {
     ws.send(JSON.stringify({ type: 'client_metrics', total: clientE2eMs }));
   }
   speechEndClientMs = null;
-}
-
-function setAudioQuality(quality) {
-  audioQuality = quality;
-  document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('q-' + quality).classList.add('active');
-  const labels = { high: 'Normal (Browser)', low: 'Twilio Sim (8kHz)', noisy: 'Noisy (8kHz)' };
-  addConversationEntry('system', `Audio quality changed: ${labels[quality]}`, 'system');
-}
-
-function getAudioConstraints() {
-  if (audioQuality === 'low') {
-    return {
-      sampleRate: 8000,
-      channelCount: 1,
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false
-    };
-  } else if (audioQuality === 'noisy') {
-    return {
-      sampleRate: 8000,
-      channelCount: 1,
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false
-    };
-  }
-  return {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true
-  };
 }
 
 function recalcTotal() {
@@ -1383,7 +1351,13 @@ async function playAllChunks(chunks) {
   } catch(e) { console.warn('[Audio] Decode error:', e.message); }
 }
 
+function stopGreeting() {
+  if (greetingAudioEl) { try { greetingAudioEl.pause(); } catch (e) {} greetingAudioEl = null; }
+  try { window.speechSynthesis.cancel(); } catch (e) {}
+}
+
 function playAudio(base64, text) {
+  stopGreeting();
   if (ttsMode === 'elevenlabs' && base64) {
     resetStreamPlayer();
     audioChunks = [base64];
@@ -1411,24 +1385,6 @@ function changeTtsMode(useElevenLabs) {
     desc.textContent = 'Free · Unlimited';
   }
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tts_mode', mode: ttsMode }));
-}
-
-function updateDenoiseBtn() {
-  const btn = document.getElementById('denoiseBtn');
-  if (!btn) return;
-  // Motor adi sunucudan gelmediyse eski etikete geri dus
-  const suffix = denoiseEngine === 'off'
-    ? ' (server bypass)'
-    : (denoiseLabel ? ' · ' + denoiseLabel : '');
-  btn.textContent = '🎙️ Noise Cancel: ' + (denoiseEnabled ? 'ON' : 'OFF') + suffix;
-}
-
-function toggleDenoise() {
-  denoiseEnabled = !denoiseEnabled;
-  updateDenoiseBtn();
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
-  }
 }
 
 function floatToPcm16Resampled(float32, fromRate, toRate) {
@@ -1460,18 +1416,12 @@ function connectWS() {
     if (pipelineMode !== 'gemini') {
       ws.send(JSON.stringify({ type: 'mime_type', mimeType: 'audio/pcm;rate=16000' }));
     }
-    ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: denoiseEnabled }));
+    ws.send(JSON.stringify({ type: 'toggle_denoise', enabled: false }));
     ws.send(JSON.stringify({ type: 'set_model', model: currentModel }));
     ws.send(JSON.stringify({ type: 'start' }));
   };
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
-    if (msg.type === 'denoise_engine') {
-      denoiseEngine = msg.engine || '';
-      denoiseLabel = msg.label || '';
-      if (msg.active === false && denoiseEngine === 'off') denoiseEnabled = false;
-      updateDenoiseBtn();
-    }
     if (msg.type === 'stage') setStageState(msg.stage, msg.status, msg.ms);
     if (msg.type === 'stt_latency') updateLatency('stt', msg.ms);
     if (msg.type === 'gemini_turn_latency') updateLatency('gemini', msg.ms);
@@ -1486,12 +1436,13 @@ function connectWS() {
           const blob = new Blob([bytes], { type: "audio/mpeg" });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.onended = () => URL.revokeObjectURL(url);
+          greetingAudioEl = audio;
+          audio.onended = () =>  { URL.revokeObjectURL(url); if (greetingAudioEl === audio) greetingAudioEl = null; };
           audio.play().catch(e => console.warn("Greeting audio play failed:", e && e.message ? e.message : e));
         } catch (e) {
           console.warn("Greeting audio decode failed:", e && e.message ? e.message : e);
         }
-      } else if (msg.text) {
+      } else if (pipelineMode !== "gemini" && ttsMode === "browser" && msg.text) {
         window.speechSynthesis.cancel();
         const utt = new SpeechSynthesisUtterance(msg.text);
         utt.lang = "en-US"; utt.rate = 1.05;
@@ -1591,6 +1542,7 @@ function connectWS() {
       document.getElementById('turnCount').textContent = turnCount;
     }
     if (msg.type === 'audio_stream_start') {
+      stopGreeting();
       resetStreamPlayer();
       resetStreamPlayer();
       streamingText = msg.text;
@@ -1637,15 +1589,28 @@ if (msg.type === 'audio_stream_end') {
   }
 }
   };
-  ws.onclose = () => { if (sessionActive) addConversationEntry('system', 'Connection closed.', 'system'); };
+  ws.onclose = () => { if (sessionActive) { addConversationEntry('system', 'Connection closed.', 'system'); stopSession(); } };
+}
+
+function toggleCall() {
+  if (sessionActive) stopSession();
+  else startSession();
+}
+
+function setCallButtonState(active) {
+  const btn = document.getElementById("callBtn");
+  if (!btn) return;
+  btn.textContent = active ? '■ End Call' : '▶ Start Call';
+  btn.className = active ? "btn danger" : "btn primary";
 }
 
 function startSession() {
   updateAlertTimes();
   sessionActive = true;
-  document.getElementById('startBtn').disabled = true;
-  document.getElementById('micBtn').disabled = false;
-  document.getElementById('stopBtn').disabled = false;
+  setCallButtonState(true);
+  document.getElementById("micBtn").disabled = false;
+  document.getElementById("uploadBtn").disabled = false;
+  document.getElementById("scenarioBtn").disabled = false;
   document.getElementById('intentCard').classList.remove('show');
   document.getElementById('confWarning').className = 'conf-warning';
   document.getElementById('distressCard').className = 'distress-card';
@@ -1732,9 +1697,9 @@ async function toggleMic() {
       }
 
       micActive = true;
-      document.getElementById('micDot').classList.add('active');
-      document.getElementById('micLabel').textContent = 'Recording...';
-      document.getElementById('micBtn').textContent = '⏹ Stop Mic';
+      const micBtnEl = document.getElementById("micBtn");
+      micBtnEl.textContent = "Stop Mic";
+      micBtnEl.classList.add("danger", "recording");
       if (pipelineMode !== 'gemini') startSNRMonitor();
     } catch (err) { alert('Mic access denied: ' + err.message); }
   } else {
@@ -1753,9 +1718,9 @@ async function toggleMic() {
     if (audioStream) audioStream.getTracks().forEach(t => t.stop());
     micActive = false;
     onWorkerSpeechEnd();
-    document.getElementById('micDot').classList.remove('active');
-    document.getElementById('micLabel').textContent = 'Not recording';
-    document.getElementById('micBtn').textContent = '🎤 Mic';
+    const micBtnEl = document.getElementById("micBtn");
+    micBtnEl.textContent = "🎤 Mic";
+    micBtnEl.classList.remove("danger", "recording");
   }
 }
 
@@ -1763,9 +1728,11 @@ function stopSession() {
   if (ws) { ws.send(JSON.stringify({ type: 'stop' })); ws.close(); ws = null; }
   if (micActive) toggleMic();
   sessionActive = false;
-  document.getElementById('startBtn').disabled = false;
-  document.getElementById('micBtn').disabled = true;
-  document.getElementById('stopBtn').disabled = true;
+  setCallButtonState(false);
+  document.getElementById("micBtn").disabled = true;
+  document.getElementById("uploadBtn").disabled = true;
+  document.getElementById("scenarioBtn").disabled = true;
+  clearAudioFile();
   ['stt','llm','tts'].forEach(s => setStageState(s, 'disconnected'));
 }
 
@@ -1824,11 +1791,6 @@ function checkSNRAndWarn() {
   return false;
 }
 
-function sendMock(text) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
-  ws.send(JSON.stringify({ type: 'mock_transcript', text }));
-}
-
 async function getAudioFileDurationSeconds(file) {
   return new Promise(function(resolve) {
     try {
@@ -1852,13 +1814,164 @@ async function getAudioFileDurationSeconds(file) {
   });
 }
 
-async function sendAudioFile() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
-  const input = document.getElementById('audioFileInput');
-  const status = document.getElementById('audioFileStatus');
-  if (!input.files || !input.files[0]) { alert('Please select an audio file first'); return; }
+function onAudioFilePicked(input) {
+  const file = input.files && input.files[0];
+  document.getElementById("sendAudioBtn").disabled = !file;
+  document.getElementById("audioFileChip").hidden = !file;
+  document.getElementById("audioFileStatus").textContent = "";
+  if (file) {
+    document.getElementById("audioFileName").textContent = file.name + " . " + (file.size / 1024 / 1024).toFixed(1) + " MB";
+  }
+}
 
-  const file = input.files[0];
+function clearAudioFile() {
+  const input = document.getElementById("audioFileInput");
+  input.value = "";
+  onAudioFilePicked(input);
+}
+
+const SCENARIOS = [
+  { group: "text", label: "I'm fine", kind: "text", value: "I am fine"},
+  { group: "text", label: "Running late 15 min", kind: "text", value: "Running late, give me 15 minutes"},
+  { group: "text", label: "Need human agent", kind: "text", value: "I need a human agent please" },
+  { group: "text", label: "Reset check-in", kind: "text", value: "Reset my check-in" },
+  { group: "text", label: "SOS / Help", kind: "text", value: "HELP ME PLEASE SOS" },
+  { group: "text", label: "Unclear response", kind: "text", value: "blah blah xyzasdadssadd" },
+
+  { group: "clean", label: "Safe", kind: "audio", value: "safe_test.mp3", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert." },
+  { group: "clean", label: "Delayed", kind: "audio", value: "delayed_test.mp3", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
+  { group: "clean", label: "Human agent request", kind: "audio", value: "human_request_test.mp3", expected: "Look, I don't really want to talk to an automated system right now. Can you please connect me to an actual person?" },
+  { group: "clean", label: "Ambigous", kind: "audio", value: "ambigous_test.mp3", expected: "Um, uh, hang on. It's pretty loud out here and I'm not totally sure what you're asking me about." },
+  { group: "clean", label: "Unsafe (injured)", kind: "audio", value: "unsafe(injured)_test.mp3", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: "clean", label: "Unsafe (shorter)", kind: "audio", value: "unsafe_temiz_kisa.mp3", expected: "I am not safe." },
+
+  { group: "noisy", label: "Safe(1s noise)", kind: "audio", value: "1s gurultu_safe.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert."  },
+  { group: "noisy", label: "Safe(constant, high noise)", kind: "audio", value: "safe_sabit_yuksek_gurultu.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert." },
+  { group: "noisy", label: "Delayed(1s noise)", kind: "audio", value: "delayed_1sgurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
+  { group: "noisy", label: "Delayed(noisy end)", kind: "audio", value: "delayed_sonu_gurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
+  { group: 'noisy', label: 'Unsafe_shorter(instantaneous noise)',            kind: 'audio', value: 'unsafe_anlik.wav', expected: "I am not safe." },
+  { group: "noisy", label: "Unsafe(injured, high noise)", kind: "audio", value: "unsafe(injured)_test + noise.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: "noisy", label: "Unsafe(injured, -5dB noise)", kind: "audio", value: "unsafe(injured)_test + noise -5db.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: 'noisy', label: 'Unsafe(injured, variable noise)', kind: 'audio', value: 'unsafe(injured)_test+ degisken gurultu.wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+  { group: 'noisy', label: 'Unsafe(injured, speech +5dB)',     kind: 'audio', value: 'unsafe(injured)_test_(speech+5db).wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
+];
+
+let selectedScenario = null;
+let previewAudio = null;
+let previewIdx = null;
+
+function initScenarioSelect() {
+  const menu = document.getElementById("scenarioDdMenu");
+  if (!menu) return;
+  const groupLabels = { text: '💬 Predefined texts', clean: '🔊 Clean audio', noisy: '🏭 Noisy audio' };
+  const order = ["text", "clean", "noisy"];
+  menu.innerHTML = "";
+  order.forEach(g => {
+    const rows = SCENARIOS
+    .map((s, i) => ({s, i}))
+    .filter(x => x.s.group === g);
+    if (!rows.length) return;
+    const head = document.createElement("div");
+    head.className = "scenario-group";
+    head.textContent = groupLabels[g] || g;
+    menu.appendChild(head);
+    rows.forEach(({s, i}) => {
+      const row = document.createElement("div");
+      row.className = "scenario-opt";
+      row.dataset.idx = String(i);
+      row.onclick = () => selectScenario(i);
+
+      const label = document.createElement("span");
+      label.className = "scenario-opt-label";
+      label.textContent = s.label;
+      row.appendChild(label);
+
+      if (s.kind === "audio") {
+        const play = document.createElement("button");
+        play.type = "button";
+        play.className = "scenario-play";
+        play.dataset.idx = String(i);
+        play.textContent = '▶';
+        play.title = "Preview (plays only, doesn't send to the model)";
+        play.onclick = (e) => { e.stopPropagation(); previewScenario(i); };
+        row.appendChild(play);
+      }
+      menu.appendChild(row);
+    });
+  });
+}
+initScenarioSelect();
+
+function toggleScenarioMenu() {
+  const menu = document.getElementById("scenarioDdMenu");
+  if (menu.hidden) {
+    menu.hidden = false;
+    setTimeout(() => document.addEventListener("click", scenarioOutsideClick), 0);
+  } else {
+    closeScenarioMenu();
+  }
+}
+
+function closeScenarioMenu() {
+  document.getElementById("scenarioDdMenu").hidden = true;
+  document.removeEventListener("click", scenarioOutsideClick);
+}
+
+function scenarioOutsideClick(e) {
+  if (!document.getElementById("scenarioDd").contains(e.target)) closeScenarioMenu();
+}
+
+function selectScenario(i) {
+  selectedScenario = i;
+  document.getElementById("scenarioDdLabel").textContent = SCENARIOS[i].label;
+  document.querySelectorAll('.scenario-opt').forEach(el =>
+    el.classList.toggle('selected', el.dataset.idx === String(i)));
+  const box = document.getElementById("expectedBox");
+  const exp = SCENARIOS[i].expected;
+  if (exp) {
+    document.getElementById("expectedText").textContent = '"' + exp + '"';
+    box.hidden = false;
+  } else {
+   box.hidden = true;
+  }
+  closeScenarioMenu();
+}
+
+function previewScenario(i) {
+  const s = SCENARIOS[i];
+  if(!s || s.kind !== "audio") return;
+  if (previewAudio && previewIdx === i && !previewAudio.paused) {
+    previewAudio.pause();
+    setPlayIcon(i, false);
+    return;
+  }
+  if (previewAudio) { previewAudio.pause(); setPlayIcon(previewIdx, false); }
+  previewAudio = new Audio("/scenarios/" + encodeURIComponent(s.value));
+  previewIdx = i;
+  setPlayIcon(i, true);
+  previewAudio.onended = () => setPlayIcon(i, false);
+  previewAudio.play().catch(err => { console.warn('[Preview]', err.message); setPlayIcon(i, false); });
+}
+
+function setPlayIcon(i, playing) {
+  const btn = document.querySelector('.scenario-play[data-idx="' + i + '"]');
+  if (!btn) return;
+  btn.textContent = playing ? '⏸' : '▶';
+  btn.classList.toggle("playing", playing);
+}
+
+async function sendAudioFile() {
+  const input = document.getElementById('audioFileInput');
+  if (!input.files || !input.files[0]) { alert('Please select an audio file first'); return; }
+  return sendAudioBlob(input.files[0]);
+}
+
+async function sendAudioBlob(blob, name) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Start a call first'); return; }
+  const status = document.getElementById('audioFileStatus');
+  const file = (blob instanceof File)
+    ? blob
+    : new File([blob], name || 'scenario.wav', { type: blob.type || 'audio/wav' });
   status.textContent = 'Reading file...';
 
   try {
@@ -1926,6 +2039,32 @@ async function sendAudioFile() {
   } catch (e) {
     status.textContent = '✗ Error: ' + e.message;
     console.error('Audio file error:', e);
+  }
+}
+
+async function runScenario() {
+  const status = document.getElementById("audioFileStatus");
+  if (selectedScenario === null) { alert("Select a scenario first"); return; }
+  const s = SCENARIOS[selectedScenario];
+  if (!s) return;
+  if(!ws || ws.readyState !== WebSocket.OPEN) { alert("Start a call first"); return; }
+
+  document.getElementById("audioFileName").textContent = '▶ ' + s.label;
+  document.getElementById("audioFileChip").hidden = false;
+
+  if (s.kind === "text") {
+    ws.send(JSON.stringify({ type: "mock_transcript", text: s.value}));
+    status.textContent = '✓ Gönderildi: "' + s.value + '"';
+    return;
+  }
+  try {
+    status.textContent = "Scenario loading...";
+    const res = await fetch("/scenarios/" + encodeURIComponent(s.value));
+    if (!res.ok) throw new Error(res.status + " " + res.statusText);
+    await sendAudioBlob(await res.blob(), s.value);
+  } catch (e) {
+    status.textContent = '✗ Failed to load scenario: ' + e.message;
+    console.error('[Scenario]', e);
   }
 }
 
@@ -2012,6 +2151,8 @@ function switchView(view) {
       ? 'Gemini Live API — End-to-End'
       : 'Deepgram Nova-3 · Claude · ElevenLabs';
   }
+  const hash = view === "compare" ? "#compare" : "#demo";
+  if (location.hash !== hash) history.replaceState(null, "", hash);
 }
 
 function clearCmpAccumulated(keepModeUi) {
@@ -2588,20 +2729,38 @@ async function panelToggleMic(modelId) {
       dgWs.onerror = () => { clearTimeout(timer); reject(new Error('Deepgram WS error')); };
     });
     let lastMediaAt = 0;
+    const dgClock = createStreamClock(ctx.sampleRate * 2 / 1000); // PCM16 mono
+    let uttWords = [];
     dgWs.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'UtteranceEnd') {
+          const endMs = typeof msg.last_word_end === 'number'
+            ? msg.last_word_end * 1000
+            : lastWordEndMs(uttWords);
+          const wall = endMs != null ? dgClock.wallAt(endMs) : null;
+          if (wall != null) {
+            const st = ensurePanelState(modelId);
+            st.sttMs = Math.max(0, Date.now() - wall);
+            updatePanelSttUI(modelId);
+            setPanelStatus(modelId, `Transcript yakalandı · ${st.sttMs}ms`);
+          }
           panelStopMic(modelId);
           return;
         }
         if (msg.type === 'Results' && msg.is_final && msg.channel?.alternatives?.[0]?.transcript) {
-          const text = msg.channel.alternatives[0].transcript.trim();
+          const alt0 = msg.channel.alternatives[0];
+          const text = alt0.transcript.trim();
+          if (alt0.words?.length) uttWords = uttWords.concat(alt0.words);
           if (!text) return;
-          const conf = msg.channel.alternatives[0].confidence;
+          const conf = alt0.confidence;
           const st = ensurePanelState(modelId);
           st.transcript = text;
-          st.sttMs = lastMediaAt ? Date.now() - lastMediaAt : null;
+          const endMs = lastWordEndMs(uttWords.length ? uttWords : alt0.words);
+          const wall = endMs != null ? dgClock.wallAt(endMs) : null;
+          st.sttMs = wall != null
+            ? Math.max(0, Date.now() - wall)
+            : (lastMediaAt ? Date.now() - lastMediaAt : null);
           st.sttConfidence = typeof conf === 'number' ? conf : null;
           st.sttEngine = 'deepgram';
           st.audioFileName = null;
@@ -2621,6 +2780,7 @@ async function panelToggleMic(modelId) {
       for (let i = 0; i < float32.length; i++) int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
       lastMediaAt = Date.now();
       dgWs.send(int16.buffer);
+      dgClock.push(int16.buffer.byteLength);
     };
     source.connect(processor);
     processor.connect(ctx.destination);
@@ -2777,6 +2937,40 @@ function initModelAudioUploads() {
   initCmpPanels();
 }
 
+// ── Deepgram audio-time → wall-clock (bkz. sttTiming.js) ──
+function createStreamClock(bytesPerMs) {
+  let audioMs = 0;
+  let marks = [];
+  const MAX_MARKS = 6000;
+  return {
+    push(byteLength, wallMs) {
+      if (!byteLength) return;
+      audioMs += byteLength / bytesPerMs;
+      marks.push({ audioMs, wallMs: wallMs == null ? Date.now() : wallMs });
+      if (marks.length > MAX_MARKS) marks = marks.slice(marks.length - MAX_MARKS);
+    },
+    wallAt(targetAudioMs) {
+      if (!marks.length || targetAudioMs == null) return null;
+      let lo = 0, hi = marks.length - 1, hit = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (marks[mid].audioMs >= targetAudioMs) { hit = marks[mid]; hi = mid - 1; }
+        else lo = mid + 1;
+      }
+      if (!hit) hit = marks[marks.length - 1];
+      return hit.wallMs - (hit.audioMs - targetAudioMs);
+    },
+  };
+}
+function lastWordEndMs(words) {
+  if (!words || !words.length) return null;
+  let end = null;
+  for (const w of words) {
+    if (typeof w?.end === 'number' && (end == null || w.end > end)) end = w.end;
+  }
+  return end == null ? null : end * 1000;
+}
+
 async function compareAudioStt(file, durationSec) {
   const buf = await file.arrayBuffer();
   const duration = durationSec != null ? durationSec : await getAudioFileDurationSeconds(file);
@@ -2905,6 +3099,8 @@ function cmpStopDeepgramMic(flush) {
 async function cmpToggleMic() {
   const status = document.getElementById('cmpMicStatus');
   let cmpLastMediaAt = 0;
+  let cmpClock = null;
+  let cmpWords = [];
   if (cmpMicActive) {
     status.textContent = 'Finishing transcript...';
     cmpStopDeepgramMic(true);
@@ -2922,6 +3118,8 @@ async function cmpToggleMic() {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    cmpClock = createStreamClock(ctx.sampleRate * 2 / 1000);
+    cmpWords = [];
     const dgParams = new URLSearchParams(cfg.params);
     dgParams.set('sample_rate', String(ctx.sampleRate));
     const wsUrl = 'wss://api.deepgram.com/v1/listen?' + dgParams.toString();
@@ -2937,16 +3135,28 @@ async function cmpToggleMic() {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'UtteranceEnd') {
+          const endMs = typeof msg.last_word_end === 'number'
+            ? msg.last_word_end * 1000
+            : lastWordEndMs(cmpWords);
+          const wall = endMs != null && cmpClock ? cmpClock.wallAt(endMs) : null;
+          if (wall != null) {
+            cmpLastSttMs = Math.max(0, Date.now() - wall);
+            status.textContent = `Transcript captured (STT ${cmpLastSttMs}ms).`;
+          }
           cmpStopDeepgramMic(false);
           return;
         }
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
-          const text = msg.channel.alternatives[0].transcript;
+          const alt0 = msg.channel.alternatives[0];
+          const text = alt0.transcript;
+          if (msg.is_final && alt0.words && alt0.words.length) cmpWords = cmpWords.concat(alt0.words);
           if (!text || !text.trim()) return;
           if (msg.is_final && msg.type === 'Results' && msg.channel) {
-            const sttMs = cmpLastMediaAt
-              ? Date.now() - cmpLastMediaAt
-              : null;
+            const endMs = lastWordEndMs(cmpWords.length ? cmpWords : alt0.words);
+            const wall = endMs != null && cmpClock ? cmpClock.wallAt(endMs) : null;
+            const sttMs = wall != null
+              ? Math.max(0, Date.now() - wall)
+              : (cmpLastMediaAt ? Date.now() - cmpLastMediaAt : null);
             cmpLastSttMs = sttMs;
             document.getElementById('cmpTranscript').value = text;
             cmpExpected = null;
@@ -2977,6 +3187,7 @@ async function cmpToggleMic() {
       }
       cmpLastMediaAt = Date.now();
       cmpDgWs.send(int16.buffer);
+      if (cmpClock) cmpClock.push(int16.buffer.byteLength);
     };
     source.connect(processor);
     processor.connect(ctx.destination);
@@ -3000,21 +3211,21 @@ async function cmpTranscribeFile(input) {
   status.textContent = 'Transcribing ' + file.name + '...';
   try {
     const buf = await file.arrayBuffer();
-    const sttStart = Date.now();
-    const res = await fetch('/transcribe', {
+    const res = await fetch('/compare-audio-stt', {
       method: 'POST',
       headers: { 'Content-Type': file.type || 'application/octet-stream' },
       body: buf,
     });
-    const sttMs = Date.now() - sttStart;
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Transcription failed');
+    // sunucu ölçümü: kaydın son kelimesinin bitişi → final transcript
+    const sttMs = data.sttMs != null ? Math.round(data.sttMs) : null;
     document.getElementById('cmpTranscript').value = data.transcript || '';
     cmpExpected = null;
     document.getElementById('cmpScenario').value = '';
     cmpLastSttMs = data.transcript ? sttMs : null;
     status.textContent = data.transcript
-      ? `Transcript from audio file (STT ${sttMs}ms).`
+      ? `Transcript from audio file (STT ${sttMs != null ? sttMs + 'ms' : 'n/a'}).`
       : 'No speech detected.';
   } catch (e) {
     cmpLastSttMs = null;
@@ -4870,6 +5081,10 @@ async function runBatchScenarios() {
 
 renderCmpHistory();
 initModelAudioUploads();
+if (location.hash === "#compare") switchView("compare");
+window.addEventListener("hashchange", () => {
+  switchView(location.hash === "#compare" ? "compare" : "demo");
+});
 </script>
 </body>
 </html>
