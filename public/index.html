@@ -3121,7 +3121,8 @@ async function onScenarioSelect() {
     cmpExpected = null;
     const expSel = document.getElementById('cmpExpectedSel');
     if (expSel) expSel.value = '';
-    stopSourceMic();
+    // Discard active mic capture — do not finalize WAV (would overwrite cleared source)
+    stopSourceMic({ discard: true });
     cmpAudioSource = null;
     cmpSharedDeepgramMeta = null;
     applyAudioSourceToPanels();
@@ -3153,7 +3154,8 @@ async function onScenarioSelect() {
   cmpAccumTranscript = null;
   cmpResults = {};
   cmpFreeformResults = {};
-  stopSourceMic();
+  // Discard active mic capture — do not finalize WAV (would race and overwrite scenario audio)
+  stopSourceMic({ discard: true });
 
   setSourceStatus('Loading scenario audio: ' + s.audioFile + '...');
   try {
