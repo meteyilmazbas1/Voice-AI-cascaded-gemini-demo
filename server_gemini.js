@@ -688,7 +688,7 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
           return;
         }
 
-        if (sessionState === "LISTENING") return;
+        if (sessionState !== "LISTENING") return;
         if(!geminiWs || geminiWs.readyState !== WebSocket.OPEN) return;
         
         await analyzePcm(buf);
@@ -703,7 +703,7 @@ if (msg.serverContent && msg.serverContent.inputTranscription) {
           const CHUNK_SIZE = 3200;
           for (let off = 0; off < buf.length; off += CHUNK_SIZE) {
             const slice = buf.subarray(off, Math.min(off + CHUNK_SIZE, buf.length));
-            geminiWs.send(JSON.stringify({ realtime_input: {audi0: {
+            geminiWs.send(JSON.stringify({ realtime_input: {audio: {
               data: slice.toString("base64"), mimeType: "audio/pcm;rate=" + actualSampleRate } } }));
               lastAudioSentTime = Date.now();
               if (off + CHUNK_SIZE < buf.length) await new Promise(function (r) {
@@ -813,12 +813,12 @@ function mulawToPcm(mulawBuffer) {
 
 const TWILIO_WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay?`;
 
-const OVERLAP_MARGIN_DB = 14;
+const OVERLAP_ABOVE_FLOOR_DB = 50;
 
 function loudOverlaps(m) {
-  if (m.speechDbfs == null) return [];
+  if (m.noiseLevelDbfs == null) return [];
   return m.collisions.filter(function (c) {
-    return c.type === "overlap" && c.peakDbfs != null && (c.peakDbfs - m.speechMedDbfs) >= OVERLAP_MARGIN_DB;
+    return c.type === "overlap" && c.peakDbfs != null && (c.peakDbfs - m.noiseLevelDbfs) >= OVERLAP_ABOVE_FLOOR_DB;
   });
 }
 

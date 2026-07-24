@@ -91,6 +91,7 @@ const { createSileroVad } = require("./sileroVad");
 const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
 const { off } = require('cluster');
 const e = require('express');
+const { Sessions } = require('@anthropic-ai/sdk/resources/beta.js');
 
 const DENOISE_ENGINE = (process.env.DENOISE_ENGINE || (process.env.DEEPFILTER_ENABLED === "true" ? "deepfilter" : "off")).toLowerCase();
 const DEEPFILTER_ENABLED = DENOISE_ENGINE !== "off";
@@ -796,6 +797,7 @@ browserWss.on('connection', function(ws) {
   let selectedModel = 'claude-haiku-4-5';
   let ttsMode = 'elevenlabs';
   let lastMediaAt = 0;
+    let lastMicLogAt = 0;
   let lastConfidence = null;
   let safetyConfirmPending = false;
   let clientE2eMs = null;
@@ -846,8 +848,18 @@ browserWss.on('connection', function(ws) {
 
   function sendAudioToDeepgram(buf) {
     if (!buf || !buf.length) return;
-    if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.send(buf);
-    else audioBuffer = Buffer.concat([audioBuffer, buf]);
+    if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+      deepgramWs.send(buf);
+      return;
+    }
+
+    audioBuffer = Buffer.concat([audioBuffer, buf]);
+    if (sessionState !== "ENDED" &&
+      (!deepgramWs || deepgramWs.readyState === WebSocket.CLOSING ||
+        deepgramWs.readyState === WebSocket.CLOSED)) {
+          console.log("[Deepgram] Socket not open - reconnecting for incoming audio");
+          startDeepgramStream();
+        }
   }
 
   async function handleTranscript(finalTranscript, sttMs) {
@@ -1045,23 +1057,23 @@ browserWss.on('connection', function(ws) {
           const text = alt.transcript;
           if (msg.is_final && alt.words && alt.words.length) uttWords.push(...alt.words);
           if (text && text.trim()) {
-            if (msg.is_final && typeof alt.confidence === 'number') {
+            if (msg.is_final && typeof alt.confidence === "number") {
               lastConfidence = alt.confidence;
             }
-            send({ type: 'interim_transcript', text: text, is_final: msg.is_final });
-            if (msg.is_final && msg.speech_final && sessionState === 'LISTENING') {
-              clearSilenceTimer();
-              const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
-              transcript = text;
-              const toProcess = transcript; transcript = '';
-              await handleTranscript(toProcess, sttMs);
+            send({ type: "interim_transcript", text: text, is_final: msg.is_final});
+            if (msg.is_final && sessionState === "LISTENING") {
+              transcript = transcript ? (transcript + " " + text.trim()) : text.trim();
+              if (msg.speech_final) {
+                const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
+                const toProcess = transcript; transcript = "";
+                await handleTranscript(toProcess, sttMs);
+              }
             }
           }
         }
-        if (msg.type === 'UtteranceEnd' && transcript && sessionState === 'LISTENING') {
-          clearSilenceTimer();
+        if (msg.type === "UtteranceEnd" && transcript && transcript.trim() && sessionState === "LISTENING") {
           const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
-          const toProcess = transcript; transcript = '';
+          const toProcess = transcript; transcript = "";
           await handleTranscript(toProcess, sttMs);
         }
       } catch (e) {}
@@ -1430,6 +1442,10 @@ browserWss.on('connection', function(ws) {
               }
             }
           } else {
+            if (!lastMicLogAt || Date.now() - lastMicLogAt > 1000) {
+             console.log('[Mic] client PCM frame:', raw.length, 'bytes -> Deepgram (dgState=' + (deepgramWs ? deepgramWs.readyState : 'null') + ')');
+             lastMicLogAt = Date.now();
+            }
             sendAudioToDeepgram(raw);
           }
         }
