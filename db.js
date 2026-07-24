@@ -40,6 +40,9 @@ try {
 try {
   db.exec('ALTER TABLE calls ADD COLUMN tts_ms INTEGER DEFAULT NULL');
 } catch (e) {}
+try {
+  db.exec('ALTER TABLE calls ADD COLUMN deepgram_cost REAL DEFAULT NULL');
+} catch (e) {}
 
 const insertCallStmt = db.prepare(`
   INSERT OR IGNORE INTO calls (call_sid, stream_sid, worker_phone, start_time, model_used, session_state)
@@ -60,7 +63,8 @@ const updateCallStmt = db.prepare(`
     ttfa_ms = COALESCE(?, ttfa_ms),
     stt_ms = COALESCE(?, stt_ms),
     llm_ms = COALESCE(?, llm_ms),
-    tts_ms = COALESCE(?, tts_ms)
+    tts_ms = COALESCE(?, tts_ms),
+    deepgram_cost = COALESCE(?, deepgram_cost)
   WHERE call_sid = ?
 `);
 
@@ -69,7 +73,11 @@ const updateRecordingStmt = db.prepare(`
 `);
 
 const updateLatencyStmt = db.prepare(`
-  UPDATE calls SET stt_ms = COALESCE(?, stt_ms), llm_ms = COALESCE(?, llm_ms), tts_ms = COALESCE(?, tts_ms)
+  UPDATE calls SET
+    stt_ms = COALESCE(?, stt_ms),
+    llm_ms = COALESCE(?, llm_ms),
+    tts_ms = COALESCE(?, tts_ms),
+    deepgram_cost = COALESCE(?, deepgram_cost)
   WHERE call_sid = ?
 `);
 
@@ -84,7 +92,7 @@ function insertCallStart({ callSid, streamSid, workerPhone, startTime, modelUsed
   );
 }
 
-function updateCallEnd({ callSid, streamSid, workerPhone, endTime, durationSeconds, sessionState, finalIntent, recordingUrl, transcript, silenceCount, ttfaMs, sttMs, llmMs, ttsMs }) {
+function updateCallEnd({ callSid, streamSid, workerPhone, endTime, durationSeconds, sessionState, finalIntent, recordingUrl, transcript, silenceCount, ttfaMs, sttMs, llmMs, ttsMs, deepgramCost }) {
   updateCallStmt.run(
     streamSid || null,
     workerPhone || null,
@@ -99,15 +107,17 @@ function updateCallEnd({ callSid, streamSid, workerPhone, endTime, durationSecon
     sttMs != null ? sttMs : null,
     llmMs != null ? llmMs : null,
     ttsMs != null ? ttsMs : null,
+    deepgramCost != null ? deepgramCost : null,
     callSid
   );
 }
 
-function updateCallLatency({ callSid, sttMs, llmMs, ttsMs }) {
+function updateCallLatency({ callSid, sttMs, llmMs, ttsMs, deepgramCost }) {
   updateLatencyStmt.run(
     sttMs != null ? sttMs : null,
     llmMs != null ? llmMs : null,
     ttsMs != null ? ttsMs : null,
+    deepgramCost != null ? deepgramCost : null,
     callSid
   );
 }
@@ -130,7 +140,8 @@ function listCalls(page, limit) {
   const offset = (page - 1) * limit;
   const calls = db.prepare(`
     SELECT id, call_sid, worker_phone, start_time, end_time, duration_seconds,
-           session_state, final_intent, model_used, recording_url, silence_count, ttfa_ms, created_at
+           session_state, final_intent, model_used, recording_url, silence_count,
+           ttfa_ms, stt_ms, llm_ms, tts_ms, deepgram_cost, created_at
     FROM calls ORDER BY created_at DESC LIMIT ? OFFSET ?
   `).all(limit, offset);
   const total = db.prepare('SELECT COUNT(*) as count FROM calls').get().count;
