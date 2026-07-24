@@ -4400,6 +4400,22 @@ function getModelAudioFile(modelId) {
   return st.audioFile || null;
 }
 
+/** Marker when shared Claude Deepgram STT fails — blocks per-model fallback. */
+function sharedClaudeSttFailureFromError(err) {
+  const message = (err && err.message) ? err.message : String(err);
+  const error_detail = (err && err.error_detail) || { stage: 'STT', message };
+  return { failed: true, error: message, error_detail };
+}
+
+function throwIfSharedClaudeSttFailed(sharedClaudeStt) {
+  if (!sharedClaudeStt || !sharedClaudeStt.failed) return;
+  throw makeCompareClientError(
+    sharedClaudeStt.error || 'Shared Deepgram STT failed',
+    sharedClaudeStt.error_detail,
+    'STT'
+  );
+}
+
 /**
  * Run Deepgram once and reuse the same transcript + stt_ms for all Claude models.
  * Call this once per series run before Haiku/Sonnet — Gemini is never involved.
@@ -4472,6 +4488,8 @@ async function runSingleModelCompare(modelId, transcript, expected, sharedClaude
   const opts = {};
   if (st.audioFileName) opts.audioFileName = st.audioFileName;
 
+  if (isClaude && sharedClaudeStt) throwIfSharedClaudeSttFailed(sharedClaudeStt);
+
   if (isClaude && sharedClaudeStt && sharedClaudeStt.transcript) {
     // Shared Deepgram result — identical transcript + stt_ms for Haiku and Sonnet
     tx = sharedClaudeStt.transcript;
@@ -4487,7 +4505,7 @@ async function runSingleModelCompare(modelId, transcript, expected, sharedClaude
     st.convertMs = opts.convertMs;
     updatePanelSttUI(modelId);
   } else if (hasAudio) {
-    // Gemini: own Live STT every run. Claude fallback if shared STT was not prepared.
+    // Gemini: own Live STT every run. Claude per-model Deepgram only when shared STT was not attempted.
     if (panelSttEngine(modelId) === 'gemini') {
       setPanelStatus(modelId, 'Run STT (Gemini Live)...');
       const buf = await st.audioFile.arrayBuffer();
@@ -4927,7 +4945,8 @@ async function runComparisonSeries(seriesCount) {
             sharedClaudeStt = await runSharedClaudeDeepgramStt(claudeModels);
           } catch (e) {
             console.error('[Run Error]', 'shared-claude-stt', 'run', nextRunNum, e);
-            claudeModels.forEach(m => setPanelStatus(m, 'Shared STT error: ' + e.message));
+            sharedClaudeStt = sharedClaudeSttFailureFromError(e);
+            claudeModels.forEach(m => setPanelStatus(m, 'Shared STT error: ' + sharedClaudeStt.error));
           }
         }
 
@@ -5037,6 +5056,8 @@ async function runComparisonSeries(seriesCount) {
             sharedClaudeStt = await runSharedClaudeDeepgramStt(claudeModels);
           } catch (e) {
             console.error('[Run Error]', 'shared-claude-stt', 'run', nextRunNum, e);
+            sharedClaudeStt = sharedClaudeSttFailureFromError(e);
+            claudeModels.forEach(m => setPanelStatus(m, 'Shared STT error: ' + sharedClaudeStt.error));
           }
         }
 
@@ -5044,8 +5065,19 @@ async function runComparisonSeries(seriesCount) {
           if (cmpStopFlag) return;
           try {
           let ffTranscript = transcript;
-          if (String(model).startsWith('claude') && sharedClaudeStt && sharedClaudeStt.transcript) {
-            ffTranscript = sharedClaudeStt.transcript;
+          if (String(model).startsWith('claude')) {
+            throwIfSharedClaudeSttFailed(sharedClaudeStt);
+            if (sharedClaudeStt && sharedClaudeStt.transcript) {
+              ffTranscript = sharedClaudeStt.transcript;
+            } else {
+              const file = getModelAudioFile(model);
+              if (file) {
+                const stt = await compareAudioStt(file);
+                ffTranscript = stt.transcript;
+              } else if (!ffTranscript) {
+                throw makeCompareClientError('No transcript and no audio source selected', null, 'STT');
+              }
+            }
           } else {
             const file = getModelAudioFile(model);
             if (file) {
@@ -5114,6 +5146,8 @@ async function runComparisonSeries(seriesCount) {
             sharedClaudeStt = await runSharedClaudeDeepgramStt(claudeModels);
           } catch (e) {
             console.error('[Run Error]', 'shared-claude-stt', 'run', nextRunNum, e);
+            sharedClaudeStt = sharedClaudeSttFailureFromError(e);
+            claudeModels.forEach(m => setPanelStatus(m, 'Shared STT error: ' + sharedClaudeStt.error));
           }
         }
 
@@ -5139,11 +5173,25 @@ async function runComparisonSeries(seriesCount) {
             };
           }
           // Freeform: Claude reuses shared STT; Gemini / others use own audio STT if set
+          try {
           let ffTranscript = transcript;
-          if (String(model).startsWith('claude') && sharedClaudeStt && sharedClaudeStt.transcript) {
-            ffTranscript = sharedClaudeStt.transcript;
+          if (String(model).startsWith('claude')) {
+            throwIfSharedClaudeSttFailed(sharedClaudeStt);
+            if (sharedClaudeStt && sharedClaudeStt.transcript) {
+              ffTranscript = sharedClaudeStt.transcript;
+            } else {
+              const file = getModelAudioFile(model);
+              if (file) {
+                try {
+                  const stt = await compareAudioStt(file);
+                  ffTranscript = stt.transcript;
+                } catch (e) {
+                  console.error('[Run Error]', model, 'run', nextRunNum, e);
+                }
+              }
+            }
           } else {
-            let file = getModelAudioFile(model);
+            const file = getModelAudioFile(model);
             if (file) {
               try {
                 const stt = await compareAudioStt(file);
@@ -5153,10 +5201,9 @@ async function runComparisonSeries(seriesCount) {
               }
             }
           }
-          try {
-            const freeformMap = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
-            cmpResults[model] = mergeIntentRun(cmpResults[model], intentMap[model] || { ok: false, error: 'No result', model }, expected);
-            cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], freeformMap[model] || { ok: false, error: 'No result', model });
+          const freeformMap = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
+          cmpResults[model] = mergeIntentRun(cmpResults[model], intentMap[model] || { ok: false, error: 'No result', model }, expected);
+          cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], freeformMap[model] || { ok: false, error: 'No result', model });
           } catch (e) {
             console.error('[Run Error]', model, 'run', nextRunNum, e);
             const detail = e.error_detail || { stage: 'LLM', message: e.message || String(e) };
