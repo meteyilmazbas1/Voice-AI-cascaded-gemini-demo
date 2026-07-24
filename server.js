@@ -7,9 +7,13 @@ const express = require('express');
 const WebSocket = require('ws');
 const http = require('http');
 const axios = require('axios');
+const https = require('https');
 const Anthropic = require('@anthropic-ai/sdk');
 const twilio = require('twilio');
 const { spawn } = require('child_process');
+
+/** Reuse TLS connections for Deepgram REST (avoids ~200–500ms handshake per request). */
+const deepgramHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
 
 const app = express();
 const server = http.createServer(app);
@@ -556,6 +560,7 @@ twilioWss.on('connection', function(ws) {
   let callSttMs = null;
   let callLlmMs = null;
   let callTtsMs = null;
+  let callDeepgramCost = null;
   let callStartTime = new Date().toISOString();
   let callFinalIntent = null;
   let callTranscript = [];
@@ -684,7 +689,12 @@ twilioWss.on('connection', function(ws) {
               clearSilenceTimer();
               const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
               callSttMs = sttMs;
-              console.log('[Twilio STT]', sttMs + 'ms');
+              const callDurationSec = dgClockMs > 0 ? (dgClockMs / 1000) : null;
+              callDeepgramCost = calcDeepgramStreamingCost(callDurationSec);
+              console.log('[Twilio STT]', sttMs + 'ms',
+                '| audio_sec:', callDurationSec != null ? callDurationSec.toFixed(3) : 'n/a',
+                '| deepgram_cost:', callDeepgramCost != null ? callDeepgramCost.toFixed(6) : 'n/a',
+                '(streaming @ $' + DEEPGRAM_STREAMING_RATE + '/min)');
               await handleTwilioTranscript(text);
             }
           }
@@ -748,14 +758,21 @@ twilioWss.on('connection', function(ws) {
     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
     clearSilenceTimer();
 
-    if (callSttMs != null || callLlmMs != null || callTtsMs != null) {
-      console.log('[Twilio Latency] STT:', (callSttMs != null ? callSttMs : '—') + 'ms | LLM:', (callLlmMs != null ? callLlmMs : '—') + 'ms | TTS:', (callTtsMs != null ? callTtsMs : '—') + 'ms | Total:', ((callSttMs || 0) + (callLlmMs || 0) + (callTtsMs || 0)) + 'ms');
+    if (callSttMs != null || callLlmMs != null || callTtsMs != null || callDeepgramCost != null) {
+      console.log('[Twilio Latency] STT:', (callSttMs != null ? callSttMs : '—') + 'ms | LLM:', (callLlmMs != null ? callLlmMs : '—') + 'ms | TTS:', (callTtsMs != null ? callTtsMs : '—') + 'ms | Total:', ((callSttMs || 0) + (callLlmMs || 0) + (callTtsMs || 0)) + 'ms',
+        '| deepgram_cost:', callDeepgramCost != null ? callDeepgramCost.toFixed(6) : '—');
     }
 
     if (callSid) {
       try {
         const endTime = new Date().toISOString();
         const durationSeconds = Math.round((new Date(endTime) - new Date(callStartTime)) / 1000);
+        // Prefer streamed audio clock; fall back to wall-clock call duration
+        const streamSec = dgClockMs > 0 ? (dgClockMs / 1000) : durationSeconds;
+        callDeepgramCost = calcDeepgramStreamingCost(streamSec);
+        console.log('[Twilio] Call log | duration_sec:', durationSeconds,
+          '| stream_audio_sec:', streamSec != null ? Number(streamSec).toFixed(3) : 'n/a',
+          '| deepgram_cost:', callDeepgramCost != null ? callDeepgramCost.toFixed(6) : 'n/a');
         updateCallEnd({
           callSid: callSid,
           streamSid: streamSid,
@@ -769,8 +786,15 @@ twilioWss.on('connection', function(ws) {
           sttMs: callSttMs,
           llmMs: callLlmMs,
           ttsMs: callTtsMs,
+          deepgramCost: callDeepgramCost,
         });
-        updateCallLatency({ callSid: callSid, sttMs: callSttMs, llmMs: callLlmMs, ttsMs: callTtsMs });
+        updateCallLatency({
+          callSid: callSid,
+          sttMs: callSttMs,
+          llmMs: callLlmMs,
+          ttsMs: callTtsMs,
+          deepgramCost: callDeepgramCost,
+        });
         console.log('[Twilio] Call saved to DB:', callSid);
       } catch (e) {
         console.error('[Twilio] Latency DB update error:', e.message);
@@ -2036,11 +2060,23 @@ function calcDeepgramCost(durationSec) {
   return (Number(durationSec) / 60) * 0.0043;
 }
 
+/** Deepgram streaming (live WS) rate — higher than prerecorded Nova REST. */
+const DEEPGRAM_STREAMING_RATE = 0.0077;
+
+function calcDeepgramStreamingCost(durationSec) {
+  if (durationSec == null || !Number.isFinite(Number(durationSec)) || Number(durationSec) <= 0) return null;
+  return (Number(durationSec) / 60) * DEEPGRAM_STREAMING_RATE;
+}
+
 /**
- * Shared Deepgram Nova-3 prerecorded REST STT for comparison audio.
+ * Deepgram Nova-3 prerecorded REST STT for comparison audio.
  * stt_ms / sttMs = wall clock of the Deepgram HTTP request ONLY (sttStart → response).
  * convert_ms = ffmpeg/format conversion only (never folded into stt_ms).
  * duration_sec / deepgram_cost filled after STT (metadata or probe) — never part of stt_ms.
+ *
+ * [STT Breakdown] logs phase timings so file-upload vs mic can be compared:
+ *   format_detect | pcm_convert | mp3_convert | deepgram_http | duration_extract | TOTAL
+ * Large RIFF WAV (>300KB) is ffmpeg-compressed to MP3 before upload (mp3_convert_ms, not in stt_ms).
  */
 async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
   const dgApiKey = process.env.DEEPGRAM_API_KEY;
@@ -2051,25 +2087,31 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
     throw new Error('audio body required');
   }
 
+  const t0 = Date.now();
+
+  // —— format detection (sync, should be ~0ms) ——
   const head4 = buf.slice(0, 4).toString('ascii');
   const head3 = buf.slice(0, 3).toString('ascii');
   const b0 = buf.length > 0 ? buf[0] : 0;
   const b1 = buf.length > 1 ? buf[1] : 0;
   const isRiff = head4 === 'RIFF';
   const isMp3 = head3 === 'ID3' || (b0 === 0xff && (b1 & 0xe0) === 0xe0);
-  // EBML / WebM / Matroska
   const isWebm = (b0 === 0x1a && b1 === 0x45) ||
     (contentTypeHint && String(contentTypeHint).toLowerCase().indexOf('webm') !== -1);
   const isOgg = head4 === 'OggS' ||
     (contentTypeHint && String(contentTypeHint).toLowerCase().indexOf('ogg') !== -1);
+  const t1 = Date.now();
 
   let audioBuffer = buf;
   let dgContentType = 'audio/wav';
   let convertMs = 0;
+  let didConvert = false;
 
-  // Normalize tricky containers to WAV via ffmpeg — timed as convert_ms, NOT stt_ms
+  // —— pcm/ffmpeg convert (BEFORE sttStart; timed as convert_ms, NOT in stt_ms) ——
+  // Runs for webm/ogg OR unknown non-riff/non-mp3. Pure RIFF WAV and MP3 skip this.
   if (isWebm || isOgg || (!isRiff && !isMp3)) {
     const convertStart = Date.now();
+    didConvert = true;
     try {
       console.log('[Compare Audio STT] Converting to PCM/WAV via ffmpeg (convert_ms, excluded from stt_ms)...',
         isWebm ? 'webm' : isOgg ? 'ogg' : (contentTypeHint || 'unknown'), buf.length, 'bytes');
@@ -2092,9 +2134,63 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
   } else if (isMp3) {
     dgContentType = 'audio/mpeg';
   }
+  const t2 = Date.now();
 
-  // Prerecorded REST: POST entire buffer once — Deepgram processes offline (not realtime listen).
-  // stt_ms = ONLY this HTTP round-trip (must not include convert_ms or duration probe).
+  // —— Large WAV → MP3 before upload (excluded from stt_ms). Skip if already MP3. ——
+  let mp3ConvertMs = 0;
+  const sendIsWav = dgContentType === 'audio/wav'
+    && audioBuffer.length >= 12
+    && audioBuffer.slice(0, 4).toString('ascii') === 'RIFF';
+  if (sendIsWav && audioBuffer.length > 300000) {
+    const mp3Start = Date.now();
+    const originalLen = audioBuffer.length;
+    try {
+      const mp3Buf = await new Promise(function(resolve, reject) {
+        const ffmpeg = spawn('ffmpeg', [
+          '-hide_banner', '-loglevel', 'error',
+          '-i', 'pipe:0',
+          '-f', 'mp3',
+          '-ar', '16000',
+          '-ac', '1',
+          '-b:a', '64k',
+          'pipe:1',
+        ]);
+        const chunks = [];
+        ffmpeg.stdout.on('data', function(d) { chunks.push(d); });
+        let errText = '';
+        ffmpeg.stderr.on('data', function(d) { errText += d.toString(); });
+        ffmpeg.on('error', function(e) {
+          reject(new Error('ffmpeg WAV->MP3 spawn failed: ' + e.message));
+        });
+        ffmpeg.on('close', function(code) {
+          if (code !== 0 || chunks.length === 0) {
+            return reject(new Error('ffmpeg WAV->MP3 failed: ' + (errText || ('exit ' + code)).slice(0, 200)));
+          }
+          resolve(Buffer.concat(chunks));
+        });
+        ffmpeg.stdin.write(audioBuffer);
+        ffmpeg.stdin.end();
+      });
+      if (mp3Buf && mp3Buf.length && mp3Buf.length < originalLen) {
+        audioBuffer = mp3Buf;
+        dgContentType = 'audio/mpeg';
+        mp3ConvertMs = Date.now() - mp3Start;
+        console.log('[Compare Audio STT] WAV->MP3 compressed:',
+          '(' + mp3ConvertMs + 'ms, excluded from stt_ms) |',
+          'original:', originalLen, 'bytes ->', audioBuffer.length, 'bytes');
+      } else {
+        mp3ConvertMs = Date.now() - mp3Start;
+        console.warn('[Compare Audio STT] WAV->MP3 skipped (no size win), sending WAV');
+      }
+    } catch (mp3Err) {
+      mp3ConvertMs = Date.now() - mp3Start;
+      console.warn('[Compare Audio STT] WAV->MP3 failed, sending WAV:', mp3Err.message);
+      dgContentType = 'audio/wav';
+    }
+  }
+
+  // —— Deepgram HTTP ONLY (stt_ms). Nothing else between sttStart and axios response. ——
+  // Duration probe runs AFTER so ffprobe never delays the Deepgram request (esp. MP3).
   const sttStart = Date.now();
   const response = await axios.post(
     'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true',
@@ -2106,6 +2202,7 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
       transformRequest: [function(data) { return data; }],
       responseType: 'json',
       timeout: 60000,
+      httpsAgent: deepgramHttpsAgent,
     }
   );
   const sttMs = Date.now() - sttStart;
@@ -2116,20 +2213,42 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
   const transcript = best.transcript || '';
   const confidence = typeof best.confidence === 'number' ? best.confidence : 0;
 
-  // Duration for billing — AFTER HTTP; never part of stt_ms
+  // —— duration extract AFTER HTTP (not in stt_ms). Prefer DG metadata; else ffprobe. ——
   let durationSec = null;
-  const metaDuration = payload.metadata && Number(payload.metadata.duration);
-  if (Number.isFinite(metaDuration) && metaDuration > 0) durationSec = metaDuration;
-  if (durationSec == null) durationSec = await getAudioDurationSec(buf);
-  if (durationSec == null && audioBuffer !== buf) {
-    durationSec = await getAudioDurationSec(audioBuffer);
+  let durationExtractMs = 0;
+  {
+    const durStart = Date.now();
+    const metaDuration = payload.metadata && Number(payload.metadata.duration);
+    if (Number.isFinite(metaDuration) && metaDuration > 0) durationSec = metaDuration;
+    if (durationSec == null) {
+      try { durationSec = await getAudioDurationSec(buf); } catch (e) { durationSec = null; }
+    }
+    if (durationSec == null && audioBuffer !== buf) {
+      try { durationSec = await getAudioDurationSec(audioBuffer); } catch (e) { /* ignore */ }
+    }
+    durationExtractMs = Date.now() - durStart;
   }
 
   const deepgramCost = calcDeepgramCost(durationSec);
+  const totalWall = Date.now() - t0;
+
+  console.log('[STT Breakdown]',
+    'format_detect:', (t1 - t0), 'ms',
+    '| pcm_convert:', (t2 - t1), 'ms' + (didConvert ? '' : ' (skipped)'),
+    '| mp3_convert:', mp3ConvertMs, 'ms' + (mp3ConvertMs ? '' : ' (skipped)'),
+    '| deepgram_http:', sttMs, 'ms',
+    '| duration_extract:', durationExtractMs, 'ms (after HTTP, not in stt_ms)',
+    '| TOTAL:', totalWall, 'ms',
+    '| bytes_in:', buf.length,
+    '| bytes_sent:', audioBuffer.length,
+    '| type:', dgContentType,
+    '| riff:', isRiff, 'mp3:', isMp3, 'webm:', isWebm, 'ogg:', isOgg,
+    '| hint:', contentTypeHint || 'n/a');
 
   console.log('[Compare Audio STT]',
-    'convert_ms:', convertMs,
-    '| stt_ms:', sttMs, '(HTTP only)',
+    sttMs + 'ms (HTTP only)',
+    '| convert_ms:', convertMs,
+    '| mp3_convert_ms:', mp3ConvertMs,
     '| audio_duration_sec:', durationSec != null ? Number(durationSec).toFixed(3) : 'n/a',
     '| deepgram_cost:', deepgramCost != null ? deepgramCost.toFixed(6) : 'n/a',
     '|', dgContentType,
@@ -2139,10 +2258,21 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
     transcript: transcript,
     sttMs: sttMs,
     convertMs: convertMs,
+    mp3ConvertMs: mp3ConvertMs,
     confidence: confidence,
     engine: 'deepgram',
     duration_sec: durationSec,
     deepgram_cost: deepgramCost,
+    breakdown: {
+      format_detect_ms: t1 - t0,
+      pcm_convert_ms: t2 - t1,
+      mp3_convert_ms: mp3ConvertMs,
+      deepgram_http_ms: sttMs,
+      duration_extract_ms: durationExtractMs,
+      total_ms: totalWall,
+      bytes_in: buf.length,
+      bytes_sent: audioBuffer.length,
+    },
   };
 }
 
