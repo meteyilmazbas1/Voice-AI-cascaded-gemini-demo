@@ -95,7 +95,6 @@ const { createSileroVad } = require("./sileroVad");
 const { frameStatsMulaw, frameStatsPcm16 } = require("./audioLevel");
 const { off } = require('cluster');
 const e = require('express');
-const { Sessions } = require('@anthropic-ai/sdk/resources/beta.js');
 
 const DENOISE_ENGINE = (process.env.DENOISE_ENGINE || (process.env.DEEPFILTER_ENABLED === "true" ? "deepfilter" : "off")).toLowerCase();
 const DEEPFILTER_ENABLED = DENOISE_ENGINE !== "off";
@@ -1105,8 +1104,77 @@ browserWss.on('connection', function(ws) {
     deepgramWs.on('error', function(e) { console.error('[Deepgram] Error:', e.message); send({ type: 'stage', stage: 'stt', status: 'error' }); });
     deepgramWs.on('close', function(code, reason) { console.log('[Deepgram] Closed', code, reason ? reason.toString() : ''); send({ type: 'stage', stage: 'stt', status: 'disconnected' }); });
   }
+  function streamFileToDeepgram(pcm) {
+    return new Promise(function(resolve, reject) {
+      const dgApiKey = process.env.DEEPGRAM_API_KEY;
+      if (!dgApiKey || dgApiKey === "your_deepgram_key") { reject(new Error("Deepgram API key not set")); return; }
+      const params = new URLSearchParams({ ...DEEPGRAM_BASE_PARAMS, encoding: "linear16", sample_rate: "16000", channels: "1" });
+      const dgUrl = "wss://api.deepgram.com/v1/listen?" + params.toString() + DEEPGRAM_KEYTERMS;
+      const fileWs = new WebSocket(dgUrl, { headers: { Authorization: "Token " + dgApiKey } });
 
-  ws.on('error', function(e) { console.error('[WS Error]', e.message); });
+      let finalText = "";
+      const words = [];
+      let confidence = null;
+      let sttMs = null;
+      let lastFinalAt = null;
+      let settled = false;
+      let guardTimer = null;
+
+      function done() {
+        if (settled) return;
+        settled = true;
+        if (guardTimer) clearTimeout(guardTimer);
+        if (sttMs == null && lastMediaAt) {
+          sttMs = (lastFinalAt && lastFinalAt > lastMediaAt) ? (lastFinalAt - lastMediaAt) : (Date.now() - lastMediaAt);
+        }
+        try { if (fileWs.readyState === WebSocket.OPEN) fileWs.close(); } catch (e) {}
+        resolve({ transcript: finalText.trim(), words: words, confidence: confidence, sttMs: sttMs });
+      }
+
+      fileWs.on("open", async function() {
+        const SUB = 640;      // 20ms @ 16kHz PCM16
+        const FRAME_MS = 20;  // gerçek-zamanlı tempo — mic ile aynı davranış (kaldırırsan "anlık" mod)
+        for (let off = 0; off < pcm.length; off += SUB) {
+          if (fileWs.readyState !== WebSocket.OPEN) return;
+          const chunk = pcm.subarray(off, Math.min(off + SUB, pcm.length));
+          if (chunk.length < 2) break;
+          fileWs.send(chunk);
+          await new Promise(function(r) { setTimeout(r, FRAME_MS); });
+        }
+        console.log("[FileStream] loop bitti | gönderilen bytes:", pcm.length,
+          "| beklenen süre(ms):", Math.round(pcm.length / 32),
+          "| wsOpen:", fileWs.readyState === WebSocket.OPEN);
+        lastMediaAt = Date.now();                                 // son ses paketi = ölçüm referansı
+        try { fileWs.send(JSON.stringify({ type: "CloseStream" })); } catch (e) {}  // tümünü işle + kapat
+      });
+
+      fileWs.on("message", function(data) {
+        let msg; try { msg = JSON.parse(data.toString()); } catch (e) { return; }
+        if (msg.type === "Results" && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
+          const alt = msg.channel.alternatives[0];
+          console.log("[FileStream] Results | is_final:", msg.is_final,
+          "| speech_final:", msg.speech_final, "| tx:", JSON.stringify(alt.transcript));
+          if (msg.is_final) {
+            lastFinalAt = Date.now();
+            if (alt.transcript && alt.transcript.trim()) {
+              finalText += (finalText ? " " : "") + alt.transcript.trim();  // TÜM segmentleri birleştir
+              if (typeof alt.confidence === "number") confidence = alt.confidence;
+            }
+            if (alt.words && alt.words.length) words.push(...alt.words);
+          }
+        }
+        if (msg.type === "Metadata") { console.log("[FileStream] Metadata alındı"); done(); }
+      });
+
+      fileWs.on("error", function(e) { if (settled) return; settled = true; if (guardTimer) clearTimeout(guardTimer); reject(new Error("Deepgram stream error: " + e.message)); });
+      fileWs.on("close", function(code, reason) {
+        console.log("[FileStream] fileWs closed:", code, reason ? reason.toString() : "");
+        done();
+      });
+
+      guardTimer = setTimeout(done, Math.ceil(pcm.length / 32) + 10000);  // dosya süresi + tampon
+    });
+  }
 
   ws.on('message', async function(data, isBinary) {
     try {
@@ -1280,7 +1348,10 @@ browserWss.on('connection', function(ws) {
               '| ch:', fullBuffer.readUInt16LE(22),
               '| bits:', fullBuffer.readUInt16LE(34));
           }
-                    let fileStartMs = null;
+
+          let fileStartMs = null;
+          let streamPcm = null;
+
           if (!isMp3) {
             const sr = isRiff ? fullBuffer.readUInt32LE(24) : 16000;
             const ch = isRiff ? fullBuffer.readUInt16LE(22) : 1;
@@ -1290,14 +1361,13 @@ browserWss.on('connection', function(ws) {
               dataOff = 44;
               for (let i = 12; i + 8 <= fullBuffer.length;) {
                 const id = fullBuffer.toString("ascii", i, i + 4);
-                const sz = fullBuffer.readUInt32LE(i + 4);
-                if (id === "data") { dataOff = i + 8; break; }
+                const sz = fullBuffer.readUint32LE(i + 4);
+                if (id === "data") { dataOff = i + 8; break;}
                 i += 8 + sz + (sz % 2);
               }
             }
             const pcm = fullBuffer.subarray(dataOff);
             if (bits === 16 && ch >= 1 && pcm.length >= 2 * ch) {
-              // stereo -> mono ortalama, sonra 16k'ya lineer resample
               const n = Math.floor(pcm.length / 2 / ch);
               const monoF = new Float32Array(n);
               for (let i = 0; i < n; i++) {
@@ -1310,105 +1380,87 @@ browserWss.on('connection', function(ws) {
               for (let i = 0; i < outN; i++) {
                 const src = i * sr / 16000;
                 const i0 = Math.floor(src), frac = src - i0;
-                const v = monoF[i0] * (1 - frac) + (monoF[Math.min(i0 + 1, n - 1)] || 0) * frac;
+                const v = monoF[i0] * (1 - frac) + (monoF[Math.min(i0 + 1, n -1)] || 0) * frac;
                 mono.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v))), i * 2);
               }
-              const fileVad = createSileroVad({ sampleRate: 16000 });
-              const FRAME_BYTES = 640;
-              await vadChain;
-              fileStartMs = audioClockMs;
-              for (let off = 0; off + 2 <= mono.length; off += FRAME_BYTES) {
-                const sub = mono.subarray(off, Math.min(off + FRAME_BYTES, mono.length));
-                const t = audioClockMs;
-                audioClockMs += sub.length / 32;
-                fileVad.processPcm16(sub);
-                const p = await fileVad.flush();
-                noise.pushFrame({ ...frameStatsPcm16(sub), speechProb: p }, t);
-              }
+              streamPcm = mono;
             }
           }
-          console.log('[Server] Audio file received — Deepgram REST (axios)');
-          send({ type: 'log', message: 'Sending to Deepgram STT (' + contentType + ')...' });
-          send({ type: 'stage', stage: 'stt', status: 'processing' });
+          if (!streamPcm || streamPcm.length < 2) {
+            try {
+              console.log("[Audio Decode] Converting to PCM16/16 kHz mono using FFmpeg (for streaming STT)...");
+              streamPcm = await audioToPcm16kMono(fullBuffer);
+            } catch (convErr) {
+              console.error("[Audio Decode] FFmpeg decode failed:", convErr.message);
+              send({ type: "log", message: "Failed to decode audio: " + convErr.message });
+              send({ type: "stage", stage: "stt", status: "error", duration: fileDurationSec, filename: fileName});
+              return;
+            } 
+          }
+
+          if (!streamPcm || streamPcm.length < 2) {
+            send({ type: "log", message: " Empty audio data - STT skipped" });
+            send({ type: "stage", stage: "stt", status: "error", duration: fileDurationSec, filename: fileName });
+            return;
+          }
+
+          {
+            const fileVad = createSileroVad({ sampleRate: 16000 });
+            const FRAME_BYTES = 640;
+            await vadChain;
+            fileStartMs = audioClockMs;
+            for (let off = 0; off + 2 <= streamPcm.length; off += FRAME_BYTES) {
+              const sub = streamPcm.subarray(off, Math.min(off + FRAME_BYTES, streamPcm.length));
+              const t = audioClockMs;
+              audioClockMs += sub.length / 32;
+              fileVad.processPcm16(sub);
+              const p = await fileVad.flush();
+              noise.pushFrame({ ... frameStatsPcm16(sub), speechProb: p}, t);
+            }
+          }
+
+          console.log("[Server] Audio file received - Deepgram streaming (mic-parity)");
+          send({ type: "log", message: "Sending to Deepgram STT (streaming, linear16/16k)..."});
+          send({ type: "stage", stage: "stt", status: "processing" });
           try {
-            const dgApiKey = process.env.DEEPGRAM_API_KEY;
-            const response = await axios.post(
-              'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true',
-              uploadBuffer,
-              {
-                headers: {
-                  Authorization: 'Token ' + dgApiKey,
-                  'Content-Type': contentType,
-                },
-                maxBodyLength: Infinity,
-                maxContentLength: Infinity,
-                transformRequest: [function(data) { return data; }],
-                responseType: 'json',
-              }
-            );
-            console.log('[Deepgram File] Status:', response.status);
-            console.log('[Deepgram File] Response:', JSON.stringify(response.data).substring(0, 500));
-            const alt = response.data && response.data.results
-              && response.data.results.channels
-              && response.data.results.channels[0]
-              && response.data.results.channels[0].alternatives
-              && response.data.results.channels[0].alternatives[0];
-            const fileTranscript = alt && alt.transcript;
-            if (fileTranscript && String(fileTranscript).trim()) {
-              console.log('[Deepgram] File transcript:', fileTranscript,
-                fileDurationSec != null ? ('| duration: ' + fileDurationSec + 's') : '');
-              send({
-                type: 'stage',
-                stage: 'stt',
-                status: 'done',
-                duration: fileDurationSec,
-                filename: fileName,
-              });
-              send({
-                type: 'audio_file_result',
-                filename: fileName,
-                duration: fileDurationSec,
-                transcript: String(fileTranscript).trim(),
-              });
-              if (fileStartMs != null && alt.words && alt.words.length) {
-                const offSec = fileStartMs / 1000;
-                uttWords = alt.words.map(function(w) {
-                  return {
-                    word: w.punctuated_word || w.word,
-                    start: (w.start || 0) + offSec,
-                    end: (w.end || 0) + offSec,
-                    confidence: (w.confidence != null ? w.confidence : null),
-                  };
+            const r = await streamFileToDeepgram(streamPcm);
+            const fileTranscript = (r.transcript || "").trim();
+            if (fileTranscript) {
+              console.log("[Deepgram Stream] File Transcript:", fileTranscript, "| STT:", r.sttMs + "ms",
+                fileDurationSec != null ? ("| duration: " + fileDurationSec + "s") : "");
+
+                if (fileStartMs != null && r.words && r.words.length) {
+                  const offSec = fileStartMs / 1000;
+                  uttWords = r.words.map(function(w) {
+                    return {
+                      word: w.punctuated_word || w.word,
+                      start: (w.start || 0) + offSec,
+                      end: (w.end || 0) + offSec,
+                      confidence: (w.confidence != null ? w.confidence : null),
+                    };
+                  });
+                }
+                if (typeof r.confidence === "number") lastConfidence = r.confidence;
+
+                send({
+                  type: "stage", stage: "stt", status: "done", ms: r.sttMs, duration: fileDurationSec, filename: fileName
                 });
-              }
-              if (typeof alt.confidence === "number") lastConfidence = alt.confidence;
-              await handleTranscript(fileTranscript, null);
+                send({
+                  type: "audio_file_result",
+                  filename: fileName, duration: fileDurationSec, transcript: fileTranscript
+                });
+
+                await handleTranscript(fileTranscript, r.sttMs);
             } else {
-              console.warn('[Deepgram] Empty transcript. alt=', JSON.stringify(alt));
-              send({
-                type: 'log',
-                message: 'No transcript from Deepgram'
-                  + (fileDurationSec != null ? (' (file ' + fileDurationSec + 's)') : ''),
-              });
-              send({
-                type: 'stage',
-                stage: 'stt',
-                status: 'error',
-                duration: fileDurationSec,
-                filename: fileName,
-              });
+              console.warn("[Deepgram Stream] Empty transcript.");
+              send({ type: "log", message: "No transcript from Deepgram" +
+                (fileDurationSec != null ? (" (file " + fileDurationSec + "s)") : "")});
+              send({ type: "stage", stage: "stt", status: "error", duration: fileDurationSec, filename: fileName });
             }
           } catch (e) {
-            console.error('[Deepgram File Error]', e.message);
-            if (e.response) console.error('[Deepgram File Error] body:', JSON.stringify(e.response.data).substring(0, 400));
-            send({ type: 'log', message: 'Deepgram error: ' + e.message });
-            send({
-              type: 'stage',
-              stage: 'stt',
-              status: 'error',
-              duration: fileDurationSec,
-              filename: fileName,
-            });
+            console.error("[Deepgram File Stream Error]", e.message);
+            send({ type: "log", message: "Deepgram error: " + e.message});
+            send({ type: "stage", stage: "stt", status: "error", duration: fileDurationSec, filename: fileName });
           }
         }
 
@@ -2059,6 +2111,71 @@ function calcDeepgramCost(durationSec) {
   if (durationSec == null || !Number.isFinite(Number(durationSec)) || Number(durationSec) <= 0) return null;
   return (Number(durationSec) / 60) * 0.0043;
 }
+function streamPcmToDeepgram(pcm, opts) {
+  opts = opts || {};
+  const realtime = opts.realtime !== false;
+  return new Promise(function(resolve, reject) {
+    const dgApiKey = process.env.DEEPGRAM_API_KEY;
+    if (!dgApiKey || dgApiKey === 'your_deepgram_key') { reject(new Error('DEEPGRAM_API_KEY is not set')); return; }
+    const params = new URLSearchParams({ ...DEEPGRAM_BASE_PARAMS, encoding: 'linear16', sample_rate: '16000', channels: '1' });
+    const dgUrl = 'wss://api.deepgram.com/v1/listen?' + params.toString() + DEEPGRAM_KEYTERMS;
+    const ws = new WebSocket(dgUrl, { headers: { Authorization: 'Token ' + dgApiKey } });
+
+    let finalText = '';
+    const words = [];
+    let confidence = null;
+    let localLastMediaAt = null;
+    let lastFinalAt = null;
+    let sttMs = null;
+    let settled = false;
+    let guardTimer = null;
+
+    function done() {
+      if (settled) return;
+      settled = true;
+      if (guardTimer) clearTimeout(guardTimer);
+      if (sttMs == null && localLastMediaAt) {
+        sttMs = (lastFinalAt && lastFinalAt > localLastMediaAt) ? (lastFinalAt - localLastMediaAt) : (Date.now() - localLastMediaAt);
+      }
+      try { if (ws.readyState === WebSocket.OPEN) ws.close(); } catch (e) {}
+      resolve({ transcript: finalText.trim(), words: words, confidence: confidence, sttMs: sttMs });
+    }
+
+    ws.on('open', async function() {
+      const SUB = 640;
+      for (let off = 0; off < pcm.length; off += SUB) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const chunk = pcm.subarray(off, Math.min(off + SUB, pcm.length));
+        if (chunk.length < 2) break;
+        ws.send(chunk);
+        if (realtime) await new Promise(function(r) { setTimeout(r, 20); });
+      }
+      localLastMediaAt = Date.now();
+      try { ws.send(JSON.stringify({ type: 'CloseStream' })); } catch (e) {}
+    });
+
+    ws.on('message', function(data) {
+      let msg; try { msg = JSON.parse(data.toString()); } catch (e) { return; }
+      if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
+        const alt = msg.channel.alternatives[0];
+        if (msg.is_final) {
+          lastFinalAt = Date.now();
+          if (alt.transcript && alt.transcript.trim()) {
+            finalText += (finalText ? ' ' : '') + alt.transcript.trim();
+            if (typeof alt.confidence === 'number') confidence = alt.confidence;
+          }
+          if (alt.words && alt.words.length) words.push(...alt.words);
+        }
+      }
+      if (msg.type === 'Metadata') done();
+    });
+
+    ws.on('error', function(e) { if (settled) return; settled = true; if (guardTimer) clearTimeout(guardTimer); reject(new Error('Deepgram stream error: ' + e.message)); });
+    ws.on('close', function() { done(); });
+
+    guardTimer = setTimeout(done, Math.ceil(pcm.length / 32) + 10000);
+  });
+}
 
 /** Deepgram streaming (live WS) rate — higher than prerecorded Nova REST. */
 const DEEPGRAM_STREAMING_RATE = 0.0077;
@@ -2080,199 +2197,46 @@ function calcDeepgramStreamingCost(durationSec) {
  */
 async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
   const dgApiKey = process.env.DEEPGRAM_API_KEY;
-  if (!dgApiKey || dgApiKey === 'your_deepgram_key') {
-    throw new Error('DEEPGRAM_API_KEY is not set');
+  if (!dgApiKey || dgApiKey === 'your_deepgram_key') throw new Error('DEEPGRAM_API_KEY is not set');
+  if (!buf || !buf.length) throw new Error('audio body required');
+
+  // Tüm formatları (mp3/wav/webm/ogg) PCM16/16k mono'ya çöz — convert_ms olarak ölç, stt_ms'e KATMA
+  const convertStart = Date.now();
+  let pcm;
+  try {
+    pcm = await audioToPcm16kMono(buf);
+  } catch (convErr) {
+    throw new Error('ffmpeg decode failed: ' + convErr.message);
   }
-  if (!buf || !buf.length) {
-    throw new Error('audio body required');
-  }
+  const convertMs = Date.now() - convertStart;
+  if (!pcm || pcm.length < 2) throw new Error('Audio conversion produced empty PCM');
 
-  const t0 = Date.now();
+  // Gerçek-zamanlı streaming STT — stt_ms = kuyruk gecikmesi (demo ile AYNI ölçüm)
+  const r = await streamPcmToDeepgram(pcm, { realtime: true });
+  const transcript = r.transcript || '';
+  const sttMs = r.sttMs;
+  const confidence = typeof r.confidence === 'number' ? r.confidence : 0;
 
-  // —— format detection (sync, should be ~0ms) ——
-  const head4 = buf.slice(0, 4).toString('ascii');
-  const head3 = buf.slice(0, 3).toString('ascii');
-  const b0 = buf.length > 0 ? buf[0] : 0;
-  const b1 = buf.length > 1 ? buf[1] : 0;
-  const isRiff = head4 === 'RIFF';
-  const isMp3 = head3 === 'ID3' || (b0 === 0xff && (b1 & 0xe0) === 0xe0);
-  const isWebm = (b0 === 0x1a && b1 === 0x45) ||
-    (contentTypeHint && String(contentTypeHint).toLowerCase().indexOf('webm') !== -1);
-  const isOgg = head4 === 'OggS' ||
-    (contentTypeHint && String(contentTypeHint).toLowerCase().indexOf('ogg') !== -1);
-  const t1 = Date.now();
-
-  let audioBuffer = buf;
-  let dgContentType = 'audio/wav';
-  let convertMs = 0;
-  let didConvert = false;
-
-  // —— pcm/ffmpeg convert (BEFORE sttStart; timed as convert_ms, NOT in stt_ms) ——
-  // Runs for webm/ogg OR unknown non-riff/non-mp3. Pure RIFF WAV and MP3 skip this.
-  if (isWebm || isOgg || (!isRiff && !isMp3)) {
-    const convertStart = Date.now();
-    didConvert = true;
-    try {
-      console.log('[Compare Audio STT] Converting to PCM/WAV via ffmpeg (convert_ms, excluded from stt_ms)...',
-        isWebm ? 'webm' : isOgg ? 'ogg' : (contentTypeHint || 'unknown'), buf.length, 'bytes');
-      const pcm = await audioToPcm16kMono(buf);
-      if (pcm && pcm.length) {
-        audioBuffer = createCompareWavBuffer(pcm);
-        dgContentType = 'audio/wav';
-      }
-    } catch (convErr) {
-      console.warn('[Compare Audio STT] ffmpeg convert failed, sending raw:', convErr.message);
-      if (isRiff) dgContentType = 'audio/wav';
-      else if (isMp3) dgContentType = 'audio/mpeg';
-      else if (isWebm) dgContentType = 'audio/webm';
-      else if (isOgg) dgContentType = 'audio/ogg';
-      else if (contentTypeHint) dgContentType = String(contentTypeHint).split(';')[0] || 'audio/wav';
-    }
-    convertMs = Date.now() - convertStart;
-  } else if (isRiff) {
-    dgContentType = 'audio/wav';
-  } else if (isMp3) {
-    dgContentType = 'audio/mpeg';
-  }
-  const t2 = Date.now();
-
-  // —— Large WAV → MP3 before upload (excluded from stt_ms). Skip if already MP3. ——
-  let mp3ConvertMs = 0;
-  const sendIsWav = dgContentType === 'audio/wav'
-    && audioBuffer.length >= 12
-    && audioBuffer.slice(0, 4).toString('ascii') === 'RIFF';
-  if (sendIsWav && audioBuffer.length > 300000) {
-    const mp3Start = Date.now();
-    const originalLen = audioBuffer.length;
-    try {
-      const mp3Buf = await new Promise(function(resolve, reject) {
-        const ffmpeg = spawn('ffmpeg', [
-          '-hide_banner', '-loglevel', 'error',
-          '-i', 'pipe:0',
-          '-f', 'mp3',
-          '-ar', '16000',
-          '-ac', '1',
-          '-b:a', '64k',
-          'pipe:1',
-        ]);
-        const chunks = [];
-        ffmpeg.stdout.on('data', function(d) { chunks.push(d); });
-        let errText = '';
-        ffmpeg.stderr.on('data', function(d) { errText += d.toString(); });
-        ffmpeg.on('error', function(e) {
-          reject(new Error('ffmpeg WAV->MP3 spawn failed: ' + e.message));
-        });
-        ffmpeg.on('close', function(code) {
-          if (code !== 0 || chunks.length === 0) {
-            return reject(new Error('ffmpeg WAV->MP3 failed: ' + (errText || ('exit ' + code)).slice(0, 200)));
-          }
-          resolve(Buffer.concat(chunks));
-        });
-        ffmpeg.stdin.write(audioBuffer);
-        ffmpeg.stdin.end();
-      });
-      if (mp3Buf && mp3Buf.length && mp3Buf.length < originalLen) {
-        audioBuffer = mp3Buf;
-        dgContentType = 'audio/mpeg';
-        mp3ConvertMs = Date.now() - mp3Start;
-        console.log('[Compare Audio STT] WAV->MP3 compressed:',
-          '(' + mp3ConvertMs + 'ms, excluded from stt_ms) |',
-          'original:', originalLen, 'bytes ->', audioBuffer.length, 'bytes');
-      } else {
-        mp3ConvertMs = Date.now() - mp3Start;
-        console.warn('[Compare Audio STT] WAV->MP3 skipped (no size win), sending WAV');
-      }
-    } catch (mp3Err) {
-      mp3ConvertMs = Date.now() - mp3Start;
-      console.warn('[Compare Audio STT] WAV->MP3 failed, sending WAV:', mp3Err.message);
-      dgContentType = 'audio/wav';
-    }
-  }
-
-  // —— Deepgram HTTP ONLY (stt_ms). Nothing else between sttStart and axios response. ——
-  // Duration probe runs AFTER so ffprobe never delays the Deepgram request (esp. MP3).
-  const sttStart = Date.now();
-  const response = await axios.post(
-    'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true',
-    audioBuffer,
-    {
-      headers: { Authorization: 'Token ' + dgApiKey, 'Content-Type': dgContentType },
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-      transformRequest: [function(data) { return data; }],
-      responseType: 'json',
-      timeout: 60000,
-      httpsAgent: deepgramHttpsAgent,
-    }
-  );
-  const sttMs = Date.now() - sttStart;
-
-  const payload = response.data || {};
-  const alt = ((payload.results || {}).channels || [])[0] || {};
-  const best = (alt.alternatives || [])[0] || {};
-  const transcript = best.transcript || '';
-  const confidence = typeof best.confidence === 'number' ? best.confidence : 0;
-
-  // —— duration extract AFTER HTTP (not in stt_ms). Prefer DG metadata; else ffprobe. ——
-  let durationSec = null;
-  let durationExtractMs = 0;
-  {
-    const durStart = Date.now();
-    const metaDuration = payload.metadata && Number(payload.metadata.duration);
-    if (Number.isFinite(metaDuration) && metaDuration > 0) durationSec = metaDuration;
-    if (durationSec == null) {
-      try { durationSec = await getAudioDurationSec(buf); } catch (e) { durationSec = null; }
-    }
-    if (durationSec == null && audioBuffer !== buf) {
-      try { durationSec = await getAudioDurationSec(audioBuffer); } catch (e) { /* ignore */ }
-    }
-    durationExtractMs = Date.now() - durStart;
-  }
-
+  // Duration — faturalandırma için; asla stt_ms'e dahil değil
+  let durationSec = await getAudioDurationSec(buf);
+  if (durationSec == null) durationSec = Math.round(pcm.length / 32) / 1000; // PCM'den yaklaşık
   const deepgramCost = calcDeepgramCost(durationSec);
-  const totalWall = Date.now() - t0;
 
-  console.log('[STT Breakdown]',
-    'format_detect:', (t1 - t0), 'ms',
-    '| pcm_convert:', (t2 - t1), 'ms' + (didConvert ? '' : ' (skipped)'),
-    '| mp3_convert:', mp3ConvertMs, 'ms' + (mp3ConvertMs ? '' : ' (skipped)'),
-    '| deepgram_http:', sttMs, 'ms',
-    '| duration_extract:', durationExtractMs, 'ms (after HTTP, not in stt_ms)',
-    '| TOTAL:', totalWall, 'ms',
-    '| bytes_in:', buf.length,
-    '| bytes_sent:', audioBuffer.length,
-    '| type:', dgContentType,
-    '| riff:', isRiff, 'mp3:', isMp3, 'webm:', isWebm, 'ogg:', isOgg,
-    '| hint:', contentTypeHint || 'n/a');
-
-  console.log('[Compare Audio STT]',
-    sttMs + 'ms (HTTP only)',
-    '| convert_ms:', convertMs,
-    '| mp3_convert_ms:', mp3ConvertMs,
+  console.log('[Compare Audio STT] (streaming)',
+    'convert_ms:', convertMs,
+    '| stt_ms:', sttMs, '(trailing latency)',
     '| audio_duration_sec:', durationSec != null ? Number(durationSec).toFixed(3) : 'n/a',
     '| deepgram_cost:', deepgramCost != null ? deepgramCost.toFixed(6) : 'n/a',
-    '|', dgContentType,
     '|', JSON.stringify(transcript).slice(0, 120));
 
   return {
     transcript: transcript,
     sttMs: sttMs,
     convertMs: convertMs,
-    mp3ConvertMs: mp3ConvertMs,
     confidence: confidence,
     engine: 'deepgram',
     duration_sec: durationSec,
     deepgram_cost: deepgramCost,
-    breakdown: {
-      format_detect_ms: t1 - t0,
-      pcm_convert_ms: t2 - t1,
-      mp3_convert_ms: mp3ConvertMs,
-      deepgram_http_ms: sttMs,
-      duration_extract_ms: durationExtractMs,
-      total_ms: totalWall,
-      bytes_in: buf.length,
-      bytes_sent: audioBuffer.length,
-    },
   };
 }
 
