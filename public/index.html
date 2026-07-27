@@ -175,7 +175,7 @@
   .cmp-tab-page { display: none; flex-direction: column; gap: 16px; }
   .cmp-tab-page.active { display: flex; }
   #view-demo.hidden { display: none; }
-  .cmp-config { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; position: sticky; top: 0; z-index: 5; }
+  .cmp-config { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; position: sticky; top: 48px; z-index: 5; }
   .cmp-config-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
   .cmp-field { display: flex; flex-direction: column; gap: 4px; }
   .cmp-field label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -608,19 +608,26 @@
   .scenario-preview-accuracy {
     display: none;
     align-items: center;
+    align-self: flex-start;
     font-size: 12px;
     color: var(--muted);
-    padding: 6px 10px;
+    padding: 7px 12px;
     border-radius: 8px;
     background: var(--surface2);
     border: 1px solid var(--border);
-    white-space: nowrap;
+    white-space: normal;
+    max-width: 100%;
+    line-height: 1.35;
+    margin-top: 8px;
   }
-  .scenario-preview-accuracy.show { display: inline-flex; }
-  .scenario-preview-accuracy.pending { font-style: italic; }
+  .scenario-preview-accuracy.show { display: inline-flex !important; }
+  .scenario-preview-accuracy.pending { font-style: italic; color: var(--accent, #58a6ff); }
   .scenario-preview-accuracy strong { color: var(--text); font-weight: 700; }
+  .scenario-preview-accuracy.good { border-color: rgba(63, 185, 80, 0.45); background: rgba(63, 185, 80, 0.08); }
   .scenario-preview-accuracy.good strong { color: #3fb950; }
+  .scenario-preview-accuracy.warn { border-color: rgba(210, 153, 34, 0.45); background: rgba(210, 153, 34, 0.08); }
   .scenario-preview-accuracy.warn strong { color: #d29922; }
+  .scenario-preview-accuracy.bad { border-color: rgba(248, 81, 73, 0.45); background: rgba(248, 81, 73, 0.08); }
   .scenario-preview-accuracy.bad strong { color: var(--danger); }
   .cmp-preset { font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); cursor: pointer; }
   .cmp-preset:hover { border-color: var(--accent); color: var(--accent); }
@@ -671,6 +678,30 @@
   }
   .cmp-metrics { display: none; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .cmp-metrics.show { display: grid; }
+  .cmp-metrics.cmp-metrics-freeform { grid-template-columns: repeat(3, 1fr); }
+  .cmp-results-section { display: none; flex-direction: column; gap: 14px; margin-bottom: 8px; }
+  .cmp-results-section.show { display: flex; }
+  .cmp-section-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    padding: 4px 0 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cmp-panel-run-response {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.4;
+    margin-top: 4px;
+    padding: 6px 8px;
+    background: var(--surface2);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    max-height: 72px;
+    overflow: auto;
+  }
   .cmp-metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
   .cmp-metric-card .m-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px; }
   .cmp-metric-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; gap: 8px; }
@@ -931,11 +962,11 @@
             <option value="">— Manual Upload / Microphone —</option>
           </select>
           <button type="button" class="btn" id="cmpListenBtn" disabled onclick="toggleScenarioListenPreview()" title="Preview selected audio (scenario, upload, or mic) — does not run benchmark">🔊 Listen</button>
-          <div id="cmpPreviewAccuracy" class="scenario-preview-accuracy" aria-live="polite"></div>
         </div>
+        <div id="cmpPreviewAccuracy" class="scenario-preview-accuracy" aria-live="polite"></div>
         <audio id="scenarioPreviewAudio" preload="none" style="display:none"></audio>
-        <div style="font-size:11px;color:var(--muted);margin-top:6px;max-width:300px">
-          Selecting a scenario fills the reference transcript (clean version) and loads the noisy audio file as the shared input for all models. Use Listen to preview noise before Run.
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;max-width:420px">
+          Selecting a scenario fills the reference transcript (clean version) and loads the noisy audio file as the shared input for all models. Use Listen to preview noise before Run. Preview STT Accuracy runs Deepgram only (no Gemini) as soon as audio + ground truth are ready.
         </div>
       </div>
       <div class="cmp-field">
@@ -1027,7 +1058,57 @@
   </div>
 
   <div class="run-transcript-diff-warn" id="cmpTranscriptDiffWarn">⚠️ Transcript mismatch detected between models</div>
-  <div class="cmp-panels" id="cmpPanels"></div>
+
+  <!-- Intent / primary panels (also used alone in Freeform mode) -->
+  <div class="cmp-results-section show" id="cmpSectionIntent">
+    <div class="cmp-section-title" id="cmpSectionIntentTitle" style="display:none">Intent results</div>
+    <div class="cmp-panels" id="cmpPanels"></div>
+    <div class="cmp-metrics" id="cmpMetrics"></div>
+    <div class="cmp-charts" id="cmpCharts">
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Latency (avg ± min/max)</div>
+        <canvas id="chartLatency"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Token usage (input / output)</div>
+        <canvas id="chartTokens"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Estimated cost ($ / run)</div>
+        <canvas id="chartCost"></canvas>
+      </div>
+      <div class="cmp-chart-card" id="cardAccuracy">
+        <div class="cmp-chart-title">Noise robustness — Intent accuracy & Transcript accuracy (1-WER)</div>
+        <canvas id="chartAccuracy"></canvas>
+      </div>
+      <div class="cmp-chart-card" id="cardAccuracyTrend" style="grid-column:1 / -1">
+        <div class="cmp-chart-title">Per-run accuracy (stability under noise)</div>
+        <canvas id="chartAccuracyTrend"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Free-form section (Both mode: below intent; Freeform-only: primary via cmpPanels above) -->
+  <div class="cmp-results-section" id="cmpSectionFreeform">
+    <div class="cmp-section-title" id="cmpSectionFreeformTitle">Free-form results</div>
+    <div class="cmp-panels" id="cmpPanelsFreeform"></div>
+    <div class="cmp-metrics cmp-metrics-freeform" id="cmpMetricsFreeform"></div>
+    <div class="cmp-charts" id="cmpChartsFreeform">
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Free-form latency (avg ± min/max)</div>
+        <canvas id="chartFfLatency"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Free-form token usage</div>
+        <canvas id="chartFfTokens"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Free-form estimated cost</div>
+        <canvas id="chartFfCost"></canvas>
+      </div>
+    </div>
+  </div>
+
   <div id="cmpMicStatus" style="font-size:11px;color:var(--muted);display:none"></div>
   <!-- legacy model check container kept for getSelectedCmpModels compatibility (filled by initCmpPanels) -->
   <div class="cmp-models" id="cmpModels" style="display:none"></div>
@@ -1039,8 +1120,6 @@
     <button class="btn" onclick="exportCmpCSV()">↓ CSV</button>
     <span style="font-size:11px;color:var(--muted);margin-left:4px" id="cmpToolbarMeta"></span>
   </div>
-
-  <div class="cmp-metrics" id="cmpMetrics"></div>
 
   <div class="cmp-table-wrap" id="cmpTableWrap" style="display:none">
     <table class="cmp-table">
@@ -1060,7 +1139,7 @@
     </table>
   </div>
 
-  <div class="cmp-freeform-table-wrap" id="cmpFreeformTableWrap">
+  <div class="cmp-freeform-table-wrap" id="cmpFreeformTableWrap" style="display:none">
     <table class="cmp-table">
       <thead>
         <tr>
@@ -1077,7 +1156,7 @@
     </table>
   </div>
 
-  <div class="cmp-split-wrap" id="cmpSplitWrap">
+  <div class="cmp-split-wrap" id="cmpSplitWrap" style="display:none">
     <div id="cmpSplitBody"></div>
   </div>
 
@@ -1086,29 +1165,6 @@
       <thead id="cmpBatchHead"></thead>
       <tbody id="cmpBatchBody"></tbody>
     </table>
-  </div>
-
-  <div class="cmp-charts" id="cmpCharts">
-    <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Latency (avg ± min/max)</div>
-      <canvas id="chartLatency"></canvas>
-    </div>
-    <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Token usage (input / output)</div>
-      <canvas id="chartTokens"></canvas>
-    </div>
-    <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Estimated cost ($ / run)</div>
-      <canvas id="chartCost"></canvas>
-    </div>
-    <div class="cmp-chart-card" id="cardAccuracy">
-      <div class="cmp-chart-title">Noise robustness — Intent accuracy & Transcript accuracy (1-WER)</div>
-      <canvas id="chartAccuracy"></canvas>
-    </div>
-    <div class="cmp-chart-card" id="cardAccuracyTrend" style="grid-column:1 / -1">
-      <div class="cmp-chart-title">Per-run accuracy (stability under noise)</div>
-      <canvas id="chartAccuracyTrend"></canvas>
-    </div>
   </div>
 
   <div class="cmp-summary" id="cmpSummaryBox">
@@ -2447,21 +2503,70 @@ function clearCmpAccumulated(keepModeUi) {
   document.getElementById('cmpSplitWrap').classList.remove('show');
   document.getElementById('cmpBatchTableWrap').classList.remove('show');
   document.getElementById('cmpCharts').classList.remove('show');
+  const ffCharts = document.getElementById('cmpChartsFreeform');
+  if (ffCharts) ffCharts.classList.remove('show');
   document.getElementById('cmpSummaryBox').classList.remove('show');
   document.getElementById('cmpMetrics').classList.remove('show');
+  document.getElementById('cmpMetrics').innerHTML = '';
+  const ffMetrics = document.getElementById('cmpMetricsFreeform');
+  if (ffMetrics) { ffMetrics.classList.remove('show'); ffMetrics.innerHTML = ''; }
   document.getElementById('cmpToolbar').classList.remove('show');
   const tbody = document.getElementById('cmpTableBody');
   if (tbody) tbody.innerHTML = '';
-  document.getElementById('cmpFreeformBody').innerHTML = '';
-  document.getElementById('cmpSplitBody').innerHTML = '';
+  const ffBody = document.getElementById('cmpFreeformBody');
+  if (ffBody) ffBody.innerHTML = '';
+  const splitBody = document.getElementById('cmpSplitBody');
+  if (splitBody) splitBody.innerHTML = '';
   const emptyEl = document.getElementById('cmpEmpty');
   if (emptyEl) emptyEl.style.display = 'block';
-  const panelsEl = document.getElementById('cmpPanels');
-  if (panelsEl) panelsEl.style.display = compareMode === 'intent' ? 'flex' : 'none';
-  CMP_MODEL_ORDER.forEach(m => renderPanelRuns(m, null));
+  applyCompareModeLayout();
+  CMP_MODEL_ORDER.forEach(m => {
+    renderPanelRuns(m, null, { kind: 'intent' });
+    renderPanelRuns(m, null, { kind: 'freeform' });
+  });
   if (!keepModeUi) {
     const status = document.getElementById('cmpMicStatus');
     if (status) status.textContent = 'Results cleared.';
+  }
+}
+
+/** Show/hide Intent vs Free-form result sections for the active compareMode. */
+function applyCompareModeLayout() {
+  const mode = compareMode || 'intent';
+  const secIntent = document.getElementById('cmpSectionIntent');
+  const secFf = document.getElementById('cmpSectionFreeform');
+  const titleIntent = document.getElementById('cmpSectionIntentTitle');
+  const titleFf = document.getElementById('cmpSectionFreeformTitle');
+  const panelsEl = document.getElementById('cmpPanels');
+  const panelsFf = document.getElementById('cmpPanelsFreeform');
+
+  const ffTable = document.getElementById('cmpFreeformTableWrap');
+  const splitWrap = document.getElementById('cmpSplitWrap');
+  const tableWrap = document.getElementById('cmpTableWrap');
+  if (ffTable) ffTable.classList.remove('show');
+  if (splitWrap) splitWrap.classList.remove('show');
+  if (tableWrap) tableWrap.classList.remove('show');
+
+  if (mode === 'freeform') {
+    if (secIntent) secIntent.classList.add('show');
+    if (secFf) secFf.classList.remove('show');
+    if (titleIntent) titleIntent.style.display = 'none';
+    if (panelsEl) panelsEl.style.display = 'flex';
+    setPanelAccuracyVisible(false);
+  } else if (mode === 'both') {
+    if (secIntent) secIntent.classList.add('show');
+    if (secFf) secFf.classList.add('show');
+    if (titleIntent) titleIntent.style.display = '';
+    if (titleFf) titleFf.style.display = '';
+    if (panelsEl) panelsEl.style.display = 'flex';
+    if (panelsFf) panelsFf.style.display = 'flex';
+    setPanelAccuracyVisible(!(selectedCmpScenario() && selectedCmpScenario().skipAccuracy));
+  } else {
+    if (secIntent) secIntent.classList.add('show');
+    if (secFf) secFf.classList.remove('show');
+    if (titleIntent) titleIntent.style.display = 'none';
+    if (panelsEl) panelsEl.style.display = 'flex';
+    setPanelAccuracyVisible(!(selectedCmpScenario() && selectedCmpScenario().skipAccuracy));
   }
 }
 
@@ -2471,8 +2576,7 @@ function setCompareMode(mode) {
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('mode-' + mode).classList.add('active');
   clearCmpAccumulated(true);
-  const panelsEl = document.getElementById('cmpPanels');
-  if (panelsEl) panelsEl.style.display = mode === 'intent' ? 'flex' : 'none';
+  applyCompareModeLayout();
 }
 
 function avgArr(arr) {
@@ -2609,7 +2713,10 @@ function mergeFreeformRun(existing, next) {
     cost: next && next.est_cost,
     error: next && next.error,
   }];
-  const runs = prevRuns.concat(newRuns).map((r, i) => Object.assign({}, r, { run: i + 1 }));
+  const runs = prevRuns.concat(newRuns).map((r, i) => Object.assign({}, r, {
+    run: i + 1,
+    response: r.response || r.last_response || '',
+  }));
   const okRuns = runs.filter(r => r.ok);
   if (!okRuns.length) {
     return {
@@ -2735,6 +2842,48 @@ function hideCmpProgress() {
   document.getElementById('cmpProgress').classList.remove('show');
 }
 
+/** Sleep helper for compare throttling. */
+function cmpSleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+/**
+ * Cross-provider parallel lanes: Gemini/other || Claude.
+ * Within Claude: always serial with gapMs between models.
+ * otherModels: parallel with each other (different from Anthropic).
+ * Anthropic exclusive queue on server still serializes overlapping Claude HTTP calls.
+ */
+async function runCmpProviderLanes(otherModels, claudeModels, runOne, opts) {
+  opts = opts || {};
+  const gapMs = opts.gapMs != null ? opts.gapMs : 10000;
+  const onWait = typeof opts.onWait === 'function' ? opts.onWait : null;
+
+  async function runLaneSerial(laneModels) {
+    for (let i = 0; i < laneModels.length; i++) {
+      if (cmpStopFlag) return;
+      await runOne(laneModels[i]);
+      if (i < laneModels.length - 1 && !cmpStopFlag) {
+        const label = (CMP_MODEL_META[laneModels[i]] || {}).label || laneModels[i];
+        if (onWait) onWait(laneModels[i], label);
+        await cmpSleep(gapMs);
+      }
+    }
+  }
+
+  await Promise.all([
+    // Gemini / other: parallel across models in this lane
+    (async () => {
+      if (!otherModels.length) return;
+      await Promise.all(otherModels.map(async (m) => {
+        if (cmpStopFlag) return;
+        await runOne(m);
+      }));
+    })(),
+    // Claude: serial Haiku → gap → Sonnet (Anthropic same-provider)
+    runLaneSerial(claudeModels),
+  ]);
+}
+
 function showQuotaBanner(errors) {
   const el = document.getElementById('cmpQuotaBanner');
   const quotaErr = errors.find(e => /quota|rate limit|limit:\s*0/i.test(e || ''));
@@ -2775,6 +2924,7 @@ function ensurePanelState(modelId) {
       sttEngine: panelSttEngine(modelId),
       audioFileName: null,
       audioFile: null,
+      micSessionId: null,
       durationSec: null,
       deepgramCost: null,
       status: '',
@@ -2785,15 +2935,37 @@ function ensurePanelState(modelId) {
 
 function initCmpPanels() {
   const wrap = document.getElementById('cmpPanels');
+  const wrapFf = document.getElementById('cmpPanelsFreeform');
   const legacy = document.getElementById('cmpModels');
   if (!wrap) return;
-  wrap.innerHTML = CMP_MODEL_ORDER.map(modelId => {
+
+  function panelHtml(modelId, opts) {
+    opts = opts || {};
+    const isFf = opts.kind === 'freeform';
     const meta = CMP_MODEL_META[modelId] || { label: modelId, color: '#58a6ff' };
     const engine = panelSttEngine(modelId);
     const badgeCls = engine === 'gemini' ? 'gemini' : 'deepgram';
     const badgeText = engine === 'gemini' ? 'STT: Gemini Live' : 'STT: Deepgram Nova-3';
     ensurePanelState(modelId);
     const domId = modelDomId(modelId);
+    const idPrefix = isFf ? 'ff-' : '';
+    if (isFf) {
+      // Results-only card for Both-mode freeform section (no duplicate transcript/checkbox)
+      return `<div class="cmp-panel" id="cmp-panel-ff-${domId}" data-model="${modelId}" data-kind="freeform">
+        <div class="cmp-panel-header">
+          <label style="cursor:default">
+            <span class="cmp-dot" style="background:${meta.color}"></span>
+            ${meta.label}${engine === 'gemini' ? ' <span class="cmp-mode-badge live">🔴 Live</span>' : ''}
+            <span style="font-weight:500;color:var(--muted);font-size:11px;margin-left:6px">Free-form</span>
+          </label>
+          <span class="cmp-panel-stt-badge ${badgeCls}">${badgeText}</span>
+        </div>
+        <div class="cmp-panel-results" style="border-top:none">
+          <div class="cmp-panel-results-title">Run results</div>
+          <div id="panelRuns-ff-${domId}"><div class="cmp-panel-run-empty">No free-form runs yet.</div></div>
+        </div>
+      </div>`;
+    }
     return `<div class="cmp-panel" id="cmp-panel-${domId}" data-model="${modelId}">
       <div class="cmp-panel-header">
         <label>
@@ -2820,8 +2992,12 @@ function initCmpPanels() {
         <div id="panelRuns-${domId}"><div class="cmp-panel-run-empty">No runs yet — select a source and press Run.</div></div>
       </div>
     </div>`;
-  }).join('');
+  }
+
+  wrap.innerHTML = CMP_MODEL_ORDER.map(m => panelHtml(m, { kind: 'intent' })).join('');
+  if (wrapFf) wrapFf.innerHTML = CMP_MODEL_ORDER.map(m => panelHtml(m, { kind: 'freeform' })).join('');
   if (legacy) legacy.innerHTML = '';
+  applyCompareModeLayout();
 }
 
 function onPanelEnableChange(modelId, checked) {
@@ -2865,10 +3041,11 @@ function updatePanelSttUI(modelId) {
   if (fileEl) fileEl.textContent = st.audioFileName ? ('📁 ' + st.audioFileName) : '';
 }
 
-// ===== Shared audio source (Tab 1): scenario noisy audio / uploaded file / mic PCM→WAV =====
+// ===== Shared audio source (Tab 1): scenario / uploaded file / hybrid mic session =====
 // One source feeds all models; each model still runs its own STT request per run.
-let cmpAudioSource = null; // { kind: 'scenario'|'file'|'mic', file, fileName, durationSec }
-let cmpSourceMic = null;   // active PCM capture session (AudioContext + ScriptProcessor)
+// Mic: live PCM → server WebSocket (demo parity) + server buffer; runs use mic_session_id.
+let cmpAudioSource = null; // { kind, file?, fileName?, durationSec?, micSessionId? }
+let cmpSourceMic = null;   // active hybrid mic capture session
 
 function setSourceStatus(text) {
   const el = document.getElementById('cmpSourceStatus');
@@ -2891,20 +3068,30 @@ function updateSourceExclusivity() {
   setDisabled(scenarioSel, kind && kind !== 'scenario');
   setDisabled(uploadInput, kind && kind !== 'file');
   setDisabled(uploadBtn, kind && kind !== 'file');
-  // Keep mic usable while recording even before a source is set
   setDisabled(micBtn, kind && kind !== 'mic' && !cmpSourceMic);
 }
 
-/** Push the shared source (or scenario text) into every model panel state. */
+function panelHasAudioSource(st) {
+  return !!(st && (st.audioFile || st.micSessionId));
+}
+
+/** Push the shared source into every model panel state. */
 function applyAudioSourceToPanels() {
   CMP_MODEL_ORDER.forEach(modelId => {
     const st = ensurePanelState(modelId);
-    if (cmpAudioSource && cmpAudioSource.file) {
+    if (cmpAudioSource && cmpAudioSource.micSessionId) {
+      st.audioFile = null;
+      st.micSessionId = cmpAudioSource.micSessionId;
+      st.audioFileName = cmpAudioSource.fileName || ('mic-session:' + cmpAudioSource.micSessionId);
+      st.durationSec = cmpAudioSource.durationSec != null ? cmpAudioSource.durationSec : null;
+    } else if (cmpAudioSource && cmpAudioSource.file) {
       st.audioFile = cmpAudioSource.file;
+      st.micSessionId = null;
       st.audioFileName = cmpAudioSource.fileName;
       st.durationSec = cmpAudioSource.durationSec != null ? cmpAudioSource.durationSec : null;
     } else {
       st.audioFile = null;
+      st.micSessionId = null;
       st.audioFileName = null;
       st.durationSec = null;
     }
@@ -2935,12 +3122,33 @@ async function setSharedAudioSource(kind, file, statusText) {
   stopScenarioPreview();
   let durationSec = null;
   try { durationSec = await getAudioFileDurationSeconds(file); } catch (e) {}
-  cmpAudioSource = { kind, file, fileName: file.name, durationSec };
+  cmpAudioSource = { kind, file, fileName: file.name, durationSec, micSessionId: null };
   applyAudioSourceToPanels();
   updateSourceExclusivity();
   updateScenarioListenButton();
   showCmpAudioError('');
   setSourceStatus(statusText + (durationSec != null ? ` (${Number(durationSec).toFixed(2)}s)` : ''));
+  updateCmpRunAvailability();
+}
+
+function setSharedMicSessionSource(micSessionId, durationSec, liveTranscript, statusText) {
+  stopScenarioPreview();
+  cmpAudioSource = {
+    kind: 'mic',
+    file: null,
+    fileName: 'mic-session:' + micSessionId,
+    durationSec: durationSec != null ? durationSec : null,
+    micSessionId: micSessionId,
+    liveTranscript: liveTranscript || '',
+  };
+  applyAudioSourceToPanels();
+  updateSourceExclusivity();
+  updateScenarioListenButton();
+  showCmpAudioError('');
+  setSourceStatus(
+    (statusText || ('🎤 Mic session ready: ' + micSessionId))
+    + (durationSec != null ? ` (${Number(durationSec).toFixed(2)}s)` : '')
+  );
   updateCmpRunAvailability();
 }
 
@@ -2953,9 +3161,7 @@ let cmpManualGtSttToken = 0;
  */
 async function autoFillGroundTruthFromManualUpload(file) {
   const scenarioSel = document.getElementById('cmpScenario');
-  // Senaryo seçiliyse bu akışı hiç tetikleme
   if (scenarioSel && scenarioSel.value) return null;
-  // Kaynak senaryo/mic ise de çalıştırma — sadece kind === 'file'
   if (!file || !cmpAudioSource || cmpAudioSource.kind !== 'file') return null;
 
   const refEl = document.getElementById('cmpRefText');
@@ -2966,13 +3172,12 @@ async function autoFillGroundTruthFromManualUpload(file) {
   const defaultPlaceholder = 'Reference sentence (used for WER & accuracy)';
   refEl.value = '';
   refEl.placeholder = 'Transcribing...';
-  refEl.readOnly = false; // editable kalsın (STT sırasında da)
+  refEl.readOnly = false;
   if (statusEl) statusEl.textContent = 'Transcribing…';
 
   try {
     const stt = await compareAudioSttDeepgramOnly(file, cmpAudioSource.durationSec);
     if (token !== cmpManualGtSttToken) return null;
-    // Hâlâ manuel upload modunda mıyız?
     const selNow = document.getElementById('cmpScenario');
     if (selNow && selNow.value) return null;
     if (!cmpAudioSource || cmpAudioSource.kind !== 'file') return null;
@@ -2996,39 +3201,38 @@ async function autoFillGroundTruthFromManualUpload(file) {
   }
 }
 
+/** Fill GT from live mic transcript (editable). Does NOT count as a benchmark run. */
+function applyMicLiveTranscriptAsGroundTruth(transcript) {
+  const tx = String(transcript || '').trim();
+  const refEl = document.getElementById('cmpRefText');
+  const statusEl = document.getElementById('cmpRefStatus');
+  if (!refEl || !tx) return;
+  refEl.value = tx;
+  refEl.placeholder = 'Reference sentence (used for WER & accuracy)';
+  if (statusEl) statusEl.textContent = '✓ Live mic transcript (editable) — not used as Run 1 STT';
+  refreshAllPanelRuns();
+}
+
 async function onSourceFileSelected(input) {
   const file = input.files && input.files[0];
   input.value = '';
   if (!file) return;
 
-  // Manuel upload: senaryo dropdown'ını her zaman Manual moda çek (iki akış karışmasın)
   const scenarioSel = document.getElementById('cmpScenario');
   if (scenarioSel) scenarioSel.value = '';
 
-  // Senaryodan kalan expected intent'i temizle (manuel upload catalog intent taşımaz)
   cmpExpected = null;
   const expSel = document.getElementById('cmpExpectedSel');
   if (expSel) expSel.value = '';
 
-  // isManualUpload: dropdown boş → otomatik GT STT serbest
   const isManualUpload = !scenarioSel || !scenarioSel.value;
   hidePreviewAccuracy();
   await setSharedAudioSource('file', file, '📁 Audio file selected: ' + file.name + ' — sent to all models on Run.');
 
   if (isManualUpload) {
-    // One Deepgram STT fills GT; reuse that transcript for preview (no 2nd request, no Gemini).
-    const stt = await autoFillGroundTruthFromManualUpload(file);
+    await autoFillGroundTruthFromManualUpload(file);
     const gt = ((document.getElementById('cmpRefText') || {}).value || '').trim();
-    if (stt && gt) {
-      const tx = String(stt.transcript || '').trim();
-      if (tx) {
-        const wer = wordErrorRate(gt, tx);
-        setPreviewAccuracyUI('ready', Math.max(0, (1 - wer) * 100));
-      } else {
-        hidePreviewAccuracy();
-      }
-    } else if (gt && cmpAudioSource && cmpAudioSource.file) {
-      // GT existed / was filled but STT return missing — one Deepgram preview call
+    if (gt && cmpAudioSource && cmpAudioSource.file) {
       await runInstantPreviewAccuracy(cmpAudioSource.file, gt, cmpAudioSource.durationSec);
     } else {
       hidePreviewAccuracy();
@@ -3036,7 +3240,7 @@ async function onSourceFileSelected(input) {
   }
 }
 
-/** 16-bit mono PCM → WAV ArrayBuffer (same layout as server createCompareWavBuffer). */
+/** 16-bit mono PCM → WAV ArrayBuffer (Listen / local helpers only). */
 function createCompareWavBuffer(pcmInt16) {
   const pcmBytes = pcmInt16 instanceof Int16Array
     ? new Uint8Array(pcmInt16.buffer, pcmInt16.byteOffset, pcmInt16.byteLength)
@@ -3083,16 +3287,37 @@ function concatPcm16Chunks(chunks) {
 
 function teardownCmpSourceMicGraph(sess) {
   if (!sess) return;
-  try {
-    if (sess.processor) {
-      sess.processor.onaudioprocess = null;
-      sess.processor.disconnect();
-    }
-  } catch (e) {}
+  try { if (sess.processor) sess.processor.disconnect(); } catch (e) {}
   try { if (sess.silentGain) sess.silentGain.disconnect(); } catch (e) {}
   try { if (sess.source) sess.source.disconnect(); } catch (e) {}
   try { if (sess.stream) sess.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
   try { if (sess.ctx && sess.ctx.state !== 'closed') sess.ctx.close(); } catch (e) {}
+}
+
+function getCmpMicWsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return proto + '//' + location.host;
+}
+
+function openCmpMicWebSocket() {
+  return new Promise(function(resolve, reject) {
+    const url = getCmpMicWsUrl();
+    console.log('[Cmp Mic] opening WebSocket', url);
+    const sock = new WebSocket(url);
+    sock.binaryType = 'arraybuffer';
+    const timer = setTimeout(function() {
+      try { sock.close(); } catch (e) {}
+      reject(new Error('Compare mic WebSocket connect timeout'));
+    }, 8000);
+    sock.onopen = function() {
+      clearTimeout(timer);
+      resolve(sock);
+    };
+    sock.onerror = function() {
+      clearTimeout(timer);
+      reject(new Error('Compare mic WebSocket error'));
+    };
+  });
 }
 
 function stopSourceMic(opts) {
@@ -3102,62 +3327,95 @@ function stopSourceMic(opts) {
   if (opts.discard) sess.discard = true;
 
   if (opts.discard) {
+    try {
+      if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
+        sess.ws.send(JSON.stringify({ type: 'cmp_mic_end' }));
+      }
+    } catch (e) {}
+    try { if (sess.ws) sess.ws.close(); } catch (e) {}
     teardownCmpSourceMicGraph(sess);
     cmpSourceMic = null;
     const btn = document.getElementById('cmpSourceMicBtn');
     if (btn) btn.textContent = '🎤 Record';
     updateSourceExclusivity();
-    return;
   }
-
-  // Normal stop is handled by toggleSourceMic (finalize WAV)
-  finalizeCmpSourceMic(sess).catch(err => {
-    console.error('[Cmp Mic] finalize error', err);
-    setSourceStatus('Microphone finalize error: ' + err.message);
-  });
 }
 
-async function finalizeCmpSourceMic(sess) {
+/**
+ * Stop hybrid mic: send cmp_mic_end, wait for cmp_mic_ready (server stores PCM buffer).
+ * Live transcript → GT only; runs replay from mic_session_id (never use live as Run 1).
+ */
+async function endCmpMicStreaming(sess) {
   if (!sess || sess.finalizing) return;
   sess.finalizing = true;
   const btn = document.getElementById('cmpSourceMicBtn');
   const elapsed = Date.now() - (sess.startedAt || 0);
-  const pcm = concatPcm16Chunks(sess.pcmChunks || []);
-  const durationSec = pcm.length / 16000;
-  console.log('[Cmp Mic] recording stopped, samples:', pcm.length,
-    'duration:', durationSec.toFixed(2) + 's',
-    'elapsed ms:', elapsed,
-    'chunks:', (sess.pcmChunks || []).length);
+  console.log('[Cmp Mic] stop requested, elapsed ms:', elapsed);
 
   teardownCmpSourceMicGraph(sess);
-  if (cmpSourceMic === sess) cmpSourceMic = null;
   if (btn) btn.textContent = '🎤 Record';
 
   if (sess.discard) {
-    console.log('[Cmp Mic] discarded recording');
+    try { if (sess.ws) sess.ws.close(); } catch (e) {}
+    if (cmpSourceMic === sess) cmpSourceMic = null;
     setSourceStatus('Recording cancelled.');
     updateSourceExclusivity();
     return;
   }
 
-  // Require ~1.5s of real PCM (16kHz mono)
-  if (pcm.length < 16000 * 1.5) {
-    console.warn('[Cmp Mic] too short — samples:', pcm.length);
-    setSourceStatus('Recording too short (' + durationSec.toFixed(2) + 's). Speak 3–5s, then Stop.');
-    updateSourceExclusivity();
-    return;
-  }
+  setSourceStatus('Finalizing mic session…');
 
-  const wavBuf = createCompareWavBuffer(pcm);
-  const file = new File([wavBuf], 'mic-recording.wav', { type: 'audio/wav' });
-  const scenarioSel = document.getElementById('cmpScenario');
-  if (scenarioSel) scenarioSel.value = '';
-  await setSharedAudioSource(
-    'mic',
-    file,
-    '🎤 Microphone WAV captured (' + file.size + ' bytes, ' + durationSec.toFixed(2) + 's @ 16kHz) — sent to all models on Run.'
-  );
-  console.log('[Cmp Mic] WAV ready:', file.name, file.size, 'bytes');
+  try {
+    let msg = sess._pendingReady || null;
+    if (!msg) {
+      const readyPromise = new Promise(function(resolve, reject) {
+        const timeout = setTimeout(function() {
+          reject(new Error('Timed out waiting for cmp_mic_ready'));
+        }, 15000);
+        sess._readyResolve = function(m) {
+          clearTimeout(timeout);
+          resolve(m);
+        };
+        sess._readyReject = function(err) {
+          clearTimeout(timeout);
+          reject(err);
+        };
+      });
+      if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
+        sess.ws.send(JSON.stringify({ type: 'cmp_mic_end' }));
+      } else {
+        throw new Error('Mic WebSocket not open');
+      }
+      msg = await readyPromise;
+    }
+    sess._pendingReady = null;
+    if (cmpSourceMic === sess) cmpSourceMic = null;
+    try { if (sess.ws) sess.ws.close(); } catch (e) {}
+
+    const micSessionId = msg.mic_session_id;
+    const durationSec = msg.duration_sec;
+    const liveTx = String(msg.transcript || '').trim();
+    if (!micSessionId) throw new Error('Server did not return mic_session_id');
+
+    setSharedMicSessionSource(
+      micSessionId,
+      durationSec,
+      liveTx,
+      '🎤 Mic session ' + micSessionId.slice(0, 8) + '… — replayed from server buffer on Run'
+    );
+    applyMicLiveTranscriptAsGroundTruth(liveTx);
+
+    hidePreviewAccuracy();
+    if (liveTx) {
+      runInstantPreviewAccuracyFromMicSession(micSessionId, liveTx, durationSec);
+    }
+  } catch (err) {
+    console.error('[Cmp Mic] finalize error', err);
+    if (cmpSourceMic === sess) cmpSourceMic = null;
+    try { if (sess.ws) sess.ws.close(); } catch (e) {}
+    setSourceStatus('Microphone finalize error: ' + ((err && err.message) || err));
+    updateSourceExclusivity();
+  }
 }
 
 async function toggleSourceMic() {
@@ -3170,13 +3428,56 @@ async function toggleSourceMic() {
       console.log('[Cmp Mic] stop ignored — too early, elapsed ms:', elapsed);
       return;
     }
-    console.log('[Cmp Mic] stop requested, elapsed ms:', elapsed);
-    await finalizeCmpSourceMic(sess);
+    await endCmpMicStreaming(sess);
     return;
   }
 
   try {
-    setSourceStatus('Recording PCM… speak for 3–5 seconds, then press Stop.');
+    const scenarioSel = document.getElementById('cmpScenario');
+    if (scenarioSel) scenarioSel.value = '';
+    cmpExpected = null;
+    const expSel = document.getElementById('cmpExpectedSel');
+    if (expSel) expSel.value = '';
+
+    setSourceStatus('Connecting mic stream…');
+    const sock = await openCmpMicWebSocket();
+
+    sock.onmessage = function(ev) {
+      if (typeof ev.data !== 'string') return;
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (!cmpSourceMic) return;
+      if (msg.type === 'cmp_mic_interim') {
+        const tip = msg.is_final ? 'final' : 'interim';
+        setSourceStatus('🎤 Listening (' + tip + '): "' + String(msg.text || '').slice(0, 80) + '"');
+      } else if (msg.type === 'cmp_mic_ready') {
+        if (cmpSourceMic._readyResolve) {
+          cmpSourceMic._readyResolve(msg);
+        } else {
+          // Auto-end from server while still capturing
+          cmpSourceMic._pendingReady = msg;
+          if (!cmpSourceMic.finalizing) endCmpMicStreaming(cmpSourceMic);
+        }
+      } else if (msg.type === 'cmp_mic_error') {
+        if (cmpSourceMic._readyReject) {
+          cmpSourceMic._readyReject(new Error(msg.message || 'cmp_mic_error'));
+        } else {
+          setSourceStatus('Mic error: ' + (msg.message || 'unknown'));
+          stopSourceMic({ discard: true });
+        }
+      } else if (msg.type === 'cmp_mic_log') {
+        console.log('[Cmp Mic]', msg.message);
+      } else if (msg.type === 'cmp_mic_started') {
+        setSourceStatus('🎤 Streaming PCM… speak, then press Stop (or pause for auto-end).');
+      }
+    };
+
+    sock.onclose = function() {
+      console.log('[Cmp Mic] WebSocket closed');
+    };
+
+    sock.send(JSON.stringify({ type: 'cmp_mic_start' }));
+
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
@@ -3187,10 +3488,10 @@ async function toggleSourceMic() {
     const track = stream.getAudioTracks()[0];
     if (!track || track.readyState !== 'live') {
       stream.getTracks().forEach(t => t.stop());
+      try { sock.close(); } catch (e) {}
       throw new Error('Microphone track is not live');
     }
 
-    // Dedicated context (same capture path as demo cascaded mic: ScriptProcessor → 16kHz PCM16)
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === 'suspended') await ctx.resume();
     const source = ctx.createMediaStreamSource(stream);
@@ -3204,7 +3505,7 @@ async function toggleSourceMic() {
       source,
       processor,
       silentGain,
-      pcmChunks: [],
+      ws: sock,
       startedAt: Date.now(),
       discard: false,
       finalizing: false,
@@ -3213,20 +3514,22 @@ async function toggleSourceMic() {
 
     processor.onaudioprocess = (e) => {
       if (!cmpSourceMic || cmpSourceMic !== session || session.discard || session.finalizing) return;
+      if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return;
       const float32 = e.inputBuffer.getChannelData(0);
-      // Demo cascaded path: resample native rate → 16 kHz mono PCM16
       const int16 = floatToPcm16Resampled(float32, ctx.sampleRate, 16000);
-      if (int16 && int16.length) session.pcmChunks.push(int16);
+      if (int16 && int16.length) {
+        session.ws.send(int16.buffer);
+      }
     };
 
     source.connect(processor);
     processor.connect(silentGain);
     silentGain.connect(ctx.destination);
 
-    console.log('[Cmp Mic] recording started',
+    console.log('[Cmp Mic] streaming started',
       '| track:', track.label || '(unnamed)',
       '| AudioContext sampleRate:', ctx.sampleRate,
-      '| target: 16000 Hz mono PCM16');
+      '| target: 16000 Hz mono PCM16 over WebSocket');
     if (btn) btn.textContent = '⏹ Stop';
     updateSourceExclusivity();
   } catch (e) {
@@ -3363,31 +3666,45 @@ function updatePanelAccuracyUI(modelId, data) {
   }
 }
 
-function renderPanelRuns(modelId, data) {
-  const el = document.getElementById('panelRuns-' + modelDomId(modelId));
+function renderPanelRuns(modelId, data, opts) {
+  opts = opts || {};
+  let kind = opts.kind;
+  if (!kind) kind = (compareMode === 'freeform') ? 'freeform' : 'intent';
+  const isFf = kind === 'freeform';
+  // Freeform-only → main panels; Both → dedicated freeform panels
+  const useFfDom = isFf && compareMode === 'both';
+  const el = document.getElementById(
+    useFfDom ? ('panelRuns-ff-' + modelDomId(modelId)) : ('panelRuns-' + modelDomId(modelId))
+  );
   if (!el) return;
-  console.log('[renderPanelRuns]', modelId, {
-    est_cost: data && data.est_cost,
-    deepgram_cost: data && data.deepgram_cost,
-    run_costs: (data && data.runs || []).map(r => ({ cost: r.cost, deepgram_cost: r.deepgram_cost })),
-    panel: ensurePanelState(modelId).deepgramCost,
-    shared: cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost,
-  });
+
+  if (!isFf) {
+    console.log('[renderPanelRuns]', modelId, {
+      est_cost: data && data.est_cost,
+      deepgram_cost: data && data.deepgram_cost,
+      run_costs: (data && data.runs || []).map(r => ({ cost: r.cost, deepgram_cost: r.deepgram_cost })),
+      panel: ensurePanelState(modelId).deepgramCost,
+      shared: cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost,
+    });
+  }
+
+  const emptyMsg = isFf
+    ? 'No free-form runs yet — select a source and press Run.'
+    : 'No runs yet — select a source and press Run.';
   if (!data) {
-    el.innerHTML = `<div class="cmp-panel-run-empty">No runs yet — select a source and press Run.</div>`;
-    updatePanelAccuracyUI(modelId, null);
+    el.innerHTML = `<div class="cmp-panel-run-empty">${emptyMsg}</div>`;
+    if (!isFf) updatePanelAccuracyUI(modelId, null);
     return;
   }
   const runs = data.runs || [];
-  // Show failed runs even when aggregate ok=false (so error_detail is visible)
   if (!data.ok && !runs.length) {
     el.innerHTML = `<div class="cmp-panel-run-empty" style="color:var(--danger)">${formatErrorDetailHtml(data.error_detail, data.error || 'Run failed')}</div>`;
-    updatePanelAccuracyUI(modelId, data);
+    if (!isFf) updatePanelAccuracyUI(modelId, data);
     return;
   }
   if (!runs.length) {
     el.innerHTML = `<div class="cmp-panel-run-empty">No runs yet.</div>`;
-    updatePanelAccuracyUI(modelId, data);
+    if (!isFf) updatePanelAccuracyUI(modelId, data);
     return;
   }
   const isGemini = String(modelId).startsWith('gemini');
@@ -3402,14 +3719,35 @@ function renderPanelRuns(modelId, data) {
       </div>
         <div class="cmp-panel-run-bd">${formatErrorDetailHtml(r.error_detail, r.error || '')}</div></div>`;
     }
-    const total = Math.round(panelRunTotalMs(modelId, r));
-    r.latency = total;
+    const total = Math.round(isFf
+      ? (r.latency != null ? r.latency : 0)
+      : panelRunTotalMs(modelId, r));
+    if (!isFf) r.latency = total;
+    else if (r.latency == null) r.latency = total;
     const inTok = r.input_tokens != null ? r.input_tokens : '—';
     const outTok = r.output_tokens != null ? r.output_tokens : '—';
     const dgCost = r.deepgram_cost != null ? r.deepgram_cost
       : (ensurePanelState(modelId).deepgramCost != null ? ensurePanelState(modelId).deepgramCost
         : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
     const costHtml = formatCostBreakdownHtml(resolveLlmCost(r), isGemini ? null : dgCost);
+    const responseText = (r.response || r.last_response || data.last_response || '').trim();
+
+    if (isFf) {
+      const bd = `Total Latency: ${total}ms | Tokens: ${inTok}/${outTok} | Cost: ${costHtml}`;
+      const respPreview = responseText
+        ? `<div class="cmp-panel-run-response">${escapeHtml(responseText.length > 220 ? responseText.slice(0, 220) + '…' : responseText)}</div>`
+        : '';
+      return `<div class="cmp-panel-run" id="panel-run-ff-${modelDomId(modelId)}-${r.run}">
+        <div class="cmp-panel-run-main" onclick="this.parentElement.classList.toggle('open')">
+          <span>#${r.run}</span>
+          <span>Total: ${total}ms</span>
+          <span style="color:var(--muted);font-size:11px">Response</span>
+        </div>
+        ${respPreview}
+        <div class="cmp-panel-run-bd">${bd}<br>Response: "${escapeHtml(responseText)}"</div>
+      </div>`;
+    }
+
     const wer = (refTxt && r.transcript) ? wordErrorRate(refTxt, r.transcript) : null;
     const werPart = wer != null ? ` | WER: ${Math.round(wer * 100)}%` : '';
     const distressPart = r.distress ? ` | Distress: <span style="color:var(--danger)">${escapeHtml(String(r.distress))}</span>` : '';
@@ -3433,15 +3771,17 @@ function renderPanelRuns(modelId, data) {
     </div>`;
   }).join('');
 
-  // Average over every successful run — same total as panelRunTotalMs / avg_latency
   const okRuns = runs.filter(r => r.ok);
   let avgHtml = '';
   if (okRuns.length) {
     const n = okRuns.length;
-    const avgTotal = Math.round(okRuns.reduce((s, r) => s + panelRunTotalMs(modelId, r), 0) / n);
+    const runTotal = (r) => isFf
+      ? (Number(r.latency) || 0)
+      : panelRunTotalMs(modelId, r);
+    const avgTotal = Math.round(okRuns.reduce((s, r) => s + runTotal(r), 0) / n);
     data.avg_latency = avgTotal;
-    data.min_latency = Math.min(...okRuns.map(r => panelRunTotalMs(modelId, r)));
-    data.max_latency = Math.max(...okRuns.map(r => panelRunTotalMs(modelId, r)));
+    data.min_latency = Math.min(...okRuns.map(runTotal));
+    data.max_latency = Math.max(...okRuns.map(runTotal));
     const avgIn = Math.round(okRuns.reduce((s, r) => s + (Number(r.input_tokens) || 0), 0) / n);
     const avgOut = Math.round(okRuns.reduce((s, r) => s + (Number(r.output_tokens) || 0), 0) / n);
     const dgCost = (okRuns.find(r => r.deepgram_cost != null) || {}).deepgram_cost
@@ -3449,35 +3789,51 @@ function renderPanelRuns(modelId, data) {
       ?? (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost);
     const llmCost = okRuns.reduce((s, r) => s + resolveLlmCost(r), 0) / n;
     const costHtml = formatCostBreakdownHtml(llmCost, isGemini ? null : dgCost);
-    const werVals = okRuns
-      .map(r => (refTxt && r.transcript) ? wordErrorRate(refTxt, r.transcript) : null)
-      .filter(v => v != null);
-    const avgWerPart = werVals.length
-      ? ` | Avg WER: ${Math.round(werVals.reduce((s, v) => s + v, 0) / werVals.length * 100)}%`
-      : '';
-    let accPart = '';
-    if (expected) {
-      const correct = okRuns.filter(r => r.intent === expected).length;
-      accPart = ` | Intent acc: ${correct}/${n} (${Math.round((correct / n) * 100)}%)`;
+    let extra = '';
+    if (!isFf) {
+      const werVals = okRuns
+        .map(r => (refTxt && r.transcript) ? wordErrorRate(refTxt, r.transcript) : null)
+        .filter(v => v != null);
+      if (werVals.length) {
+        extra += ` | Avg WER: ${Math.round(werVals.reduce((s, v) => s + v, 0) / werVals.length * 100)}%`;
+      }
+      if (expected) {
+        const correct = okRuns.filter(r => r.intent === expected).length;
+        extra += ` | Intent acc: ${correct}/${n} (${Math.round((correct / n) * 100)}%)`;
+      }
     }
-    avgHtml = `<div class="cmp-panel-run-avg">Average — Total: ${avgTotal}ms | Tokens: ${avgIn}/${avgOut} | Cost: ${costHtml}${accPart}${avgWerPart}</div>`;
+    avgHtml = `<div class="cmp-panel-run-avg">Average — Total: ${avgTotal}ms | Tokens: ${avgIn}/${avgOut} | Cost: ${costHtml}${extra}</div>`;
   }
 
   el.innerHTML = rowsHtml + avgHtml;
-  updatePanelAccuracyUI(modelId, data);
+  if (!isFf) updatePanelAccuracyUI(modelId, data);
 }
 
 function refreshAllPanelRuns() {
   getSelectedCmpModels().concat(CMP_MODEL_ORDER).filter((v, i, a) => a.indexOf(v) === i).forEach(m => {
-    renderPanelRuns(m, cmpResults[m]);
+    if (compareMode === 'freeform') {
+      renderPanelRuns(m, cmpFreeformResults[m], { kind: 'freeform' });
+    } else if (compareMode === 'both') {
+      renderPanelRuns(m, cmpResults[m], { kind: 'intent' });
+      renderPanelRuns(m, cmpFreeformResults[m], { kind: 'freeform' });
+    } else {
+      renderPanelRuns(m, cmpResults[m], { kind: 'intent' });
+    }
   });
   updateTranscriptDiffWarningFromPanels();
   const chartsEl = document.getElementById('cmpCharts');
   if (chartsEl && chartsEl.classList.contains('show')) {
-    renderCmpCharts(compareMode === 'freeform' ? cmpFreeformResults : cmpResults);
+    if (compareMode === 'freeform') {
+      renderCmpCharts(cmpFreeformResults, { hideAccuracy: true });
+    } else if (compareMode === 'both') {
+      renderCmpCharts(cmpResults, {});
+      renderCmpChartsFreeform(cmpFreeformResults);
+    } else {
+      renderCmpCharts(cmpResults, {});
+    }
   }
   const box = document.getElementById('cmpSummaryBox');
-  if (box && box.classList.contains('show') && compareMode !== 'freeform' && compareMode !== 'batch') {
+  if (box && box.classList.contains('show') && compareMode !== 'batch') {
     renderCmpSummaryText({
       results: cmpResults,
       freeformResults: cmpFreeformResults,
@@ -3526,34 +3882,50 @@ function lastWordEndMs(words) {
   return end == null ? null : end * 1000;
 }
 
-async function compareAudioStt(file, durationSec) {
+async function compareAudioStt(fileOrNull, durationSec, opts) {
   // Deepgram Nova-3 ONLY via /compare-audio-stt — never Gemini Live.
-  const buf = await file.arrayBuffer();
-  const duration = durationSec != null ? durationSec : await getAudioFileDurationSeconds(file);
-  const headers = { 'Content-Type': file.type || 'audio/wav' };
-  if (duration != null) headers['X-Audio-Duration'] = String(duration);
-  const res = await fetch('/compare-audio-stt', {
-    method: 'POST',
-    headers: headers,
-    body: buf,
-  });
+  opts = opts || {};
+  const micSessionId = opts.micSessionId || null;
+  let url = '/compare-audio-stt';
+  let headers = {};
+  let body;
+
+  if (micSessionId) {
+    url += '?mic_session_id=' + encodeURIComponent(micSessionId);
+    headers['Content-Type'] = 'application/octet-stream';
+    body = new Uint8Array(0);
+  } else {
+    if (!fileOrNull) throw makeCompareClientError('audio file required', null, 'STT');
+    const buf = await fileOrNull.arrayBuffer();
+    const duration = durationSec != null ? durationSec : await getAudioFileDurationSeconds(fileOrNull);
+    headers = { 'Content-Type': fileOrNull.type || 'audio/wav' };
+    if (duration != null) headers['X-Audio-Duration'] = String(duration);
+    body = buf;
+  }
+
+  const res = await fetch(url, { method: 'POST', headers: headers, body: body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw makeCompareClientError(data.error || 'Audio STT failed', data.error_detail, 'STT');
   }
   if (!data.transcript) {
-    throw makeCompareClientError('STT transcript is empty (' + file.name + ')', null, 'STT');
+    throw makeCompareClientError(
+      'STT transcript is empty (' + (micSessionId ? ('mic:' + micSessionId) : (fileOrNull && fileOrNull.name)) + ')',
+      null,
+      'STT'
+    );
   }
   return {
     transcript: data.transcript,
     sttMs: data.sttMs,
     convertMs: data.convertMs != null ? data.convertMs : (data.convert_ms != null ? data.convert_ms : 0),
     confidence: data.confidence,
-    audioFileName: file.name,
-    duration: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : duration),
-    duration_sec: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : duration),
+    audioFileName: micSessionId ? ('mic-session:' + micSessionId) : (fileOrNull && fileOrNull.name),
+    duration: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : durationSec),
+    duration_sec: data.duration_sec != null ? data.duration_sec : (data.duration != null ? data.duration : durationSec),
     deepgram_cost: data.deepgram_cost != null ? data.deepgram_cost : null,
     engine: 'deepgram',
+    mic_session_id: data.mic_session_id || micSessionId || null,
   };
 }
 
@@ -3563,6 +3935,34 @@ async function compareAudioStt(file, durationSec) {
  */
 async function compareAudioSttDeepgramOnly(file, durationSec) {
   return compareAudioStt(file, durationSec);
+}
+
+async function compareAudioSttMicSession(micSessionId, durationSec) {
+  return compareAudioStt(null, durationSec, { micSessionId: micSessionId });
+}
+
+async function runInstantPreviewAccuracyFromMicSession(micSessionId, groundTruth, durationSec) {
+  const gt = String(groundTruth || '').trim();
+  if (!micSessionId || !gt) {
+    hidePreviewAccuracy();
+    return;
+  }
+  const token = ++cmpPreviewAccToken;
+  setPreviewAccuracyUI('pending');
+  try {
+    const stt = await compareAudioSttMicSession(micSessionId, durationSec);
+    if (token !== cmpPreviewAccToken) return;
+    const tx = String(stt.transcript || '').trim();
+    if (!tx) throw new Error('empty transcript');
+    const wer = wordErrorRate(gt, tx);
+    const pct = Math.max(0, (1 - wer) * 100);
+    if (token !== cmpPreviewAccToken) return;
+    setPreviewAccuracyUI('ready', pct);
+  } catch (e) {
+    if (token !== cmpPreviewAccToken) return;
+    setPreviewAccuracyUI('error');
+    console.warn('[Preview STT Accuracy] mic session preview failed:', (e && e.message) || e);
+  }
 }
 
 async function loadCmpScenarios() {
@@ -3691,6 +4091,7 @@ function clearPreviewAccuracyUI() {
   if (!el) return;
   el.className = 'scenario-preview-accuracy';
   el.innerHTML = '';
+  el.style.display = 'none';
 }
 
 function hidePreviewAccuracy() {
@@ -3702,14 +4103,15 @@ function setPreviewAccuracyUI(state, pct) {
   const el = document.getElementById('cmpPreviewAccuracy');
   if (!el) return;
   el.classList.add('show');
+  el.style.display = 'inline-flex';
   el.classList.remove('pending', 'good', 'warn', 'bad');
   if (state === 'pending') {
     el.classList.add('pending');
-    el.textContent = 'Checking audio quality...';
+    el.textContent = 'Checking Preview STT Accuracy (Deepgram)…';
     return;
   }
   if (state === 'error') {
-    el.textContent = 'Could not preview accuracy';
+    el.textContent = 'Could not preview STT accuracy (Deepgram)';
     return;
   }
   if (state === 'ready' && pct != null && Number.isFinite(pct)) {
@@ -3773,8 +4175,9 @@ function stopScenarioPreview() {
   resetScenarioListenLabel();
 }
 
-/** True when Listen has a playable source: scenario dropdown, uploaded file, or mic WAV. */
+/** True when Listen has a playable source: scenario, upload, or hybrid mic session. */
 function canListenPreview() {
+  if (cmpAudioSource && cmpAudioSource.micSessionId) return true;
   if (cmpAudioSource && cmpAudioSource.file) return true;
   const s = selectedCmpScenario();
   return !!(s && s.kind === 'audio' && s.audioFile);
@@ -3782,10 +4185,18 @@ function canListenPreview() {
 
 /**
  * Resolve preview source for Listen.
- * Prefer local File/Blob (upload, mic, or already-fetched scenario) → createObjectURL.
- * Fallback: scenario server URL while file is still loading.
+ * Prefer local File/Blob (upload / scenario) → createObjectURL.
+ * Mic sessions: server WAV endpoint for the buffered PCM.
  */
 function getListenPreviewSource() {
+  if (cmpAudioSource && cmpAudioSource.micSessionId) {
+    return {
+      kind: 'mic',
+      micSessionId: cmpAudioSource.micSessionId,
+      label: cmpAudioSource.fileName || ('mic-session:' + cmpAudioSource.micSessionId),
+      url: '/compare-mic-session/' + encodeURIComponent(cmpAudioSource.micSessionId) + '/wav',
+    };
+  }
   if (cmpAudioSource && cmpAudioSource.file) {
     return {
       kind: cmpAudioSource.kind || 'file',
@@ -3828,7 +4239,9 @@ function toggleScenarioListenPreview() {
 
   revokeCmpListenObjectUrl();
   let url = null;
-  if (src.file) {
+  if (src.url) {
+    url = src.url;
+  } else if (src.file) {
     url = URL.createObjectURL(src.file);
     cmpListenObjectUrl = url;
   } else if (src.scenario) {
@@ -4003,9 +4416,10 @@ async function onScenarioSelect() {
   updateTranscriptDiffWarningFromPanels();
   updateCmpRunAvailability();
 
-  // Instant preview accuracy (independent of Run) — catalog GT, never overwrites ref
-  if (cmpAudioSource && cmpAudioSource.file && s.groundTruth) {
-    runInstantPreviewAccuracy(cmpAudioSource.file, s.groundTruth, cmpAudioSource.durationSec);
+  // Instant preview accuracy (independent of Run) — catalog GT / ref field; never overwrites ref
+  const gtForPreview = String(s.groundTruth || (refEl && refEl.value) || '').trim();
+  if (cmpAudioSource && cmpAudioSource.file && gtForPreview) {
+    runInstantPreviewAccuracy(cmpAudioSource.file, gtForPreview, cmpAudioSource.durationSec);
   } else {
     hidePreviewAccuracy();
   }
@@ -4192,19 +4606,32 @@ function renderCmpSplitCard(model, intentData, freeformData) {
 }
 
 function buildFreeformSummary(results) {
-  const ok = orderedCmpResults(results).filter(r => r.ok);
+  const ok = orderedCmpResults(results).filter(r => r && r.ok);
   if (!ok.length) return ['No model produced a successful free-form response.'];
-  const fastest = ok.reduce((a, b) => a.avg_latency <= b.avg_latency ? a : b);
-  const cheap = ok.reduce((a, b) => a.est_cost <= b.est_cost ? a : b);
-  return [
-    `Fastest free-form: <strong>${fastest.label}</strong> (${fmtMs(fastest.avg_latency)})`,
-    `Cheapest free-form: <strong>${cheap.label}</strong> (${fmtCost(cheap.est_cost)} / run)`,
-  ];
+  const lines = [];
+  const withLat = ok.filter(r => r.avg_latency != null);
+  if (withLat.length) {
+    withLat.sort((a, b) => a.avg_latency - b.avg_latency);
+    const best = withLat[0];
+    const others = withLat.slice(1).map(r => `${escapeHtml(cmpShortLabel(r.model, r.label))} ${fmtMs(r.avg_latency)}`).join(', ');
+    lines.push(`<strong>Best Latency:</strong> ${escapeHtml(best.label)} (${fmtMs(best.avg_latency)})`
+      + (others ? ` — ${others}` : ''));
+  }
+  const withCost = ok.filter(r => r.est_cost != null && Number.isFinite(Number(r.est_cost)));
+  if (withCost.length) {
+    withCost.sort((a, b) => a.est_cost - b.est_cost);
+    const best = withCost[0];
+    const others = withCost.slice(1).map(r => `${escapeHtml(cmpShortLabel(r.model, r.label))} ${fmtCost(r.est_cost)}`).join(', ');
+    lines.push(`<strong>Best Cost:</strong> ${escapeHtml(best.label)} (${fmtCost(best.est_cost)} / run)`
+      + (others ? ` — ${others}` : ''));
+  }
+  return lines.length ? lines : ['Free-form completed — no latency/cost to rank.'];
 }
 
 function buildBothSummary(intentResults, freeformResults, expectedOverride) {
   const lines = buildCmpSummary(intentResults, expectedOverride);
   lines.push('—');
+  lines.push('<span style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Free-form</span>');
   buildFreeformSummary(freeformResults).forEach(l => lines.push(l));
   return lines;
 }
@@ -4762,6 +5189,7 @@ function computeBatchMetrics(models, rows) {
 function renderCmpMetrics(metrics, models) {
   const el = document.getElementById('cmpMetrics');
   if (!metrics || !models.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  el.classList.remove('cmp-metrics-freeform');
 
   const cards = [
     {
@@ -4794,6 +5222,130 @@ function renderCmpMetrics(metrics, models) {
       sub: 'Same intent across N runs',
       render: (m) => m.consistency === null ? '—' : fmtPct(m.consistency),
       cls: (m) => m.consistency === null ? '' : (m.consistency >= 0.9 ? 'good' : m.consistency >= 0.7 ? 'warn' : 'bad'),
+    },
+  ];
+
+  el.innerHTML = cards.map(card => `
+    <div class="cmp-metric-card">
+      <div class="m-label">${card.title}${card.sub ? `<div style="font-weight:400;text-transform:none;letter-spacing:0;margin-top:2px;opacity:0.8">${card.sub}</div>` : ''}</div>
+      ${models.map(model => {
+        const m = metrics[model];
+        if (!m) return '';
+        return `<div class="cmp-metric-row"><span class="m-name">${m.label}</span><span class="m-val ${card.cls(m)}">${card.render(m)}</span></div>`;
+      }).join('')}
+    </div>
+  `).join('');
+  el.classList.add('show');
+}
+
+function stdDev(arr) {
+  if (!arr || arr.length < 2) return 0;
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const v = arr.reduce((s, x) => s + (x - mean) * (x - mean), 0) / arr.length;
+  return Math.sqrt(v);
+}
+
+/** Freeform metric cards: Response Length Consistency, Avg Response Time, Cost Consistency. */
+function computeFreeformMetrics(models, results) {
+  const metrics = {};
+  models.forEach(model => {
+    const meta = CMP_MODEL_META[model] || { label: model };
+    const cell = results[model];
+    if (!cell || !cell.ok) {
+      metrics[model] = {
+        label: meta.label,
+        model,
+        length_label: null,
+        length_avg: null,
+        length_cv: null,
+        avg_latency: null,
+        cost_avg: null,
+        cost_min: null,
+        cost_max: null,
+        cost_delta: null,
+      };
+      return;
+    }
+    const okRuns = (cell.runs || []).filter(r => r && r.ok);
+    const lengths = okRuns.map(r => {
+      const t = String(r.response || r.last_response || '').trim();
+      return t ? t.split(/\s+/).filter(Boolean).length : 0;
+    }).filter(n => n > 0);
+    const avgLen = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : null;
+    const sdLen = lengths.length ? stdDev(lengths) : null;
+    const cv = (avgLen && avgLen > 0 && sdLen != null) ? (sdLen / avgLen) : null;
+    let lengthLabel = null;
+    if (cv == null) lengthLabel = null;
+    else if (cv <= 0.15) lengthLabel = 'High';
+    else if (cv <= 0.35) lengthLabel = 'Medium';
+    else lengthLabel = 'Low';
+
+    const latencies = okRuns.map(r => Number(r.latency)).filter(v => Number.isFinite(v));
+    const avgLat = latencies.length
+      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+      : (cell.avg_latency != null ? Math.round(cell.avg_latency) : null);
+
+    const costs = okRuns.map(r => Number(r.cost)).filter(v => Number.isFinite(v));
+    const costAvg = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length
+      : (cell.est_cost != null ? Number(cell.est_cost) : null);
+    const costMin = costs.length ? Math.min(...costs) : costAvg;
+    const costMax = costs.length ? Math.max(...costs) : costAvg;
+    const costDelta = (costMin != null && costMax != null) ? (costMax - costMin) / 2 : null;
+
+    metrics[model] = {
+      label: meta.label,
+      model,
+      length_label: lengthLabel,
+      length_avg: avgLen != null ? Math.round(avgLen) : null,
+      length_cv: cv,
+      avg_latency: avgLat,
+      cost_avg: costAvg,
+      cost_min: costMin,
+      cost_max: costMax,
+      cost_delta: costDelta,
+    };
+  });
+  return metrics;
+}
+
+function renderFreeformMetrics(metrics, models) {
+  // Freeform-only → main metrics strip; Both → dedicated freeform strip under freeform panels
+  const el = (compareMode === 'both')
+    ? document.getElementById('cmpMetricsFreeform')
+    : document.getElementById('cmpMetrics');
+  if (!el) return;
+  if (!metrics || !models.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+
+  el.classList.toggle('cmp-metrics-freeform', true);
+
+  const cards = [
+    {
+      title: 'Response Length Consistency',
+      sub: 'Word-count stability across runs',
+      render: (m) => m.length_label == null
+        ? '—'
+        : `${m.length_label}${m.length_avg != null ? ` · avg ${m.length_avg} words` : ''}`,
+      cls: (m) => m.length_label == null ? ''
+        : (m.length_label === 'High' ? 'good' : m.length_label === 'Medium' ? 'warn' : 'bad'),
+    },
+    {
+      title: 'Avg Response Time',
+      sub: 'Mean total latency',
+      render: (m) => m.avg_latency == null ? '—' : fmtMs(m.avg_latency),
+      cls: (m) => m.avg_latency == null ? ''
+        : (m.avg_latency <= 1500 ? 'good' : m.avg_latency <= 3000 ? 'warn' : 'bad'),
+    },
+    {
+      title: 'Cost Consistency',
+      sub: 'Avg cost ± half-range',
+      render: (m) => m.cost_avg == null
+        ? '—'
+        : `${fmtCost(m.cost_avg)}${m.cost_delta != null ? ` (±${fmtCost(m.cost_delta)})` : ''}`,
+      cls: (m) => {
+        if (m.cost_avg == null || m.cost_delta == null) return '';
+        const rel = m.cost_avg > 0 ? m.cost_delta / m.cost_avg : 0;
+        return rel <= 0.1 ? 'good' : rel <= 0.25 ? 'warn' : 'bad';
+      },
     },
   ];
 
@@ -4987,6 +5539,7 @@ function restoreCompareModeUI(mode) {
   document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('active'); });
   const modeBtn = document.getElementById('mode-' + compareMode);
   if (modeBtn) modeBtn.classList.add('active');
+  applyCompareModeLayout();
 }
 
 /**
@@ -5131,30 +5684,40 @@ function loadCmpHistory(idx) {
     if (panelTx) panelTx.value = tx;
   });
 
-  // 5–6. Panels + accuracy (renderPanelRuns → updatePanelAccuracyUI)
-  const panelsEl = document.getElementById('cmpPanels');
+  // 5–6. Panels + accuracy / freeform cards
+  applyCompareModeLayout();
   let chartResults = cmpResults;
   let chartOpts = {};
 
   if (compareMode === 'freeform') {
-    if (panelsEl) panelsEl.style.display = 'none';
-    document.getElementById('cmpFreeformTableWrap').classList.add('show');
-    document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-      renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: '—' })
-    ).join('');
-    chartResults = cmpFreeformResults;
-  } else if (compareMode === 'both') {
-    if (panelsEl) panelsEl.style.display = 'none';
-    document.getElementById('cmpSplitWrap').classList.add('show');
-    document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-      renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
-    ).join('');
-    chartResults = cmpResults;
-  } else {
-    if (panelsEl) panelsEl.style.display = 'flex';
+    setPanelAccuracyVisible(false);
     models.forEach(function(modelId) {
-      if (cmpResults[modelId]) renderPanelRuns(modelId, cmpResults[modelId]);
-      else renderPanelRuns(modelId, null);
+      renderPanelRuns(modelId, cmpFreeformResults[modelId] || null, { kind: 'freeform' });
+    });
+    chartResults = cmpFreeformResults;
+    chartOpts = { hideAccuracy: true };
+    renderFreeformMetrics(computeFreeformMetrics(models, historyFreeform), models);
+  } else if (compareMode === 'both') {
+    models.forEach(function(modelId) {
+      renderPanelRuns(modelId, cmpResults[modelId] || null, { kind: 'intent' });
+      renderPanelRuns(modelId, cmpFreeformResults[modelId] || null, { kind: 'freeform' });
+    });
+    chartResults = cmpResults;
+    if (expectedIntent) {
+      const row = {
+        text: entry.transcript || groundTruth || '',
+        category: '',
+        expected: expectedIntent,
+        models: {},
+      };
+      models.forEach(function(m) { row.models[m] = historyResults[m]; });
+      renderCmpMetrics(computeBatchMetrics(models, [row]), models);
+    }
+    renderFreeformMetrics(computeFreeformMetrics(models, historyFreeform), models);
+  } else {
+    models.forEach(function(modelId) {
+      if (cmpResults[modelId]) renderPanelRuns(modelId, cmpResults[modelId], { kind: 'intent' });
+      else renderPanelRuns(modelId, null, { kind: 'intent' });
     });
     chartResults = cmpResults;
     if (expectedIntent) {
@@ -5169,7 +5732,7 @@ function loadCmpHistory(idx) {
     }
   }
 
-  // 7–8. Charts + written summary (Best Intent / Latency / Accuracy)
+  // 7–8. Charts + written summary (Best Intent / Latency / Accuracy / Cost)
   renderCmpSummaryText({
     results: historyResults,
     freeformResults: historyFreeform,
@@ -5178,6 +5741,11 @@ function loadCmpHistory(idx) {
   });
   document.getElementById('cmpCharts').classList.add('show');
   renderCmpCharts(chartResults, chartOpts);
+  if (compareMode === 'both') renderCmpChartsFreeform(historyFreeform);
+  else {
+    const ffCharts = document.getElementById('cmpChartsFreeform');
+    if (ffCharts) ffCharts.classList.remove('show');
+  }
 
   // 9. Batch table handled above
 
@@ -5437,14 +6005,21 @@ function getModelAudioFile(modelId) {
   return st.audioFile || null;
 }
 
+function getModelMicSessionId(modelId) {
+  const st = ensurePanelState(modelId);
+  return st.micSessionId || (cmpAudioSource && cmpAudioSource.micSessionId) || null;
+}
+
 /**
  * Per-model compare run. Each Claude/Gemini model runs its OWN STT when audio is present
  * (no shared Deepgram across Haiku/Sonnet — realistic end-to-end latency).
+ * Hybrid mic: STT via mic_session_id (server PCM buffer replay) — never the live GT transcript.
  */
 async function runSingleModelCompare(modelId, transcript, expected) {
   const st = ensurePanelState(modelId);
   let tx = (st.transcript || transcript || '').trim();
-  const hasAudio = !!st.audioFile;
+  const micSessionId = getModelMicSessionId(modelId);
+  const hasAudio = !!st.audioFile || !!micSessionId;
   if (!tx && !hasAudio) {
     throw new Error('Panel transcript is empty');
   }
@@ -5455,12 +6030,25 @@ async function runSingleModelCompare(modelId, transcript, expected) {
     // Every model: independent STT for this run (Claude → Deepgram, Gemini → Live STT)
     if (panelSttEngine(modelId) === 'gemini') {
       setPanelStatus(modelId, 'Run STT (Gemini Live)...');
-      const buf = await st.audioFile.arrayBuffer();
-      const res = await fetch('/compare-gemini-stt?model=' + encodeURIComponent(modelId), {
-        method: 'POST',
-        headers: { 'Content-Type': st.audioFile.type || 'audio/wav', 'X-Compare-Model': modelId },
-        body: buf,
-      });
+      let res;
+      if (micSessionId) {
+        res = await fetch(
+          '/compare-gemini-stt?model=' + encodeURIComponent(modelId)
+            + '&mic_session_id=' + encodeURIComponent(micSessionId),
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream', 'X-Compare-Model': modelId },
+            body: new Uint8Array(0),
+          }
+        );
+      } else {
+        const buf = await st.audioFile.arrayBuffer();
+        res = await fetch('/compare-gemini-stt?model=' + encodeURIComponent(modelId), {
+          method: 'POST',
+          headers: { 'Content-Type': st.audioFile.type || 'audio/wav', 'X-Compare-Model': modelId },
+          body: buf,
+        });
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.transcript) {
         throw makeCompareClientError(
@@ -5472,10 +6060,13 @@ async function runSingleModelCompare(modelId, transcript, expected) {
       tx = data.transcript.trim();
       opts.realSttMs = data.sttMs;
       opts.sttEngine = 'gemini';
+      if (data.duration_sec != null) opts.durationSec = data.duration_sec;
     } else {
       setPanelStatus(modelId, 'Run STT (Deepgram)...');
       try {
-        const sttRes = await compareAudioStt(st.audioFile, st.durationSec);
+        const sttRes = micSessionId
+          ? await compareAudioSttMicSession(micSessionId, st.durationSec)
+          : await compareAudioStt(st.audioFile, st.durationSec);
         tx = (sttRes.transcript || '').trim();
         opts.realSttMs = sttRes.sttMs;
         opts.convertMs = sttRes.convertMs != null ? sttRes.convertMs : 0;
@@ -5552,6 +6143,104 @@ function destroyCmpCharts() {
   cmpCharts = {};
 }
 
+function renderCmpChartsFreeform(results) {
+  const ok = orderedCmpResults(results).filter(r => r && r.ok);
+  const wrap = document.getElementById('cmpChartsFreeform');
+  if (!wrap) return;
+  if (!ok.length || typeof Chart === 'undefined') {
+    wrap.classList.remove('show');
+    return;
+  }
+  wrap.classList.add('show');
+  const labels = ok.map(r => r.label);
+  const colors = ok.map(r => (CMP_MODEL_META[r.model] || {}).color || '#58a6ff');
+
+  ['ffLatency', 'ffTokens', 'ffCost'].forEach(k => {
+    if (cmpCharts[k]) { try { cmpCharts[k].destroy(); } catch (e) {} delete cmpCharts[k]; }
+  });
+
+  const latEl = document.getElementById('chartFfLatency');
+  const tokEl = document.getElementById('chartFfTokens');
+  const costEl = document.getElementById('chartFfCost');
+  if (!latEl || !tokEl || !costEl) return;
+
+  cmpCharts.ffLatency = new Chart(latEl, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Avg latency (ms)',
+        data: ok.map(r => r.avg_latency),
+        backgroundColor: colors.map(c => c + '99'),
+        borderColor: colors,
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterBody: (items) => {
+              const r = ok[items[0].dataIndex];
+              return [`Min: ${r.min_latency}ms`, `Max: ${r.max_latency}ms`];
+            }
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true, ticks: { color: '#7d8590' }, grid: { color: '#30363d' } },
+        x: { ticks: { color: '#7d8590' }, grid: { display: false } }
+      }
+    }
+  });
+
+  cmpCharts.ffTokens = new Chart(tokEl, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Input', data: ok.map(r => r.avg_input_tokens), backgroundColor: '#58a6ff99', borderColor: '#58a6ff', borderWidth: 1 },
+        { label: 'Output', data: ok.map(r => r.avg_output_tokens), backgroundColor: '#a371f799', borderColor: '#a371f7', borderWidth: 1 },
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { stacked: true, ticks: { color: '#7d8590' }, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { color: '#7d8590' }, grid: { color: '#30363d' } }
+      },
+      plugins: { legend: { labels: { color: '#7d8590' } } }
+    }
+  });
+
+  cmpCharts.ffCost = new Chart(costEl, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Est. cost ($)',
+        data: ok.map(r => r.est_cost),
+        backgroundColor: colors.map(c => c + '99'),
+        borderColor: colors,
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => fmtCost(ctx.raw) } }
+      },
+      scales: {
+        y: { beginAtZero: true, ticks: { color: '#7d8590', callback: v => '$' + Number(v).toFixed(5) }, grid: { color: '#30363d' } },
+        x: { ticks: { color: '#7d8590' }, grid: { display: false } }
+      }
+    }
+  });
+}
+
 function renderCmpCharts(results, opts) {
   opts = opts || {};
   destroyCmpCharts();
@@ -5560,6 +6249,7 @@ function renderCmpCharts(results, opts) {
 
   const labels = ok.map(r => r.label);
   const colors = ok.map(r => (CMP_MODEL_META[r.model] || {}).color || '#58a6ff');
+  const hideAccuracy = !!opts.hideAccuracy || compareMode === 'freeform';
 
   cmpCharts.latency = new Chart(document.getElementById('chartLatency'), {
     type: 'bar',
@@ -5664,10 +6354,11 @@ function renderCmpCharts(results, opts) {
   });
 
   // Latency / tokens / cost always render above — accuracy only when expected or WER ref exists
+  // Freeform mode: never show accuracy charts
   const acc = computeAccuracyStats(results);
   const accCard = document.getElementById("cardAccuracy");
   const trendCard = document.getElementById("cardAccuracyTrend");
-  const showAcc = acc.models.some(m => m.intentAcc != null || m.transcriptAcc != null);
+  const showAcc = !hideAccuracy && acc.models.some(m => m.intentAcc != null || m.transcriptAcc != null);
   if (accCard) accCard.style.display = showAcc ? "" : "none";
   if (trendCard) trendCard.style.display = showAcc ? "" : "none";
 
@@ -5774,10 +6465,19 @@ async function runComparisonSeries(seriesCount) {
   }
 
   // Shared audio source wins: every model gets the same audio and does its own STT per run
-  if (cmpAudioSource && cmpAudioSource.file) {
+  if (cmpAudioSource && cmpAudioSource.micSessionId) {
+    models.forEach(m => {
+      const st = ensurePanelState(m);
+      st.audioFile = null;
+      st.micSessionId = cmpAudioSource.micSessionId;
+      st.audioFileName = cmpAudioSource.fileName || ('mic-session:' + cmpAudioSource.micSessionId);
+      if (cmpAudioSource.durationSec != null) st.durationSec = cmpAudioSource.durationSec;
+    });
+  } else if (cmpAudioSource && cmpAudioSource.file) {
     models.forEach(m => {
       const st = ensurePanelState(m);
       st.audioFile = cmpAudioSource.file;
+      st.micSessionId = null;
       st.audioFileName = cmpAudioSource.fileName;
       if (cmpAudioSource.durationSec != null) st.durationSec = cmpAudioSource.durationSec;
     });
@@ -5813,7 +6513,7 @@ async function runComparisonSeries(seriesCount) {
   } else {
     const missing = models.filter(m => {
       const st = ensurePanelState(m);
-      return !(st.transcript || '').trim() && !st.audioFile;
+      return !(st.transcript || '').trim() && !panelHasAudioSource(st);
     });
     if (missing.length) {
       alert('Audio source or transcript required for: ' + missing.map(m => (CMP_MODEL_META[m] || {}).label || m).join(', '));
@@ -5880,6 +6580,10 @@ async function runComparisonSeries(seriesCount) {
       document.getElementById('cmpCharts').classList.remove('show');
       document.getElementById('cmpSummaryBox').classList.remove('show');
       document.getElementById('cmpMetrics').classList.remove('show');
+      const ffMetricsEl = document.getElementById('cmpMetricsFreeform');
+      if (ffMetricsEl) { ffMetricsEl.classList.remove('show'); ffMetricsEl.innerHTML = ''; }
+      const ffChartsEl = document.getElementById('cmpChartsFreeform');
+      if (ffChartsEl) ffChartsEl.classList.remove('show');
       document.getElementById('cmpToolbarMeta').textContent =
         (compareMode === 'both' ? 'Intent + Free-Form' :
         compareMode === 'freeform' ? 'Free-Form' : 'Intent') +
@@ -5887,6 +6591,7 @@ async function runComparisonSeries(seriesCount) {
       showCmpProgress(seriesIdx, seriesCount, seriesLabel);
 
       if (compareMode === 'intent') {
+        applyCompareModeLayout();
         document.getElementById('cmpTableWrap').classList.remove('show');
         document.getElementById('cmpFreeformTableWrap').classList.remove('show');
         document.getElementById('cmpSplitWrap').classList.remove('show');
@@ -5958,17 +6663,16 @@ async function runComparisonSeries(seriesCount) {
           updateTranscriptDiffWarningFromPanels();
         }
 
-        const orderedModels = otherModels.concat(claudeModels);
-        for (let mi = 0; mi < orderedModels.length; mi++) {
-          if (cmpStopFlag) break;
-          await runOneModel(orderedModels[mi]);
-          const isLastModel = mi === orderedModels.length - 1;
-          const isLastSeries = seriesIdx === seriesCount - 1;
-          if (!cmpStopFlag && !(isLastSeries && isLastModel)) {
-            showCmpProgress(seriesIdx + (done / models.length), seriesCount,
-              ((CMP_MODEL_META[orderedModels[mi]] || {}).label || orderedModels[mi]) + ' done · waiting 5s...');
-            await new Promise(r => setTimeout(r, 5000));
-          }
+        await runCmpProviderLanes(otherModels, claudeModels, runOneModel, {
+          gapMs: 10000,
+          onWait: (model, label) => {
+            showCmpProgress(seriesIdx + (done / Math.max(1, models.length)), seriesCount,
+              label + ' done · waiting 10s...');
+          },
+        });
+        if (!cmpStopFlag && seriesIdx < seriesCount - 1) {
+          showCmpProgress(seriesIdx + 1, seriesCount, 'Series gap · waiting 10s...');
+          await cmpSleep(10000);
         }
         refreshAllPanelRuns();
         chartResults = cmpResults;
@@ -5979,30 +6683,37 @@ async function runComparisonSeries(seriesCount) {
           renderCmpMetrics(computeBatchMetrics(models, [row]), models);
         }
       } else if (compareMode === 'freeform') {
-        const panelsEl = document.getElementById('cmpPanels');
-        if (panelsEl) panelsEl.style.display = 'none';
+        applyCompareModeLayout();
         transcript = firstTx;
-        document.getElementById('cmpFreeformTableWrap').classList.add('show');
-        document.getElementById('cmpTableWrap').classList.remove('show');
-        document.getElementById('cmpSplitWrap').classList.remove('show');
-        document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-          cmpFreeformResults[m] && cmpFreeformResults[m].ok
-            ? renderCmpFreeformRow(m, cmpFreeformResults[m])
-            : `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</td></tr>`
-        ).join('');
+        setPanelAccuracyVisible(false);
+        models.forEach(m => {
+          setPanelStatus(m, seriesLabel);
+          renderPanelRuns(m, cmpFreeformResults[m] || null, { kind: 'freeform' });
+        });
 
         const claudeModels = models.filter(m => String(m).startsWith('claude'));
         const otherModels = models.filter(m => !String(m).startsWith('claude'));
 
         async function runOneFreeform(model) {
           if (cmpStopFlag) return;
+          setPanelStatus(model, 'Running free-form...');
           try {
           let ffTranscript = transcript;
-          // Per-model STT when audio is present (Claude and Gemini alike — no shared Deepgram)
+          // Per-model STT when audio is present (file or hybrid mic session)
           const file = getModelAudioFile(model);
-          if (file) {
+          const micId = getModelMicSessionId(model);
+          if (micId) {
+            const stt = await compareAudioSttMicSession(micId, ensurePanelState(model).durationSec);
+            ffTranscript = stt.transcript;
+            const st = ensurePanelState(model);
+            st.transcript = ffTranscript;
+            updatePanelSttUI(model);
+          } else if (file) {
             const stt = await compareAudioStt(file);
             ffTranscript = stt.transcript;
+            const st = ensurePanelState(model);
+            st.transcript = ffTranscript;
+            updatePanelSttUI(model);
           } else if (!ffTranscript) {
             throw makeCompareClientError('No transcript and no audio source selected', null, 'STT');
           }
@@ -6011,6 +6722,9 @@ async function runComparisonSeries(seriesCount) {
             cmpFreeformResults[model],
             fresh[model] || { ok: false, error: 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model }
           );
+          setPanelStatus(model, cmpFreeformResults[model] && cmpFreeformResults[model].ok === false
+            ? ('Error: ' + (cmpFreeformResults[model].error || 'failed'))
+            : 'Done');
           } catch (e) {
             console.error('[Run Error]', model, 'run', nextRunNum, e);
             const detail = e.error_detail || { stage: 'LLM', message: e.message || String(e) };
@@ -6022,43 +6736,43 @@ async function runComparisonSeries(seriesCount) {
               label: (CMP_MODEL_META[model] || {}).label || model,
               runs: [{ run: 1, ok: false, error: detail.message, error_detail: detail }],
             });
+            setPanelStatus(model, 'Error: ' + (detail.message || e.message));
           }
-          document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-            cmpFreeformResults[m]
-              ? renderCmpFreeformRow(m, cmpFreeformResults[m])
-              : `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</td></tr>`
-          ).join('');
+          renderPanelRuns(model, cmpFreeformResults[model], { kind: 'freeform' });
         }
 
-        const orderedFf = otherModels.concat(claudeModels);
-        for (let mi = 0; mi < orderedFf.length; mi++) {
-          if (cmpStopFlag) break;
-          await runOneFreeform(orderedFf[mi]);
-          const isLastModel = mi === orderedFf.length - 1;
-          const isLastSeries = seriesIdx === seriesCount - 1;
-          if (!cmpStopFlag && !(isLastSeries && isLastModel)) {
-            showCmpProgress(seriesIdx + 1, seriesCount, `${(CMP_MODEL_META[orderedFf[mi]] || {}).label || orderedFf[mi]} done · waiting 5s...`);
-            await new Promise(r => setTimeout(r, 5000));
-          }
+        await runCmpProviderLanes(otherModels, claudeModels, runOneFreeform, {
+          gapMs: 10000,
+          onWait: (model, label) => {
+            showCmpProgress(seriesIdx + 1, seriesCount, label + ' done · waiting 10s...');
+          },
+        });
+        if (!cmpStopFlag && seriesIdx < seriesCount - 1) {
+          showCmpProgress(seriesIdx + 1, seriesCount, 'Series gap · waiting 10s...');
+          await cmpSleep(10000);
         }
-        document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-          renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: 'No result', model: m, label: (CMP_MODEL_META[m] || {}).label || m })
-        ).join('');
+        models.forEach(m => renderPanelRuns(m, cmpFreeformResults[m], { kind: 'freeform' }));
         chartResults = cmpFreeformResults;
+        chartOpts = { hideAccuracy: true };
         summaryLines = buildFreeformSummary(cmpFreeformResults);
+        renderFreeformMetrics(computeFreeformMetrics(models, cmpFreeformResults), models);
+        // Hide intent metric cards in freeform
+        const intentMetrics = document.getElementById('cmpMetrics');
+        if (intentMetrics) { intentMetrics.classList.remove('show'); intentMetrics.innerHTML = ''; }
       } else {
-        document.getElementById('cmpSplitWrap').classList.add('show');
-        document.getElementById('cmpTableWrap').classList.remove('show');
-        document.getElementById('cmpFreeformTableWrap').classList.remove('show');
-        document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-          `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</div></div>`
-        ).join('');
+        applyCompareModeLayout();
+        models.forEach(m => {
+          setPanelStatus(m, seriesLabel);
+          renderPanelRuns(m, cmpResults[m] || null, { kind: 'intent' });
+          renderPanelRuns(m, cmpFreeformResults[m] || null, { kind: 'freeform' });
+        });
 
         const claudeModels = models.filter(m => String(m).startsWith('claude'));
         const otherModels = models.filter(m => !String(m).startsWith('claude'));
 
         async function runOneBoth(model) {
           if (cmpStopFlag) return;
+          setPanelStatus(model, 'Running intent...');
           let intentMap = {};
           try {
             const single = await runSingleModelCompare(model, transcript, expected);
@@ -6075,12 +6789,23 @@ async function runComparisonSeries(seriesCount) {
               runs: [{ run: 1, ok: false, error: detail.message, error_detail: detail }],
             };
           }
-          // Freeform: per-model STT (reuse intent transcript from panel when no fresh audio STT needed)
+          // Same model: intent → 10s → freeform (Anthropic + Gemini same-provider spacing)
           try {
+          setPanelStatus(model, 'Intent done · waiting 10s before free-form...');
+          await cmpSleep(10000);
+          setPanelStatus(model, 'Running free-form...');
           let ffTranscript = (ensurePanelState(model).transcript || transcript || '').trim();
           const file = getModelAudioFile(model);
+          const micId = getModelMicSessionId(model);
           // Intent path already ran STT into panel transcript when audio present — reuse it
-          if (!ffTranscript && file) {
+          if (!ffTranscript && micId) {
+            try {
+              const stt = await compareAudioSttMicSession(micId, ensurePanelState(model).durationSec);
+              ffTranscript = stt.transcript;
+            } catch (e) {
+              console.error('[Run Error]', model, 'run', nextRunNum, e);
+            }
+          } else if (!ffTranscript && file) {
             try {
               const stt = await compareAudioStt(file);
               ffTranscript = stt.transcript;
@@ -6091,6 +6816,7 @@ async function runComparisonSeries(seriesCount) {
           const freeformMap = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
           cmpResults[model] = mergeIntentRun(cmpResults[model], intentMap[model] || { ok: false, error: 'No result', model }, expected);
           cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], freeformMap[model] || { ok: false, error: 'No result', model });
+          setPanelStatus(model, 'Done');
           } catch (e) {
             console.error('[Run Error]', model, 'run', nextRunNum, e);
             const detail = e.error_detail || { stage: 'LLM', message: e.message || String(e) };
@@ -6099,30 +6825,29 @@ async function runComparisonSeries(seriesCount) {
               ok: false, error: detail.message, error_detail: detail, model,
               runs: [{ run: 1, ok: false, error: detail.message, error_detail: detail }],
             });
+            setPanelStatus(model, 'Error: ' + (detail.message || e.message));
           }
-          document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-            (cmpResults[m] || cmpFreeformResults[m])
-              ? renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
-              : `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</div></div>`
-          ).join('');
+          renderPanelRuns(model, cmpResults[model], { kind: 'intent' });
+          renderPanelRuns(model, cmpFreeformResults[model], { kind: 'freeform' });
         }
 
-        const orderedBoth = otherModels.concat(claudeModels);
-        for (let mi = 0; mi < orderedBoth.length; mi++) {
-          if (cmpStopFlag) break;
-          await runOneBoth(orderedBoth[mi]);
-          const isLastModel = mi === orderedBoth.length - 1;
-          const isLastSeries = seriesIdx === seriesCount - 1;
-          if (!cmpStopFlag && !(isLastSeries && isLastModel)) {
-            showCmpProgress(seriesIdx + 1, seriesCount, `${(CMP_MODEL_META[orderedBoth[mi]] || {}).label || orderedBoth[mi]} done · waiting 5s...`);
-            await new Promise(r => setTimeout(r, 5000));
-          }
+        await runCmpProviderLanes(otherModels, claudeModels, runOneBoth, {
+          gapMs: 10000,
+          onWait: (model, label) => {
+            showCmpProgress(seriesIdx + 1, seriesCount, label + ' done · waiting 10s...');
+          },
+        });
+        if (!cmpStopFlag && seriesIdx < seriesCount - 1) {
+          showCmpProgress(seriesIdx + 1, seriesCount, 'Series gap · waiting 10s...');
+          await cmpSleep(10000);
         }
 
-        document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-          renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
-        ).join('');
+        models.forEach(m => {
+          renderPanelRuns(m, cmpResults[m], { kind: 'intent' });
+          renderPanelRuns(m, cmpFreeformResults[m], { kind: 'freeform' });
+        });
         chartResults = cmpResults;
+        chartOpts = {};
         summaryLines = buildBothSummary(cmpResults, cmpFreeformResults);
 
         if (expected) {
@@ -6130,6 +6855,7 @@ async function runComparisonSeries(seriesCount) {
           models.forEach(m => { row.models[m] = cmpResults[m]; });
           renderCmpMetrics(computeBatchMetrics(models, [row]), models);
         }
+        renderFreeformMetrics(computeFreeformMetrics(models, cmpFreeformResults), models);
       }
 
       completedInSeries++;
@@ -6139,6 +6865,12 @@ async function runComparisonSeries(seriesCount) {
       document.getElementById('cmpSummaryBox').classList.add('show');
       document.getElementById('cmpCharts').classList.add('show');
       renderCmpCharts(chartResults, chartOpts);
+      if (compareMode === 'both') {
+        renderCmpChartsFreeform(cmpFreeformResults);
+      } else {
+        const ffCharts = document.getElementById('cmpChartsFreeform');
+        if (ffCharts) ffCharts.classList.remove('show');
+      }
 
       const totalRunsShown = Math.max(
         1,
