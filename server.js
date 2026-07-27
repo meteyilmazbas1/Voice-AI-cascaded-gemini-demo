@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const express = require('express');
 const WebSocket = require('ws');
@@ -18,16 +19,26 @@ const deepgramHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
 const app = express();
 const server = http.createServer(app);
 
-// Two separate WebSocket servers on different paths
+// Separate WebSocket servers by path (cascaded Twilio, Gemini Twilio, browser demo)
 const browserWss = new WebSocket.Server({ noServer: true });
 const twilioWss = new WebSocket.Server({ noServer: true });
+const twilioGeminiWss = new WebSocket.Server({ noServer: true });
 
 // Route WebSocket upgrades by path
 server.on('upgrade', function(request, socket, head) {
-  const pathname = request.url;
+  let pathname = request.url || '/';
+  try {
+    pathname = new URL(request.url, 'http://localhost').pathname;
+  } catch (e) {
+    pathname = String(request.url || '/').split('?')[0];
+  }
   if (pathname === '/twilio') {
     twilioWss.handleUpgrade(request, socket, head, function(ws) {
       twilioWss.emit('connection', ws, request);
+    });
+  } else if (pathname === '/twilio-gemini') {
+    twilioGeminiWss.handleUpgrade(request, socket, head, function(ws) {
+      twilioGeminiWss.emit('connection', ws, request);
     });
   } else {
     browserWss.handleUpgrade(request, socket, head, function(ws) {
@@ -159,8 +170,11 @@ ambiguous: unclear, contradictory, or unrecognised
 
 Confidence: >0.90 clear | <0.60 hesitation/unclear.`;
 
-// Live compare: same intent-only prompt as Claude compare (no language/persona fluff)
-const COMPARE_LIVE_PROMPT = COMPARE_INTENT_PROMPT;
+/** Pin Gemini Live STT/response to English via system instruction only (API has no language_codes for native audio). */
+const GEMINI_ENGLISH_AUDIO_RULE = `CRITICAL LANGUAGE RULE: The audio is ALWAYS in English. Regardless of background noise, audio quality, or how unclear the speech sounds, NEVER transcribe or interpret it as Korean, Chinese, Japanese, Cyrillic, or any non-English script. If the audio is heavily degraded by noise, provide your best-effort English phonetic transcription — never switch to a different writing system or language.`;
+
+// Live compare: intent JSON + strict English-only transcription/response rule
+const COMPARE_LIVE_PROMPT = COMPARE_INTENT_PROMPT + '\n\n' + GEMINI_ENGLISH_AUDIO_RULE;
 
 const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
 
@@ -309,8 +323,13 @@ app.post('/incoming-call', function(req, res) {
   const to = (req.body && req.body.To) ? req.body.To : 'unknown';
   const direction = (req.body && req.body.Direction) ? req.body.Direction : '';
   const worker = direction.startsWith('outbound') ? to : from;
-  console.log('[Twilio] Call:', direction, '| From:', from, '| To:', to, '| Worker:', worker);
-  const wsUrl = WS_URL + '/twilio';
+
+  // Pipeline switch: ?pipeline=gemini → Gemini Live; default → Cascaded (Deepgram→Claude→ElevenLabs)
+  const pipeline = (req.query && req.query.pipeline === 'gemini') ? 'gemini' : 'cascaded';
+  console.log('[Twilio] Call:', direction, '| From:', from, '| To:', to, '| Worker:', worker, '| Pipeline:', pipeline);
+
+  const wsPath = pipeline === 'gemini' ? '/twilio-gemini' : '/twilio';
+  const wsUrl = WS_URL + wsPath;
   res.type('text/xml');
   res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -569,6 +588,10 @@ twilioWss.on('connection', function(ws) {
   let dgClockMs = 0;
   let agentPlaybackUntil = 0;
   let uttWords = [];
+  let twilioMediaCount = 0;
+  let droppedLogged = false;
+  let twilioDgAudioBuffer = Buffer.alloc(0);
+  let twilioDgIntentionalClose = false;
 
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
 
@@ -581,6 +604,23 @@ twilioWss.on('connection', function(ws) {
       streamSid: streamSid,
       media: { payload: audioBuffer.toString('base64') }
     }));
+  }
+
+  /** Browser-parity: buffer + reconnect when Deepgram socket is not OPEN. */
+  function sendAudioToTwilioDeepgram(buf) {
+    if (!buf || !buf.length) return;
+    if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+      deepgramWs.send(buf);
+      return;
+    }
+    twilioDgAudioBuffer = Buffer.concat([twilioDgAudioBuffer, buf]);
+    if (twilioDgIntentionalClose || sessionState === 'ENDED') return;
+    if (!deepgramWs
+      || deepgramWs.readyState === WebSocket.CLOSING
+      || deepgramWs.readyState === WebSocket.CLOSED) {
+      console.log('[Twilio Deepgram] Socket not open — reconnecting for incoming audio');
+      startTwilioDeepgram();
+    }
   }
 
   async function speakText(text, cacheKey, trackLatency) {
@@ -665,6 +705,11 @@ twilioWss.on('connection', function(ws) {
   }
 
   function startTwilioDeepgram() {
+    if (deepgramWs && (deepgramWs.readyState === WebSocket.OPEN || deepgramWs.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    twilioDgIntentionalClose = false;
+    droppedLogged = false;
     const dgApiKey = process.env.DEEPGRAM_API_KEY;
     const params = new URLSearchParams({ ...DEEPGRAM_BASE_PARAMS, encoding: 'mulaw', sample_rate: '8000', channels: '1' });
     const dgUrl = 'wss://api.deepgram.com/v1/listen?' + params.toString() + DEEPGRAM_KEYTERMS;
@@ -672,7 +717,15 @@ twilioWss.on('connection', function(ws) {
     deepgramWs = new WebSocket(dgUrl, {
       headers: { Authorization: 'Token ' + dgApiKey }
     });
-    deepgramWs.on('open', function() { console.log('[Twilio Deepgram] Connected'); });
+    deepgramWs.on('open', function() {
+      console.log('[Twilio Deepgram] Connected');
+      droppedLogged = false;
+      if (twilioDgAudioBuffer.length > 0) {
+        console.log('[Twilio Deepgram] Flushing buffered audio:', twilioDgAudioBuffer.length, 'bytes');
+        deepgramWs.send(twilioDgAudioBuffer);
+        twilioDgAudioBuffer = Buffer.alloc(0);
+      }
+    });
     deepgramWs.on('message', async function(data) {
       try {
         const msg = JSON.parse(data.toString());
@@ -701,7 +754,9 @@ twilioWss.on('connection', function(ws) {
       } catch (e) {}
     });
     deepgramWs.on('error', function(e) { console.error('[Twilio Deepgram] Error:', e.message); });
-    deepgramWs.on('close', function() { console.log('[Twilio Deepgram] Closed'); });
+    deepgramWs.on('close', function(code, reason) {
+      console.log('[Twilio Deepgram] Closed', code, reason ? reason.toString() : '');
+    });
   }
 
   ws.on('message', async function(data) {
@@ -735,17 +790,29 @@ twilioWss.on('connection', function(ws) {
           sessionState = 'LISTENING';
         }, 1000);
       }
-      if (msg.event === 'media' && deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+      if (msg.event === 'media') {
+        if (!(deepgramWs && deepgramWs.readyState === WebSocket.OPEN)) {
+          if (!droppedLogged) {
+            console.log('[Twilio Media] DROPPING frames — dgState=' + (deepgramWs ? deepgramWs.readyState : 'null'));
+            droppedLogged = true;
+          }
+        }
+        twilioMediaCount = (twilioMediaCount || 0) + 1;
+        if (twilioMediaCount % 50 === 1) {
+          console.log('[Twilio Media] frame#' + twilioMediaCount,
+            '| dgState=' + (deepgramWs ? deepgramWs.readyState : 'null'));
+        }
         lastMediaAt = Date.now();
-        const buf = Buffer.from(msg.media.payload, "base64");
+        const buf = Buffer.from(msg.media.payload, 'base64');
         noise.setAgentSpeaking(Date.now() < agentPlaybackUntil + 200);
         vad.processMulaw(buf);
         noise.pushFrame({ ...frameStatsMulaw(buf), speechProb: vad.prob() }, dgClockMs);
         dgClockMs += buf.length / 8;
-        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.send(buf);
+        sendAudioToTwilioDeepgram(buf);
       }
       if (msg.event === 'stop') {
         console.log('[Twilio] Stream stopped');
+        twilioDgIntentionalClose = true;
         if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
         clearSilenceTimer();
       }
@@ -754,6 +821,7 @@ twilioWss.on('connection', function(ws) {
 
   ws.on('close', function() {
     console.log('[Twilio WS] Disconnected');
+    twilioDgIntentionalClose = true;
     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
     clearSilenceTimer();
 
@@ -802,6 +870,81 @@ twilioWss.on('connection', function(ws) {
   });
 });
 
+// ─── Twilio WebSocket (Gemini Live pipeline, μ-law 8kHz) ───
+const { attachTwilioGeminiWss } = require('./twilioGeminiPipeline');
+attachTwilioGeminiWss(twilioGeminiWss);
+
+// ─── Comparison mic sessions (hybrid: live Deepgram STT + PCM buffer for N-run replay) ───
+const CMP_MIC_TTL_MS = 10 * 60 * 1000;
+const cmpMicSessions = new Map();
+
+function pruneCmpMicSessions() {
+  const now = Date.now();
+  for (const [id, sess] of cmpMicSessions.entries()) {
+    if (!sess || (now - (sess.createdAt || 0)) > CMP_MIC_TTL_MS) {
+      cmpMicSessions.delete(id);
+    }
+  }
+}
+
+function storeCmpMicSession(pcmBuffer, transcript) {
+  pruneCmpMicSessions();
+  const pcm = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
+  const id = crypto.randomBytes(8).toString('hex');
+  const durationSec = pcm.length > 0 ? pcm.length / (16000 * 2) : 0;
+  cmpMicSessions.set(id, {
+    pcm: pcm,
+    transcript: String(transcript || '').trim(),
+    createdAt: Date.now(),
+    durationSec: durationSec,
+  });
+  console.log('[Cmp Mic] session stored', id,
+    '| bytes:', pcm.length,
+    '| duration_sec:', durationSec.toFixed(2),
+    '| transcript:', JSON.stringify(String(transcript || '').trim()).slice(0, 80));
+  return id;
+}
+
+function getCmpMicSession(id) {
+  if (!id) return null;
+  pruneCmpMicSessions();
+  return cmpMicSessions.get(String(id)) || null;
+}
+
+function resolveCompareAudioBuffer(req) {
+  const micId = (req.query && req.query.mic_session_id)
+    || req.headers['x-mic-session-id']
+    || null;
+  if (micId) {
+    const sess = getCmpMicSession(micId);
+    if (!sess || !sess.pcm || !sess.pcm.length) {
+      const err = new Error('mic session not found or expired: ' + micId);
+      err.statusCode = 404;
+      throw err;
+    }
+    // Same path as file upload: WAV-wrap PCM so ffmpeg/Gemini helpers accept it
+    return {
+      buf: createCompareWavBuffer(sess.pcm),
+      contentType: 'audio/wav',
+      micSessionId: String(micId),
+      durationSec: sess.durationSec,
+      pcm: sess.pcm,
+    };
+  }
+  if (!req.body || !req.body.length) {
+    const err = new Error('audio body required (or mic_session_id)');
+    err.statusCode = 400;
+    throw err;
+  }
+  return {
+    buf: Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body),
+    contentType: req.headers['content-type'] || 'audio/wav',
+    micSessionId: null,
+    durationSec: null,
+    pcm: null,
+  };
+}
+
 // ─── Browser WebSocket ───
 browserWss.on('connection', function(ws) {
   console.log('[WS] Client connected');
@@ -837,8 +980,123 @@ browserWss.on('connection', function(ws) {
   const LOWCONF_RATIO_MAX = 0.5;
   const SILENCE_MS = 4000;
 
+  // Comparison hybrid mic (parallel to demo session — no LLM/TTS)
+  let cmpMicActive = false;
+  let cmpMicCaptureEnded = false; // ignore trailing PCM after finalize until next start
+  let cmpMicChunks = [];
+  let cmpMicDgWs = null;
+  let cmpMicLiveTranscript = '';
+  let cmpMicLastMediaAt = 0;
+  let cmpMicLastLogAt = 0;
+  let cmpMicFinalizing = false;
+
   function send(obj) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
+
+  function closeCmpMicDeepgram() {
+    if (cmpMicDgWs) {
+      try {
+        if (cmpMicDgWs.readyState === WebSocket.OPEN) {
+          try { cmpMicDgWs.send(JSON.stringify({ type: 'CloseStream' })); } catch (e) {}
+          cmpMicDgWs.close();
+        }
+      } catch (e) {}
+      cmpMicDgWs = null;
+    }
+  }
+
+  function startCmpMicDeepgram() {
+    closeCmpMicDeepgram();
+    const dgApiKey = process.env.DEEPGRAM_API_KEY;
+    if (!dgApiKey || dgApiKey === 'your_deepgram_key') {
+      send({ type: 'cmp_mic_log', message: 'Deepgram API key not set — live transcript unavailable' });
+      return;
+    }
+    const params = new URLSearchParams({ ...DEEPGRAM_BASE_PARAMS });
+    params.set('encoding', 'linear16');
+    params.set('sample_rate', '16000');
+    const dgUrl = 'wss://api.deepgram.com/v1/listen?' + params.toString() + DEEPGRAM_KEYTERMS;
+    cmpMicDgWs = new WebSocket(dgUrl, { headers: { Authorization: 'Token ' + dgApiKey } });
+    cmpMicDgWs.on('open', function() {
+      console.log('[Cmp Mic] Deepgram connected (live STT, no LLM)');
+      send({ type: 'cmp_mic_log', message: 'Deepgram connected — speak now' });
+    });
+    cmpMicDgWs.on('message', function(dgData) {
+      try {
+        const msg = JSON.parse(dgData.toString());
+        if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
+          const alt = msg.channel.alternatives[0];
+          const text = (alt.transcript || '').trim();
+          if (text) {
+            send({ type: 'cmp_mic_interim', text: text, is_final: !!msg.is_final });
+            if (msg.is_final) {
+              cmpMicLiveTranscript = cmpMicLiveTranscript
+                ? (cmpMicLiveTranscript + ' ' + text)
+                : text;
+            }
+          }
+        }
+        // Auto-end on utterance (demo-like) once we have enough audio + some transcript
+        if (msg.type === 'UtteranceEnd' && cmpMicActive && !cmpMicFinalizing) {
+          const bytes = cmpMicChunks.reduce(function(n, b) { return n + (b ? b.length : 0); }, 0);
+          if (bytes >= 16000 * 2 * 1.2) {
+            console.log('[Cmp Mic] UtteranceEnd — auto-finalizing');
+            finalizeCmpMicCapture('utterance_end');
+          }
+        }
+      } catch (e) {}
+    });
+    cmpMicDgWs.on('error', function(e) {
+      console.error('[Cmp Mic] Deepgram error:', e.message);
+      send({ type: 'cmp_mic_log', message: 'Deepgram error: ' + e.message });
+    });
+    cmpMicDgWs.on('close', function() {
+      console.log('[Cmp Mic] Deepgram closed');
+    });
+  }
+
+  function finalizeCmpMicCapture(reason) {
+    if (cmpMicFinalizing) return;
+    if (!cmpMicActive && !cmpMicChunks.length) return;
+    cmpMicFinalizing = true;
+    cmpMicActive = false;
+    cmpMicCaptureEnded = true;
+    closeCmpMicDeepgram();
+
+    const pcm = cmpMicChunks.length ? Buffer.concat(cmpMicChunks) : Buffer.alloc(0);
+    cmpMicChunks = [];
+    const transcript = String(cmpMicLiveTranscript || '').trim();
+    cmpMicLiveTranscript = '';
+
+    if (!pcm.length || pcm.length < 16000 * 2 * 0.8) {
+      cmpMicFinalizing = false;
+      send({
+        type: 'cmp_mic_error',
+        message: 'Recording too short — speak at least ~1–2 seconds, then Stop.',
+        reason: reason || 'end',
+      });
+      return;
+    }
+
+    const micSessionId = storeCmpMicSession(pcm, transcript);
+    const durationSec = pcm.length / (16000 * 2);
+    send({
+      type: 'cmp_mic_ready',
+      mic_session_id: micSessionId,
+      transcript: transcript,
+      duration_sec: durationSec,
+      bytes: pcm.length,
+      reason: reason || 'end',
+    });
+    cmpMicFinalizing = false;
+  }
+
+  function sendCmpMicPcmToDeepgram(buf) {
+    if (!buf || !buf.length) return;
+    if (cmpMicDgWs && cmpMicDgWs.readyState === WebSocket.OPEN) {
+      cmpMicDgWs.send(buf);
+    }
+  }
 
   function ensureDeepFilter() {
     if (!DEEPFILTER_ENABLED) {
@@ -1465,11 +1723,48 @@ browserWss.on('connection', function(ws) {
         }
 
         if (msg.type === 'stop') {
+          if (cmpMicActive) finalizeCmpMicCapture('demo_stop');
           if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
           clearSilenceTimer(); sessionState = 'ENDED';
         }
+
+        // ── Comparison hybrid mic (demo-parity PCM stream + session buffer) ──
+        if (msg.type === 'cmp_mic_start') {
+          console.log('[Cmp Mic] start');
+          if (cmpMicActive || cmpMicFinalizing) {
+            closeCmpMicDeepgram();
+          }
+          cmpMicActive = true;
+          cmpMicCaptureEnded = false;
+          cmpMicFinalizing = false;
+          cmpMicChunks = [];
+          cmpMicLiveTranscript = '';
+          cmpMicLastMediaAt = 0;
+          cmpMicLastLogAt = 0;
+          startCmpMicDeepgram();
+          send({ type: 'cmp_mic_started' });
+        }
+
+        if (msg.type === 'cmp_mic_end') {
+          console.log('[Cmp Mic] end (client Stop)');
+          finalizeCmpMicCapture('client_end');
+        }
       } else {
-        if (isReceivingAudioFile) {
+        // Comparison mic capture: buffer + live Deepgram (no demo LLM path)
+        if (cmpMicActive && !isReceivingAudioFile) {
+          const raw = Buffer.from(data);
+          cmpMicChunks.push(raw);
+          cmpMicLastMediaAt = Date.now();
+          if (!cmpMicLastLogAt || Date.now() - cmpMicLastLogAt > 1000) {
+            console.log('[Cmp Mic] client PCM frame:', raw.length, 'bytes -> Deepgram+buffer',
+              '| chunks:', cmpMicChunks.length,
+              '| buffered:', cmpMicChunks.reduce(function(n, b) { return n + b.length; }, 0));
+            cmpMicLastLogAt = Date.now();
+          }
+          sendCmpMicPcmToDeepgram(raw);
+        } else if (cmpMicCaptureEnded && !isReceivingAudioFile) {
+          // Drop trailing frames after finalize (client still closing ScriptProcessor)
+        } else if (isReceivingAudioFile) {
           audioFileChunks.push(Buffer.from(data));
         } else {
           lastMediaAt = Date.now();
@@ -1532,6 +1827,10 @@ browserWss.on('connection', function(ws) {
   ws.on('close', function() {
     console.log('[WS] Client disconnected');
     clearSilenceTimer();
+    if (cmpMicActive) {
+      try { finalizeCmpMicCapture('ws_close'); } catch (e) {}
+    }
+    closeCmpMicDeepgram();
     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
   });
 });
@@ -1675,6 +1974,25 @@ async function withAnthropicCompareRetry(fn) {
   }
 }
 
+/**
+ * Serialize all compare-path Anthropic calls (intent + freeform, any Claude model).
+ * Prevents concurrent Sonnet/Haiku streams from contending on the same API connection
+ * / rate limit — observed as 6–8s TTFT on Sonnet in Both mode when calls overlap.
+ */
+let anthropicCompareTail = Promise.resolve();
+async function withAnthropicCompareExclusive(fn) {
+  let release;
+  const gate = new Promise(function(resolve) { release = resolve; });
+  const prev = anthropicCompareTail;
+  anthropicCompareTail = prev.then(function() { return gate; }, function() { return gate; });
+  await prev;
+  try {
+    return await withAnthropicCompareRetry(fn);
+  } finally {
+    release();
+  }
+}
+
 async function classifyWithClaudeOnce(transcript, model, opts) {
   // stt_ms must be Deepgram HTTP only (from /compare-audio-stt or in-process helper).
   // convert_ms is separate and must never be added into stt_ms / latency.
@@ -1686,7 +2004,7 @@ async function classifyWithClaudeOnce(transcript, model, opts) {
     : 0;
 
   const llmStart = Date.now();
-  const result = await withAnthropicCompareRetry(function() {
+  const result = await withAnthropicCompareExclusive(function() {
     return classifyIntent(transcript, model, { skipFastPath: true });
   });
   // Prefer TTFT (first stream chunk); fall back to wall clock if no chunk seen.
@@ -1767,7 +2085,7 @@ const GEMINI_LIVE_COMPARE_DEBUG =
   process.env.NODE_ENV === 'development' &&
   (process.env.GEMINI_LIVE_COMPARE_DEBUG === '1' || process.env.GEMINI_LIVE_COMPARE_DEBUG === 'true');
 
-const GEMINI_INTENT_PROMPT = COMPARE_INTENT_PROMPT;
+const GEMINI_INTENT_PROMPT = COMPARE_INTENT_PROMPT + '\n\n' + GEMINI_ENGLISH_AUDIO_RULE;
 
 // Free tier is often ~20 RPM; serialize + space requests so parallel compare runs don't 429.
 const GEMINI_MIN_INTERVAL_MS = 1000;
@@ -2111,9 +2429,65 @@ function calcDeepgramCost(durationSec) {
   if (durationSec == null || !Number.isFinite(Number(durationSec)) || Number(durationSec) <= 0) return null;
   return (Number(durationSec) / 60) * 0.0043;
 }
+
+/** PCM16 mono 16kHz duration in seconds. */
+function pcm16kDurationSec(pcm) {
+  if (!pcm || !pcm.length) return 0;
+  return pcm.length / (16000 * 2);
+}
+
+/**
+ * Deepgram Nova-3 prerecorded REST (single HTTP POST). Reliable for short clips.
+ * Accepts raw PCM16/16k mono — wraps as WAV for Content-Type audio/wav.
+ */
+async function transcribeComparePcmDeepgramRest(pcm) {
+  const dgApiKey = process.env.DEEPGRAM_API_KEY;
+  if (!dgApiKey || dgApiKey === 'your_deepgram_key') throw new Error('DEEPGRAM_API_KEY is not set');
+  if (!pcm || pcm.length < 2) throw new Error('empty PCM');
+
+  const wav = createCompareWavBuffer(Buffer.isBuffer(pcm) ? pcm : Buffer.from(pcm));
+  const params = new URLSearchParams({
+    model: 'nova-3',
+    language: 'en-US',
+    punctuate: 'true',
+    smart_format: 'true',
+  });
+  const url = 'https://api.deepgram.com/v1/listen?' + params.toString() + DEEPGRAM_KEYTERMS;
+  const sttStart = Date.now();
+  const response = await axios.post(url, wav, {
+    headers: {
+      Authorization: 'Token ' + dgApiKey,
+      'Content-Type': 'audio/wav',
+    },
+    maxBodyLength: Infinity,
+    httpsAgent: deepgramHttpsAgent,
+    timeout: 30000,
+  });
+  const sttMs = Date.now() - sttStart;
+  const alt = response.data && response.data.results
+    && response.data.results.channels
+    && response.data.results.channels[0]
+    && response.data.results.channels[0].alternatives
+    && response.data.results.channels[0].alternatives[0];
+  const transcript = (alt && alt.transcript) ? String(alt.transcript).trim() : '';
+  const confidence = (alt && typeof alt.confidence === 'number') ? alt.confidence : null;
+  const words = (alt && Array.isArray(alt.words)) ? alt.words : [];
+  console.log('[Compare Audio STT] REST nova-3',
+    '| pcm_sec:', pcm16kDurationSec(pcm).toFixed(3),
+    '| stt_ms:', sttMs,
+    '|', JSON.stringify(transcript).slice(0, 100));
+  return { transcript: transcript, words: words, confidence: confidence, sttMs: sttMs, mode: 'rest' };
+}
+
+/**
+ * Stream PCM to Deepgram Live WS at realtime pace (20ms / 640-byte frames).
+ * After last chunk: wait for VAD/endpointing before CloseStream (short clips otherwise
+ * often return empty finals). Interim text kept as fallback if no is_final arrives.
+ */
 function streamPcmToDeepgram(pcm, opts) {
   opts = opts || {};
   const realtime = opts.realtime !== false;
+  const trailMs = opts.trailMs != null ? opts.trailMs : 700; // silence after audio before CloseStream
   return new Promise(function(resolve, reject) {
     const dgApiKey = process.env.DEEPGRAM_API_KEY;
     if (!dgApiKey || dgApiKey === 'your_deepgram_key') { reject(new Error('DEEPGRAM_API_KEY is not set')); return; }
@@ -2122,6 +2496,7 @@ function streamPcmToDeepgram(pcm, opts) {
     const ws = new WebSocket(dgUrl, { headers: { Authorization: 'Token ' + dgApiKey } });
 
     let finalText = '';
+    let interimText = '';
     const words = [];
     let confidence = null;
     let localLastMediaAt = null;
@@ -2129,51 +2504,90 @@ function streamPcmToDeepgram(pcm, opts) {
     let sttMs = null;
     let settled = false;
     let guardTimer = null;
+    const audioMs = Math.ceil(pcm16kDurationSec(pcm) * 1000);
+    // Guard covers: connect + realtime send + trail + Deepgram finalize (+10s cushion)
+    const guardMs = Math.max(15000, (realtime ? audioMs : 0) + trailMs + 10000);
 
-    function done() {
+    function finish(reason) {
       if (settled) return;
       settled = true;
       if (guardTimer) clearTimeout(guardTimer);
       if (sttMs == null && localLastMediaAt) {
-        sttMs = (lastFinalAt && lastFinalAt > localLastMediaAt) ? (lastFinalAt - localLastMediaAt) : (Date.now() - localLastMediaAt);
+        sttMs = (lastFinalAt && lastFinalAt > localLastMediaAt)
+          ? (lastFinalAt - localLastMediaAt)
+          : (Date.now() - localLastMediaAt);
       }
+      const transcript = (finalText.trim() || interimText.trim());
       try { if (ws.readyState === WebSocket.OPEN) ws.close(); } catch (e) {}
-      resolve({ transcript: finalText.trim(), words: words, confidence: confidence, sttMs: sttMs });
+      console.log('[Compare Audio STT] stream done',
+        '| reason:', reason || 'n/a',
+        '| audio_ms:', audioMs,
+        '| transcript_len:', transcript.length,
+        '| finals:', !!finalText.trim(),
+        '| interim_fallback:', !finalText.trim() && !!interimText.trim());
+      resolve({ transcript: transcript, words: words, confidence: confidence, sttMs: sttMs, mode: 'stream' });
     }
 
+    function done(reason) { finish(reason || 'done'); }
+
     ws.on('open', async function() {
-      const SUB = 640;
-      for (let off = 0; off < pcm.length; off += SUB) {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        const chunk = pcm.subarray(off, Math.min(off + SUB, pcm.length));
-        if (chunk.length < 2) break;
-        ws.send(chunk);
-        if (realtime) await new Promise(function(r) { setTimeout(r, 20); });
+      try {
+        const SUB = 640; // 20ms @ 16kHz PCM16 mono
+        for (let off = 0; off < pcm.length; off += SUB) {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const chunk = pcm.subarray(off, Math.min(off + SUB, pcm.length));
+          if (chunk.length < 2) break;
+          ws.send(chunk);
+          // Realtime pace — without this, CloseStream races ahead of Deepgram VAD on short clips
+          if (realtime) await new Promise(function(r) { setTimeout(r, 20); });
+        }
+        // Let endpointing / utterance_end see trailing silence before CloseStream
+        if (trailMs > 0) await new Promise(function(r) { setTimeout(r, trailMs); });
+        localLastMediaAt = Date.now();
+        // Re-arm guard from end-of-send (not from Promise construction / connect start)
+        if (guardTimer) clearTimeout(guardTimer);
+        guardTimer = setTimeout(function() { done('guard_after_send'); }, 8000);
+        try { ws.send(JSON.stringify({ type: 'CloseStream' })); } catch (e) {}
+      } catch (e) {
+        if (settled) return;
+        settled = true;
+        if (guardTimer) clearTimeout(guardTimer);
+        reject(e);
       }
-      localLastMediaAt = Date.now();
-      try { ws.send(JSON.stringify({ type: 'CloseStream' })); } catch (e) {}
     });
 
     ws.on('message', function(data) {
       let msg; try { msg = JSON.parse(data.toString()); } catch (e) { return; }
       if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
         const alt = msg.channel.alternatives[0];
-        if (msg.is_final) {
-          lastFinalAt = Date.now();
-          if (alt.transcript && alt.transcript.trim()) {
-            finalText += (finalText ? ' ' : '') + alt.transcript.trim();
+        const text = (alt.transcript || '').trim();
+        if (text) {
+          if (msg.is_final) {
+            lastFinalAt = Date.now();
+            finalText += (finalText ? ' ' : '') + text;
             if (typeof alt.confidence === 'number') confidence = alt.confidence;
+            if (alt.words && alt.words.length) words.push(...alt.words);
+          } else {
+            interimText = text;
           }
-          if (alt.words && alt.words.length) words.push(...alt.words);
         }
       }
-      if (msg.type === 'Metadata') done();
+      if (msg.type === 'UtteranceEnd') {
+        // Keep waiting for Metadata / finals after CloseStream — do not finish early
+        console.log('[Compare Audio STT] stream UtteranceEnd | finals so far:', JSON.stringify(finalText).slice(0, 80));
+      }
+      if (msg.type === 'Metadata') done('metadata');
     });
 
-    ws.on('error', function(e) { if (settled) return; settled = true; if (guardTimer) clearTimeout(guardTimer); reject(new Error('Deepgram stream error: ' + e.message)); });
-    ws.on('close', function() { done(); });
+    ws.on('error', function(e) {
+      if (settled) return;
+      settled = true;
+      if (guardTimer) clearTimeout(guardTimer);
+      reject(new Error('Deepgram stream error: ' + e.message));
+    });
+    ws.on('close', function() { done('ws_close'); });
 
-    guardTimer = setTimeout(done, Math.ceil(pcm.length / 32) + 10000);
+    guardTimer = setTimeout(function() { done('guard_initial'); }, guardMs);
   });
 }
 
@@ -2186,14 +2600,29 @@ function calcDeepgramStreamingCost(durationSec) {
 }
 
 /**
- * Deepgram Nova-3 prerecorded REST STT for comparison audio.
- * stt_ms / sttMs = wall clock of the Deepgram HTTP request ONLY (sttStart → response).
- * convert_ms = ffmpeg/format conversion only (never folded into stt_ms).
- * duration_sec / deepgram_cost filled after STT (metadata or probe) — never part of stt_ms.
- *
- * [STT Breakdown] logs phase timings so file-upload vs mic can be compared:
- *   format_detect | pcm_convert | mp3_convert | deepgram_http | duration_extract | TOTAL
- * Large RIFF WAV (>300KB) is ffmpeg-compressed to MP3 before upload (mp3_convert_ms, not in stt_ms).
+ * Choose REST vs streaming for compare PCM:
+ *  - < 3s audio → prerecorded REST (short clips were empty with live CloseStream race)
+ *  - ≥ 3s → realtime-paced live stream (demo-parity trailing latency)
+ */
+async function transcribeComparePcmDeepgram(pcm, opts) {
+  opts = opts || {};
+  const durationSec = pcm16kDurationSec(pcm);
+  const forceRest = opts.forceRest === true;
+  const forceStream = opts.forceStream === true;
+  const useRest = forceRest || (!forceStream && durationSec < 3);
+
+  if (useRest) {
+    console.log('[Compare Audio STT] path=REST (pcm_sec=' + durationSec.toFixed(3) + ' < 3s or forced)');
+    return await transcribeComparePcmDeepgramRest(pcm);
+  }
+  console.log('[Compare Audio STT] path=STREAM (pcm_sec=' + durationSec.toFixed(3) + ')');
+  return await streamPcmToDeepgram(pcm, { realtime: opts.realtime !== false, trailMs: opts.trailMs });
+}
+
+/**
+ * Deepgram Nova-3 STT for comparison audio.
+ * stt_ms = Deepgram request only (REST wall clock, or stream trailing latency).
+ * convert_ms = ffmpeg decode only (never folded into stt_ms).
  */
 async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
   const dgApiKey = process.env.DEEPGRAM_API_KEY;
@@ -2211,20 +2640,22 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
   const convertMs = Date.now() - convertStart;
   if (!pcm || pcm.length < 2) throw new Error('Audio conversion produced empty PCM');
 
-  // Gerçek-zamanlı streaming STT — stt_ms = kuyruk gecikmesi (demo ile AYNI ölçüm)
-  const r = await streamPcmToDeepgram(pcm, { realtime: true });
+  const r = await transcribeComparePcmDeepgram(pcm, { realtime: true });
   const transcript = r.transcript || '';
   const sttMs = r.sttMs;
   const confidence = typeof r.confidence === 'number' ? r.confidence : 0;
 
   // Duration — faturalandırma için; asla stt_ms'e dahil değil
   let durationSec = await getAudioDurationSec(buf);
-  if (durationSec == null) durationSec = Math.round(pcm.length / 32) / 1000; // PCM'den yaklaşık
-  const deepgramCost = calcDeepgramCost(durationSec);
+  if (durationSec == null) durationSec = pcm16kDurationSec(pcm);
+  const deepgramCost = (r.mode === 'stream')
+    ? calcDeepgramStreamingCost(durationSec)
+    : calcDeepgramCost(durationSec);
 
-  console.log('[Compare Audio STT] (streaming)',
-    'convert_ms:', convertMs,
-    '| stt_ms:', sttMs, '(trailing latency)',
+  console.log('[Compare Audio STT]',
+    'mode:', r.mode || 'n/a',
+    '| convert_ms:', convertMs,
+    '| stt_ms:', sttMs,
     '| audio_duration_sec:', durationSec != null ? Number(durationSec).toFixed(3) : 'n/a',
     '| deepgram_cost:', deepgramCost != null ? deepgramCost.toFixed(6) : 'n/a',
     '|', JSON.stringify(transcript).slice(0, 120));
@@ -2237,6 +2668,7 @@ async function transcribeCompareAudioDeepgram(buf, contentTypeHint) {
     engine: 'deepgram',
     duration_sec: durationSec,
     deepgram_cost: deepgramCost,
+    mode: r.mode || null,
   };
 }
 
@@ -2371,27 +2803,32 @@ async function classifyWithGeminiLive(transcript, model, opts) {
         const slice = pcm.subarray(offset, Math.min(offset + CHUNK_SIZE, pcm.length));
         sendPcmChunk(slice);
         if (offset + CHUNK_SIZE < pcm.length) {
-          await new Promise(function(r) { setTimeout(r, 20); });
+          // Yield event loop so parallel Claude/Deepgram STT can run without
+          // delaying Gemini WS flushes (missed VAD → 25s timeout under Promise.all).
+          await new Promise(function(r) { setImmediate(r); });
+          await new Promise(function(r) { setTimeout(r, 5); });
         }
       }
       if (settled || ws.readyState !== WebSocket.OPEN) return;
-      // Trailing silence so VAD can detect end-of-speech
+      // Trailing silence so VAD can detect end-of-speech (chunked + yield — avoid one huge sync send)
       const silencePadding = Buffer.alloc(64000, 0); // 2s @ 16kHz 16-bit PCM — longer than VAD silence_duration_ms
-      ws.send(JSON.stringify({
-        realtime_input: {
-          audio: {
-            data: silencePadding.toString('base64'),
-            mimeType: 'audio/pcm;rate=16000'
-          }
+      for (let sOff = 0; sOff < silencePadding.length; sOff += CHUNK_SIZE) {
+        if (settled || ws.readyState !== WebSocket.OPEN) return;
+        sendPcmChunk(silencePadding.subarray(sOff, Math.min(sOff + CHUNK_SIZE, silencePadding.length)));
+        if (sOff + CHUNK_SIZE < silencePadding.length) {
+          await new Promise(function(r) { setImmediate(r); });
+          await new Promise(function(r) { setTimeout(r, 5); });
         }
-      }));
+      }
       turnStartTime = Date.now();
       ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
       console.log('[Gemini Live Compare] Audio sent (' + pcm.length + ' bytes) — audioStreamEnd');
     }
 
     ws.on('open', function() {
-      // VAD config mirrors server_gemini.js so Live knows how to segment audio
+      // VAD config mirrors server_gemini.js so Live knows how to segment audio.
+      // Native audio models do not support API-level language codes — English is enforced
+      // only via system_instruction (COMPARE_LIVE_PROMPT / GEMINI_ENGLISH_AUDIO_RULE).
       const setupMsg = {
         setup: {
           model: 'models/' + liveModel,
@@ -2791,7 +3228,7 @@ async function runModelComparison(transcript, model, runs, expected, opts) {
       });
     }
     if (i < runs - 1) {
-      await new Promise(function(r) { setTimeout(r, 5000); });
+      await new Promise(function(r) { setTimeout(r, 10000); });
     }
   }
 
@@ -2899,22 +3336,58 @@ function createCompareWavBuffer(pcmBuffer) {
   return Buffer.concat([header, pcmBuffer]);
 }
 
-/** Deepgram REST STT for per-model comparison audio uploads. Returns transcript + sttMs. */
+/** Deepgram REST STT for per-model comparison audio uploads. Returns transcript + sttMs.
+ *  Also accepts ?mic_session_id=… (hybrid mic buffer replay — no client WAV upload).
+ */
 app.post('/compare-audio-stt', express.raw({ type: '*/*', limit: '50mb' }), async function(req, res) {
   try {
-    if (!req.body || !req.body.length) {
-      return res.status(400).json({ error: 'audio body required' });
+    let resolved;
+    try {
+      resolved = resolveCompareAudioBuffer(req);
+    } catch (resolveErr) {
+      return res.status(resolveErr.statusCode || 400).json({
+        error: resolveErr.message,
+        error_detail: { stage: 'STT', message: resolveErr.message },
+      });
     }
-    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+    const buf = resolved.buf;
 
-    // STT first (stt_ms = Deepgram HTTP only). convert_ms separate. duration/cost from helper.
-    const result = await transcribeCompareAudioDeepgram(buf, req.headers['content-type']);
-    const durationSec = result.duration_sec != null ? result.duration_sec : await getAudioDurationSec(buf);
-    const deepgramCost = result.deepgram_cost != null ? result.deepgram_cost : calcDeepgramCost(durationSec);
-    console.log('[Compare Audio STT] duration_sec:', durationSec,
-      '| deepgram_cost:', deepgramCost,
-      '| convert_ms:', result.convertMs != null ? result.convertMs : 0,
-      '| stt_ms:', result.sttMs, '(HTTP only)');
+    // Mic sessions: same REST(<3s) / stream(≥3s) path as file compare
+    let result;
+    if (resolved.pcm && resolved.pcm.length) {
+      const sttStart = Date.now();
+      const transcribed = await transcribeComparePcmDeepgram(resolved.pcm, { realtime: true });
+      const durationSec = resolved.durationSec != null
+        ? resolved.durationSec
+        : pcm16kDurationSec(resolved.pcm);
+      result = {
+        transcript: transcribed.transcript,
+        sttMs: transcribed.sttMs != null ? transcribed.sttMs : (Date.now() - sttStart),
+        convertMs: 0,
+        confidence: transcribed.confidence,
+        duration_sec: durationSec,
+        deepgram_cost: transcribed.mode === 'stream'
+          ? calcDeepgramStreamingCost(durationSec)
+          : calcDeepgramCost(durationSec),
+        mode: transcribed.mode,
+      };
+      console.log('[Compare Audio STT] mic_session', resolved.micSessionId,
+        '| mode:', transcribed.mode,
+        '| duration_sec:', durationSec,
+        '| stt_ms:', result.sttMs);
+    } else {
+      result = await transcribeCompareAudioDeepgram(buf, resolved.contentType || req.headers['content-type']);
+      const durationSec = result.duration_sec != null ? result.duration_sec : await getAudioDurationSec(buf);
+      result.duration_sec = durationSec;
+      result.deepgram_cost = result.deepgram_cost != null ? result.deepgram_cost : calcDeepgramCost(durationSec);
+      console.log('[Compare Audio STT] duration_sec:', durationSec,
+        '| deepgram_cost:', result.deepgram_cost,
+        '| convert_ms:', result.convertMs != null ? result.convertMs : 0,
+        '| stt_ms:', result.sttMs, '(HTTP only)');
+    }
+
+    const durationSec = result.duration_sec;
+    const deepgramCost = result.deepgram_cost;
 
     res.json({
       transcript: result.transcript,
@@ -2925,8 +3398,8 @@ app.post('/compare-audio-stt', express.raw({ type: '*/*', limit: '50mb' }), asyn
       engine: 'deepgram',
       duration_sec: durationSec,
       deepgram_cost: deepgramCost,
-      // aliases for older frontend fields
       duration: durationSec,
+      mic_session_id: resolved.micSessionId || undefined,
     });
   } catch (e) {
     const apiMsg = e.response && e.response.data && (e.response.data.err_msg || e.response.data.error);
@@ -2939,31 +3412,44 @@ app.post('/compare-audio-stt', express.raw({ type: '*/*', limit: '50mb' }), asyn
 /**
  * Gemini Live STT only (inputTranscription). No Deepgram.
  * Query: ?model=gemini-3.1-flash-live-preview
+ * Also accepts ?mic_session_id=… for hybrid mic buffer replay.
  */
 app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), async function(req, res) {
   try {
     const model = (req.query && req.query.model) || req.headers['x-compare-model'] || 'gemini-3.1-flash-live-preview';
-    if (!req.body || !req.body.length) {
-      return res.status(400).json({ error: 'audio body required' });
+    let resolved;
+    try {
+      resolved = resolveCompareAudioBuffer(req);
+    } catch (resolveErr) {
+      return res.status(resolveErr.statusCode || 400).json({
+        error: resolveErr.message,
+        error_detail: { stage: 'STT', message: resolveErr.message },
+      });
     }
-    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
 
-    // Prefer ffmpeg duration; fall back to client X-Audio-Duration header
-    let durationSec = await getAudioDurationSec(buf);
-    if (durationSec == null) {
-      const durationHeader = req.headers['x-audio-duration'];
-      if (durationHeader != null && Number.isFinite(parseFloat(durationHeader))) {
-        durationSec = parseFloat(durationHeader);
+    let pcm = resolved.pcm;
+    let durationSec = resolved.durationSec;
+    if (!pcm || !pcm.length) {
+      const buf = resolved.buf;
+      durationSec = await getAudioDurationSec(buf);
+      if (durationSec == null) {
+        const durationHeader = req.headers['x-audio-duration'];
+        if (durationHeader != null && Number.isFinite(parseFloat(durationHeader))) {
+          durationSec = parseFloat(durationHeader);
+        }
       }
+      console.log('[Compare Gemini STT] Converting to PCM16k...', buf.length, 'bytes | model:', model,
+        '| duration_sec:', durationSec);
+      pcm = await audioToPcm16kMono(buf);
+    } else {
+      console.log('[Compare Gemini STT] mic_session', resolved.micSessionId,
+        '| pcm bytes:', pcm.length, '| model:', model);
     }
-    const deepgramCost = durationSec != null ? calcDeepgramCost(durationSec) : null;
 
-    console.log('[Compare Gemini STT] Converting to PCM16k...', buf.length, 'bytes | model:', model,
-      '| duration_sec:', durationSec, '| deepgram_cost:', deepgramCost);
-    const pcm = await audioToPcm16kMono(buf);
     if (!pcm || !pcm.length) {
       return res.status(400).json({ error: 'Audio conversion produced empty PCM' });
     }
+    const deepgramCost = durationSec != null ? calcDeepgramCost(durationSec) : null;
     const r = await classifyWithGeminiLive(null, model, { audioBuffer: pcm, sttOnly: true });
     const transcript = r.inputTranscript || r.input_transcript || r.transcript || '';
     console.log('[Compare Gemini STT] transcript only (stt_ms=null) |', JSON.stringify(transcript).slice(0, 120));
@@ -2976,10 +3462,24 @@ app.post('/compare-gemini-stt', express.raw({ type: '*/*', limit: '50mb' }), asy
       duration_sec: durationSec,
       deepgram_cost: deepgramCost,
       duration: durationSec,
+      mic_session_id: resolved.micSessionId || undefined,
     });
   } catch (e) {
     return sendCompareJsonError(res, 500, '/compare-gemini-stt', e, 'STT');
   }
+});
+
+/** Serve hybrid-mic PCM as WAV for Listen preview (not used for Run STT). */
+app.get('/compare-mic-session/:id/wav', function(req, res) {
+  const sess = getCmpMicSession(req.params.id);
+  if (!sess || !sess.pcm || !sess.pcm.length) {
+    return res.status(404).json({ error: 'mic session not found or expired' });
+  }
+  const wav = createCompareWavBuffer(sess.pcm);
+  res.setHeader('Content-Type', 'audio/wav');
+  res.setHeader('Content-Length', wav.length);
+  res.setHeader('Cache-Control', 'no-store');
+  return res.send(wav);
 });
 
 /**
@@ -3252,7 +3752,7 @@ app.post('/compare-intent', async function(req, res) {
     return res.status(400).json({ error: 'Unsupported models: ' + invalid.join(', ') });
   }
 
-  // Claude models run serially (Haiku then Sonnet); Gemini can stay parallel.
+  // Cross-provider parallel (Gemini || Claude lane); within Anthropic: serial + 10s gap.
   const claudeModels = models.filter(function(m) { return String(m).indexOf('claude-') === 0; });
   const otherModels = models.filter(function(m) { return String(m).indexOf('claude-') !== 0; });
 
@@ -3276,11 +3776,17 @@ app.post('/compare-intent', async function(req, res) {
       });
   }
 
-  const otherSettled = await Promise.all(otherModels.map(runOne));
-  const claudeSettled = [];
-  for (let i = 0; i < claudeModels.length; i++) {
-    claudeSettled.push(await runOne(claudeModels[i]));
-  }
+  const [otherSettled, claudeSettled] = await Promise.all([
+    Promise.all(otherModels.map(runOne)),
+    (async function() {
+      const results = [];
+      for (let i = 0; i < claudeModels.length; i++) {
+        results.push(await runOne(claudeModels[i]));
+        if (i < claudeModels.length - 1) await sleepMs(10000);
+      }
+      return results;
+    })(),
+  ]);
 
   const settled = otherSettled.concat(claudeSettled);
 
@@ -3330,7 +3836,7 @@ async function classifyFreeformOnce(transcript, model) {
   let outputTokens = 0;
 
   if (model.indexOf('claude-') === 0) {
-    await withAnthropicCompareRetry(async function() {
+    await withAnthropicCompareExclusive(async function() {
       response = '';
       inputTokens = 0;
       outputTokens = 0;
@@ -3502,7 +4008,11 @@ app.post('/compare-freeform', async function(req, res) {
     });
   }
 
-  const settled = await Promise.all(models.map(function(model) {
+  // Cross-provider parallel (Gemini || Claude lane); within Anthropic: serial + 10s gap.
+  const claudeModels = models.filter(function(m) { return String(m).indexOf('claude-') === 0; });
+  const otherModels = models.filter(function(m) { return String(m).indexOf('claude-') !== 0; });
+
+  function runOne(model) {
     return runFreeformComparison(transcript, model, runs)
       .catch(function(err) {
         logCompareError('/compare-freeform/' + model, err);
@@ -3516,7 +4026,20 @@ app.post('/compare-freeform', async function(req, res) {
           runs: [{ run: 1, ok: false, error: detail.message, error_detail: detail }],
         };
       });
-  }));
+  }
+
+  const [otherSettled, claudeSettled] = await Promise.all([
+    Promise.all(otherModels.map(runOne)),
+    (async function() {
+      const results = [];
+      for (let i = 0; i < claudeModels.length; i++) {
+        results.push(await runOne(claudeModels[i]));
+        if (i < claudeModels.length - 1) await sleepMs(10000);
+      }
+      return results;
+    })(),
+  ]);
+  const settled = otherSettled.concat(claudeSettled);
 
   const results = {};
   for (const row of settled) results[row.model] = row;
@@ -3596,7 +4119,8 @@ app.get('/api/recordings/proxy', async function(req, res) {
 });
 
 app.get('/health', function(req, res) {
-  res.json({ status: 'ok', ngrok: PUBLIC_URL, twilio_ws: PUBLIC_URL.replace('https://', 'wss://') + '/twilio', apis: {
+  const twilioWsBase = PUBLIC_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+  res.json({ status: 'ok', ngrok: PUBLIC_URL, twilio_ws: twilioWsBase + '/twilio', twilio_gemini_ws: twilioWsBase + '/twilio-gemini', apis: {
     deepgram: !!process.env.DEEPGRAM_API_KEY && process.env.DEEPGRAM_API_KEY !== 'your_deepgram_key',
     anthropic: !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_anthropic_key',
     elevenlabs: !!process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_API_KEY !== 'your_elevenlabs_key',
@@ -3609,9 +4133,11 @@ function startServer() {
   server.listen(PORT, function() {
     console.log('\n🎙️  Voice AI Demo: http://localhost:' + PORT);
     console.log('📞  Twilio webhook: ' + PUBLIC_URL + '/incoming-call');
-    console.log('🔌  Twilio WS path: ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio');
+    console.log('📞  Gemini pipeline: ' + PUBLIC_URL + '/incoming-call?pipeline=gemini');
+    console.log('🔌  Cascaded WS: ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio');
+    console.log('🔌  Gemini WS:    ' + PUBLIC_URL.replace('https://', 'wss://') + '/twilio-gemini');
     console.log('[Denoise] engine=' + DENOISE_ENGINE);
-    console.log('Cascaded Pipeline: Deepgram nova-2 -> Claude -> ElevenLabs\n');
+    console.log('Cascaded: Deepgram → Claude → ElevenLabs | Gemini: Live audio (?pipeline=gemini)\n');
   });
 }
 const bootTasks = [
