@@ -813,6 +813,7 @@ browserWss.on('connection', function(ws) {
   let silenceTimer = null;
   let clientMimeType = 'audio/pcm;rate=16000';
   let isReceivingAudioFile = false;
+  let audioFileBusy = false;
   let audioFileChunks = [];
   let audioFileDurationSec = null;
   let audioFileName = null;
@@ -900,7 +901,7 @@ browserWss.on('connection', function(ws) {
     const untrusted = m.speechFallback
      || (m.snrReliable && m.snrDb != null && m.snrDb <= SNR_HARD_MIN)
      || lowConfRatio >= LOWCONF_RATIO_MAX;
-     console.log('[Noise] snr=' + (m.snrDb != null ? m.snrDb.toFixed(1) : 'n/a') + ' noisy=' + m.noisy
+     console.log('[Noise] snr=' + (m.snrDb != null ? m.snrDb.toFixed(1) : 'n/a') + ' noisy=' + m.noisy + " rawNoisy=" + m.rawNoisy
       + ' collisions=' + m.collisions.length + ' lowConfRatio=' + lowConfRatio.toFixed(2)
        + ' untrusted=' + untrusted); 
     if (snrBlocked) {
@@ -946,13 +947,14 @@ browserWss.on('connection', function(ws) {
         console.log('[Mask] annotated="' + annotated + '" important=' + maskImportant);
       }
 
-      const noisyTurn = m.noisy || untrusted || maskImportant;
-      if ((lowConf || noisyTurn) && criticalIntents.includes(result.intent) && !safetyConfirmPending) {
+      const noisyTurn = m.noisy || m.rawNoisy || untrusted || maskImportant;
+      if (!result.escalate && (noisyTurn || (lowConf && criticalIntents.includes(result.intent))) && !safetyConfirmPending) {
         safetyConfirmPending = true;
-        const confirmText = result.intent === 'SAFE_CONFIRMATION'
-          ? (noisyTurn ? "Sorry, it's a bit noisy. Can you confirm clearly that you are safe?"
-                       : "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?")
-          : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
+        const confirmText = noisyTurn
+          ? "Sorry, it's a bit noisy. Can you confirm clearly that you are safe?"
+          : result.intent === 'SAFE_CONFIRMATION'
+            ? "Sorry, it's a bit hard to hear you. Can you confirm clearly that you are safe?"
+            : "Sorry, I didn't catch that clearly. How many more minutes do you need?";
         lastAgentText = confirmText;
         console.log('[Confidence] lowConf=' + lowConf + ' noisyTurn=' + noisyTurn + ' for', result.intent);
         send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
@@ -1231,7 +1233,7 @@ browserWss.on('connection', function(ws) {
                   parts.push(Buffer.from(chunk, "base64"));
                 }
                 introAudio = Buffer.concat(parts).toString("base64");
-              } catch (e) { console.error('[Greeting TTS Error]', e.message); }
+              } catch (e) { console.error('[Greeting TTS Error]', e.response?.status, JSON.stringify(e.response?.data) || e.message); }
             }
           }
           send({ type: 'stage', stage: 'tts', status: 'done' });
@@ -1266,6 +1268,14 @@ browserWss.on('connection', function(ws) {
         }
 
         if (msg.type === 'audio_file_start' && sessionState === 'LISTENING') {
+          if (audioFileBusy) {
+            send({
+              type: "audio_file_rejected",
+              reason: "upload_in_progress",
+            });
+            return;
+          }
+          audioFileBusy = true;
           const dur = (typeof msg.duration === 'number' && Number.isFinite(msg.duration))
             ? msg.duration
             : (msg.duration != null && Number.isFinite(parseFloat(msg.duration)) ? parseFloat(msg.duration) : null);
@@ -1290,6 +1300,7 @@ browserWss.on('connection', function(ws) {
 
         if (msg.type === 'audio_file_end' && isReceivingAudioFile) {
           isReceivingAudioFile = false;
+          try {
           if (audioFileChunks.length === 0) return;
           const fullBuffer = Buffer.concat(audioFileChunks);
           audioFileChunks = [];
@@ -1457,13 +1468,15 @@ browserWss.on('connection', function(ws) {
                 (fileDurationSec != null ? (" (file " + fileDurationSec + "s)") : "")});
               send({ type: "stage", stage: "stt", status: "error", duration: fileDurationSec, filename: fileName });
             }
-          } catch (e) {
+                    } catch (e) {
             console.error("[Deepgram File Stream Error]", e.message);
             send({ type: "log", message: "Deepgram error: " + e.message});
             send({ type: "stage", stage: "stt", status: "error", duration: fileDurationSec, filename: fileName });
           }
+        } finally {
+          audioFileBusy = false;
         }
-
+      }
         if (msg.type === 'stop') {
           if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
           clearSilenceTimer(); sessionState = 'ENDED';

@@ -154,3 +154,7 @@ pipeline_latency_results.json
 # metrics
 noise_test_results.csv
 
+# IDE / editor
+.idea/
+.vscode/
+
