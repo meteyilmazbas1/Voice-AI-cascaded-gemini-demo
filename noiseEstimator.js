@@ -194,7 +194,7 @@ function createNoiseEstimator({
         
         const result = {
             floorDbfs: floorNow, noiseLevelDbfs: levelNow, speechDbfs, speechMedDbfs, snrDb,
-            snrReliable: realNoiseFr.length >= minNoiseFrames || quietLine, noisy: nextNoisy,
+            snrReliable: realNoiseFr.length >= minNoiseFrames || quietLine, noisy: nextNoisy, rawNoisy,
             collisions, hasCollision: collisions.length > 0, speechFallback,
         };
 
