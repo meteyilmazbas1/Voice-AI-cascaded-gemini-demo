@@ -205,11 +205,15 @@ function renderDetail(call) {
     <div class="meta-item"><div class="label">Started</div><div class="value">${fmtTime(call.start_time)}</div></div>
     <div class="meta-item"><div class="label">Ended</div><div class="value">${fmtTime(call.end_time)}</div></div>
     <div class="meta-item"><div class="label">Silence prompts</div><div class="value">${call.silence_count ?? 0}</div></div>
-    <div class="meta-item"><div class="label">TTFA</div><div class="value">${call.ttfa_ms ? call.ttfa_ms + 'ms ⚡' : '—'}</div></div>
+    <div class="meta-item"><div class="label">TTFA</div><div class="value">${call.ttfa_ms != null ? call.ttfa_ms + 'ms ⚡' : '—'}</div></div>
     <div class="meta-item"><div class="label">STT</div><div class="value">${call.stt_ms != null ? call.stt_ms + 'ms' : '—'}</div></div>
     <div class="meta-item"><div class="label">LLM</div><div class="value">${call.llm_ms != null ? (call.llm_ms === 0 ? 'Fast-path' : call.llm_ms + 'ms') : '—'}</div></div>
     <div class="meta-item"><div class="label">TTS</div><div class="value">${call.tts_ms != null ? call.tts_ms + 'ms' : '—'}</div></div>
-    <div class="meta-item"><div class="label">Total Turn</div><div class="value">${(call.stt_ms != null && call.llm_ms != null && call.tts_ms != null) ? (call.stt_ms + call.llm_ms + call.tts_ms) + 'ms' : '—'}</div></div>
+    <div class="meta-item"><div class="label">Total Turn</div><div class="value">${
+      (call.stt_ms != null && call.llm_ms != null && call.tts_ms != null)
+        ? (call.stt_ms + call.llm_ms + call.tts_ms) + 'ms'
+        : (call.ttfa_ms != null ? call.ttfa_ms + 'ms (TTFA)' : (call.llm_ms != null ? call.llm_ms + 'ms' : '—'))
+    }</div></div>
   `;
 
   const transcript = call.transcript || [];

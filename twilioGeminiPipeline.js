@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
-const { insertCallStart, updateCallEnd, getCallBySid } = require('./db');
+const { insertCallStart, updateCallEnd, updateCallLatency, getCallBySid } = require('./db');
 const { createNoiseEstimator } = require('./noiseEstimator');
 const { createSileroVad } = require('./sileroVad');
 const { frameStatsMulaw } = require('./audioLevel');
@@ -201,6 +201,8 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
     let silencePromptCount = 0;
     let twilioSetupTime = null;
     let twilioFirstAudioTime = null;
+    let turnStartTime = null; // activity_end / prompt → first audio (TTFA)
+    let callTtfaMs = null;    // first LISTENING-turn TTFA persisted to DB/History
     const noise = createNoiseEstimator({ frameMs: 20 });
     const vad = createSileroVad({ sampleRate: 8000 });
     let audioClockMs = 0;
@@ -208,6 +210,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
     const TURN_SILENCE_MS = 900;
     const PREROLL_BYTES = 9600;
     let activityOpen = false;
+    let twilioMediaCount = 0;
 
     function isSpuriousUnclearResponse(text) {
       const t = (text || '').toLowerCase();
@@ -237,6 +240,29 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
       if (intent) callLog.finalIntent = intent;
     }
 
+    /** Persist Gemini end-of-speech → first-audio latency (History uses ttfa_ms + llm_ms). */
+    function recordListeningTtfa(ttfa) {
+      if (ttfa == null || !Number.isFinite(ttfa) || ttfa < 0) return;
+      if (callTtfaMs != null) return; // keep first worker-turn TTFA
+      callTtfaMs = Math.round(ttfa);
+      callLog.ttfa_ms = callTtfaMs;
+      console.log('[Twilio-Gemini] Recorded LISTENING TTFA for DB/History:', callTtfaMs + 'ms');
+      if (callLog.callSid) {
+        try {
+          // llm_ms = TTFA for Gemini (no separate STT/TTS stages) so Total Turn / LLM columns work
+          updateCallLatency({
+            callSid: callLog.callSid,
+            sttMs: null,
+            llmMs: callTtfaMs,
+            ttsMs: null,
+            ttfaMs: callTtfaMs,
+          });
+        } catch (e) {
+          console.error('[Twilio-Gemini] Latency DB update error:', e.message);
+        }
+      }
+    }
+
     function clearWorkerSilenceTimer() {
       if (workerSilenceTimer) { clearTimeout(workerSilenceTimer); workerSilenceTimer = null; }
     }
@@ -249,6 +275,8 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
         if (silencePromptCount === 1) {
           console.log('[Twilio-Gemini] 8s silence — prompting worker');
           if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+            turnStartTime = Date.now();
+            twilioFirstAudioTime = null; // allow silence-prompt audio to mark a turn if no TTFA yet
             geminiWs.send(JSON.stringify({
               client_content: {
                 turns: [{ role: 'user', parts: [{ text: '[SYSTEM] The worker has been silent for 8 seconds. Say exactly: "Are you still there? Please respond if you can hear me."' }] }],
@@ -351,8 +379,9 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
             if (GREETING_ULAW) {
               console.log('[Twilio-Gemini] Greeting from disk cache,', GREETING_PCM_MS + 'ms');
               if (silenceInterval) { clearInterval(silenceInterval); silenceInterval = null; }
-              twilioFirstAudioTime = Date.now();
-              callLog.ttfa_ms = twilioFirstAudioTime - twilioSetupTime;
+              // Greeting playback is NOT call TTFA — History latency is first LISTENING response
+              const greetingMs = Date.now() - twilioSetupTime;
+              console.log('[Twilio-Gemini] Greeting start latency (not stored as TTFA):', greetingMs + 'ms');
 
               for (let off = 0; off < GREETING_ULAW.length; off += 160) {
                 sendAudioToTwilio(GREETING_ULAW.subarray(off, off + 160));
@@ -371,6 +400,8 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
               setTimeout(function() {
                 pcmBuffer = Buffer.alloc(0);
                 twilioAiTranscript = '';
+                twilioFirstAudioTime = null;
+                turnStartTime = null;
                 sessionState = 'LISTENING';
                 console.log('[Twilio-Gemini] Now listening');
                 startAudioFlush();
@@ -422,11 +453,16 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
                     continue;
                   }
                   try {
-                    if (!twilioFirstAudioTime) {
+                    if (sessionState === 'LISTENING' && !twilioFirstAudioTime) {
                       twilioFirstAudioTime = Date.now();
-                      const ttfa = twilioFirstAudioTime - twilioSetupTime;
-                      console.log('[Twilio-Gemini] FIRST AUDIO CHUNK | TTFA:', ttfa + 'ms');
-                      callLog.ttfa_ms = ttfa;
+                      const base = turnStartTime || twilioSetupTime;
+                      const ttfa = base ? (twilioFirstAudioTime - base) : null;
+                      console.log('[Twilio-Gemini] FIRST AUDIO CHUNK | TTFA:', ttfa != null ? (ttfa + 'ms') : 'n/a',
+                        '| turnStart=', !!turnStartTime);
+                      recordListeningTtfa(ttfa);
+                    } else if (sessionState === 'GREETING' && !twilioFirstAudioTime) {
+                      twilioFirstAudioTime = Date.now();
+                      console.log('[Twilio-Gemini] Greeting audio started (TTFA not stored until LISTENING)');
                     }
                     if (silenceInterval) { clearInterval(silenceInterval); silenceInterval = null; }
                     const audioBuf = Buffer.from(part.inlineData.data, 'base64');
@@ -490,6 +526,8 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
                 setTimeout(function() {
                   pcmBuffer = Buffer.alloc(0);
                   twilioAiTranscript = '';
+                  twilioFirstAudioTime = null;
+                  turnStartTime = null;
                   sessionState = 'LISTENING';
                   console.log('[Twilio-Gemini] Now listening');
                   startAudioFlush();
@@ -549,6 +587,11 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
           vad.processMulaw(mulawChunk);
           noise.pushFrame({ ...frameStatsMulaw(mulawChunk), speechProb: vad.prob() }, audioClockMs);
           audioClockMs += mulawChunk.length / 8;
+          twilioMediaCount++;
+
+          if (activityOpen && twilioMediaCount % 25 === 0) {
+            console.log('[Twilio-Gemini VAD]', 'isSpeaking=' + vad.isSpeaking(), '| idleMs=' + vad.idleMs(), '| audioClockMs=' + audioClockMs.toFixed(0));
+          }
 
           if (sessionState === 'LISTENING' && geminiWs && geminiWs.readyState === WebSocket.OPEN) {
             if (vad.isSpeaking() && !activityOpen) {
@@ -593,6 +636,8 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
               }
 
               geminiWs.send(JSON.stringify({ realtime_input: { activity_end: {} } }));
+              turnStartTime = Date.now();
+              twilioFirstAudioTime = null; // next model audio = this turn's TTFA candidate
               console.log('[Twilio-Gemini Turn] activity_end');
             }
 
@@ -640,6 +685,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
         console.log('[Twilio-Gemini] Call log saved:', filename);
 
         if (callLog.callSid) {
+          const ttfa = callTtfaMs != null ? callTtfaMs : callLog.ttfa_ms;
           updateCallEnd({
             callSid: callLog.callSid,
             streamSid: callLog.streamSid,
@@ -651,9 +697,14 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
             recordingUrl: callLog.recordingUrl,
             transcript: callLog.transcript,
             silenceCount: callLog.silencePromptCount,
-            ttfaMs: callLog.ttfa_ms,
+            ttfaMs: ttfa,
+            // Gemini has no separate STT/TTS — mirror Cascaded Total Turn via llm_ms = TTFA
+            sttMs: null,
+            llmMs: ttfa,
+            ttsMs: null,
           });
-          console.log('[Twilio-Gemini] Call saved to DB:', callLog.callSid, '|', finalSessionState);
+          console.log('[Twilio-Gemini] Call saved to DB:', callLog.callSid, '|', finalSessionState,
+            '| ttfa_ms:', ttfa != null ? ttfa : 'n/a');
         }
       } catch (e) {
         console.error('[Twilio-Gemini] Log save error:', e.message);
