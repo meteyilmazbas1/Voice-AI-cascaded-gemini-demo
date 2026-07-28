@@ -592,8 +592,34 @@ twilioWss.on('connection', function(ws) {
   let droppedLogged = false;
   let twilioDgAudioBuffer = Buffer.alloc(0);
   let twilioDgIntentionalClose = false;
+  let twilioDgKeepAliveTimer = null;
+  let twilioDgLastSendAt = 0;
 
   function clearSilenceTimer() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
+
+  function clearTwilioDgKeepAlive() {
+    if (twilioDgKeepAliveTimer) {
+      clearInterval(twilioDgKeepAliveTimer);
+      twilioDgKeepAliveTimer = null;
+    }
+  }
+
+  /** Deepgram NET-0001: no audio/KeepAlive for ~10s closes the socket (1011). */
+  function startTwilioDgKeepAlive() {
+    clearTwilioDgKeepAlive();
+    twilioDgKeepAliveTimer = setInterval(function() {
+      if (twilioDgIntentionalClose) return;
+      if (!deepgramWs || deepgramWs.readyState !== WebSocket.OPEN) return;
+      // Skip if we recently sent audio; otherwise send official KeepAlive text frame
+      if (twilioDgLastSendAt && (Date.now() - twilioDgLastSendAt) < 3500) return;
+      try {
+        deepgramWs.send(JSON.stringify({ type: 'KeepAlive' }));
+        twilioDgLastSendAt = Date.now();
+      } catch (e) {
+        console.warn('[Twilio Deepgram] KeepAlive send failed:', e.message);
+      }
+    }, 4000);
+  }
 
   function sendAudioToTwilio(audioBuffer) {
     if (ws.readyState !== WebSocket.OPEN || !streamSid) return;
@@ -606,19 +632,27 @@ twilioWss.on('connection', function(ws) {
     }));
   }
 
-  /** Browser-parity: buffer + reconnect when Deepgram socket is not OPEN. */
+  /**
+   * Always forward Twilio inbound media to Deepgram (any sessionState).
+   * Keeps the live socket warm through long greetings; transcript handling
+   * stays gated on LISTENING separately.
+   * Browser-parity: buffer + reconnect when Deepgram socket is not OPEN.
+   */
   function sendAudioToTwilioDeepgram(buf) {
     if (!buf || !buf.length) return;
     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
       deepgramWs.send(buf);
+      twilioDgLastSendAt = Date.now();
       return;
     }
     twilioDgAudioBuffer = Buffer.concat([twilioDgAudioBuffer, buf]);
+    // Reconnect even during GREETING — otherwise NET-0001 kills the socket
+    // before LISTENING and worker speech never gets transcribed.
     if (twilioDgIntentionalClose || sessionState === 'ENDED') return;
     if (!deepgramWs
       || deepgramWs.readyState === WebSocket.CLOSING
       || deepgramWs.readyState === WebSocket.CLOSED) {
-      console.log('[Twilio Deepgram] Socket not open — reconnecting for incoming audio');
+      console.log('[Twilio Deepgram] Socket not open — reconnecting for incoming audio (state=' + sessionState + ')');
       startTwilioDeepgram();
     }
   }
@@ -710,6 +744,7 @@ twilioWss.on('connection', function(ws) {
     }
     twilioDgIntentionalClose = false;
     droppedLogged = false;
+    clearTwilioDgKeepAlive();
     const dgApiKey = process.env.DEEPGRAM_API_KEY;
     const params = new URLSearchParams({ ...DEEPGRAM_BASE_PARAMS, encoding: 'mulaw', sample_rate: '8000', channels: '1' });
     const dgUrl = 'wss://api.deepgram.com/v1/listen?' + params.toString() + DEEPGRAM_KEYTERMS;
@@ -724,7 +759,9 @@ twilioWss.on('connection', function(ws) {
         console.log('[Twilio Deepgram] Flushing buffered audio:', twilioDgAudioBuffer.length, 'bytes');
         deepgramWs.send(twilioDgAudioBuffer);
         twilioDgAudioBuffer = Buffer.alloc(0);
+        twilioDgLastSendAt = Date.now();
       }
+      startTwilioDgKeepAlive();
     });
     deepgramWs.on('message', async function(data) {
       try {
@@ -732,11 +769,14 @@ twilioWss.on('connection', function(ws) {
         if (msg.type === 'Results' && msg.channel && msg.channel.alternatives && msg.channel.alternatives[0]) {
           const alt = msg.channel.alternatives[0];
           const text = alt.transcript;
+          // Collect words always (useful if finals arrive just as we enter LISTENING)
           if (msg.is_final && alt.words && alt.words.length) uttWords.push(...alt.words);
           if (text && text.trim()) {
             if (msg.is_final && typeof alt.confidence === 'number') {
               callLastConfidence = alt.confidence;
             }
+            // Audio always streams; only act on transcripts while LISTENING
+            // (avoid interrupting GREETING / PROCESSING / agent speech)
             if (msg.is_final && msg.speech_final && sessionState === 'LISTENING') {
               clearSilenceTimer();
               const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
@@ -748,6 +788,8 @@ twilioWss.on('connection', function(ws) {
                 '| deepgram_cost:', callDeepgramCost != null ? callDeepgramCost.toFixed(6) : 'n/a',
                 '(streaming @ $' + DEEPGRAM_STREAMING_RATE + '/min)');
               await handleTwilioTranscript(text);
+            } else if (msg.is_final && msg.speech_final && sessionState !== 'LISTENING') {
+              console.log('[Twilio STT] Ignoring final while state=' + sessionState + ':', JSON.stringify(text).slice(0, 80));
             }
           }
         }
@@ -756,6 +798,7 @@ twilioWss.on('connection', function(ws) {
     deepgramWs.on('error', function(e) { console.error('[Twilio Deepgram] Error:', e.message); });
     deepgramWs.on('close', function(code, reason) {
       console.log('[Twilio Deepgram] Closed', code, reason ? reason.toString() : '');
+      clearTwilioDgKeepAlive();
     });
   }
 
@@ -791,16 +834,20 @@ twilioWss.on('connection', function(ws) {
         }, 1000);
       }
       if (msg.event === 'media') {
+        // Always ingest + forward to Deepgram (GREETING/PROCESSING/LISTENING).
+        // Only handleTwilioTranscript is gated on LISTENING.
         if (!(deepgramWs && deepgramWs.readyState === WebSocket.OPEN)) {
           if (!droppedLogged) {
-            console.log('[Twilio Media] DROPPING frames — dgState=' + (deepgramWs ? deepgramWs.readyState : 'null'));
+            console.log('[Twilio Media] buffering/reconnect — dgState=' + (deepgramWs ? deepgramWs.readyState : 'null')
+              + ' | sessionState=' + sessionState);
             droppedLogged = true;
           }
         }
         twilioMediaCount = (twilioMediaCount || 0) + 1;
         if (twilioMediaCount % 50 === 1) {
           console.log('[Twilio Media] frame#' + twilioMediaCount,
-            '| dgState=' + (deepgramWs ? deepgramWs.readyState : 'null'));
+            '| dgState=' + (deepgramWs ? deepgramWs.readyState : 'null'),
+            '| sessionState=' + sessionState);
         }
         lastMediaAt = Date.now();
         const buf = Buffer.from(msg.media.payload, 'base64');
@@ -813,6 +860,7 @@ twilioWss.on('connection', function(ws) {
       if (msg.event === 'stop') {
         console.log('[Twilio] Stream stopped');
         twilioDgIntentionalClose = true;
+        clearTwilioDgKeepAlive();
         if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
         clearSilenceTimer();
       }
@@ -822,6 +870,7 @@ twilioWss.on('connection', function(ws) {
   ws.on('close', function() {
     console.log('[Twilio WS] Disconnected');
     twilioDgIntentionalClose = true;
+    clearTwilioDgKeepAlive();
     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) deepgramWs.close();
     clearSilenceTimer();
 
@@ -967,7 +1016,6 @@ browserWss.on('connection', function(ws) {
     let lastMicLogAt = 0;
   let lastConfidence = null;
   let safetyConfirmPending = false;
-  let clientE2eMs = null;
   let deepFilter = null;
   let dfPreferred = DEEPFILTER_ENABLED;  // TEMP: off unless DEEPFILTER_ENABLED=true
   let dfEnabled = DEEPFILTER_ENABLED;
@@ -1246,8 +1294,7 @@ browserWss.on('connection', function(ws) {
       if (!result.distress) applyCachedResponse(result);
       console.log('[Intent]', result.intent, '| conf:', result.confidence, '| distress:', result.distress || 'none', '| LLM:', llmMs + 'ms');
       lastAgentText = result.response;
-      send({ type: 'intent', data: result, client_e2e_ms: clientE2eMs });
-      clientE2eMs = null;
+      send({ type: 'intent', data: result });
       send({ type: 'stage', stage: 'llm', status: 'done', ms: llmMs });
       send({ type: 'stage', stage: 'tts', status: 'processing' });
       const ttsStart = Date.now();
@@ -1459,11 +1506,6 @@ browserWss.on('connection', function(ws) {
             send({ type: 'log', message: 'Noise cancellation ' + (dfEnabled ? 'enabled' : 'disabled') });
           }
           send({ type: 'denoise_engine', engine: DENOISE_ENGINE, label: DENOISE_LABEL, active: dfEnabled });
-        }
-        if (msg.type === 'client_metrics') {
-          clientE2eMs = msg.total;
-          console.log('[Client E2E]', clientE2eMs + 'ms');
-          send({ type: 'client_e2e', ms: clientE2eMs });
         }
         if (msg.type === 'start') {
           send({ type: 'log', message: 'Session started — Missed Check-In alert for Industrial Worker' });

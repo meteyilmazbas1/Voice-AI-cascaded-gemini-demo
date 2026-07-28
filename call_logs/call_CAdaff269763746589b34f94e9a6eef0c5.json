@@ -1,0 +1,19 @@
+{
+  "callSid": "CAdaff269763746589b34f94e9a6eef0c5",
+  "streamSid": "MZa22828639606747c72af6e35fe62f076",
+  "workerPhone": "+905346752063",
+  "startTime": "2026-07-27T13:46:03.277Z",
+  "transcript": [
+    {
+      "role": "ai",
+      "text": "Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say \"I'm safe\", \"I need more time\", or \"connect me to an agent\".",
+      "time": "2026-07-27T13:46:04.306Z"
+    }
+  ],
+  "finalState": "NO_ANSWER",
+  "finalIntent": "UNRECOGNISED",
+  "recordingUrl": null,
+  "silencePromptCount": 2,
+  "ttfa_ms": 0,
+  "endTime": "2026-07-27T13:46:40.777Z"
+}

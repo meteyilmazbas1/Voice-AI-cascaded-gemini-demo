@@ -74,6 +74,7 @@ const updateRecordingStmt = db.prepare(`
 
 const updateLatencyStmt = db.prepare(`
   UPDATE calls SET
+    ttfa_ms = COALESCE(?, ttfa_ms),
     stt_ms = COALESCE(?, stt_ms),
     llm_ms = COALESCE(?, llm_ms),
     tts_ms = COALESCE(?, tts_ms),
@@ -112,8 +113,9 @@ function updateCallEnd({ callSid, streamSid, workerPhone, endTime, durationSecon
   );
 }
 
-function updateCallLatency({ callSid, sttMs, llmMs, ttsMs, deepgramCost }) {
+function updateCallLatency({ callSid, sttMs, llmMs, ttsMs, deepgramCost, ttfaMs }) {
   updateLatencyStmt.run(
+    ttfaMs != null ? ttfaMs : null,
     sttMs != null ? sttMs : null,
     llmMs != null ? llmMs : null,
     ttsMs != null ? ttsMs : null,
