@@ -1,0 +1,42 @@
+{
+  "callSid": "CAa5056c05f919fb2fddb1a3515f5aeb79",
+  "streamSid": "MZ351b93eac82bd829ebedec26adbe7157",
+  "workerPhone": "+905346752063",
+  "startTime": "2026-07-28T07:45:15.533Z",
+  "transcript": [
+    {
+      "role": "ai",
+      "text": "Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say \"I'm safe\", \"I need more time\", or \"connect me to an agent\".",
+      "time": "2026-07-28T07:45:16.253Z"
+    },
+    {
+      "role": "worker",
+      "text": "I am not safe.",
+      "time": "2026-07-28T07:45:30.470Z"
+    },
+    {
+      "role": "ai",
+      "text": "Of course. I'm flagging this for a live agent — someone will call you back shortly.",
+      "time": "2026-07-28T07:45:35.183Z"
+    }
+  ],
+  "finalState": "ESCALATED",
+  "finalIntent": "REQUEST_HUMAN",
+  "recordingUrl": null,
+  "silencePromptCount": 0,
+  "ttfa_ms": 682,
+  "noiseTurns": [
+    {
+      "time": "2026-07-28T07:45:30.287Z",
+      "snrDb": 46.45143425004716,
+      "noiseLevelDbfs": -60,
+      "speechDbfs": -13.548565749952846,
+      "noisy": false,
+      "snrReliable": true,
+      "collisions": 1,
+      "injected": false,
+      "report": null
+    }
+  ],
+  "endTime": "2026-07-28T07:45:40.371Z"
+}

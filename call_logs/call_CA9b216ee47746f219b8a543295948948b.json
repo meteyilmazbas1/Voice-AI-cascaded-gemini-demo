@@ -1,0 +1,42 @@
+{
+  "callSid": "CA9b216ee47746f219b8a543295948948b",
+  "streamSid": "MZ2c3d1779e0bf7538c50cf3dd3d08b2d3",
+  "workerPhone": "+905346752063",
+  "startTime": "2026-07-28T06:20:19.427Z",
+  "transcript": [
+    {
+      "role": "ai",
+      "text": "Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say \"I'm safe\", \"I need more time\", or \"connect me to an agent\".",
+      "time": "2026-07-28T06:20:20.176Z"
+    },
+    {
+      "role": "worker",
+      "text": "I am safe.",
+      "time": "2026-07-28T06:20:34.291Z"
+    },
+    {
+      "role": "ai",
+      "text": "Got it — I've reset your safety timer. Stay safe.",
+      "time": "2026-07-28T06:20:37.952Z"
+    }
+  ],
+  "finalState": "RESOLVED",
+  "finalIntent": "SAFE_CONFIRMATION",
+  "recordingUrl": null,
+  "silencePromptCount": 0,
+  "ttfa_ms": 0,
+  "noiseTurns": [
+    {
+      "time": "2026-07-28T06:20:34.057Z",
+      "snrDb": 38.67669159703268,
+      "noiseLevelDbfs": -55.90519351042214,
+      "speechDbfs": -17.228501913389458,
+      "noisy": false,
+      "snrReliable": true,
+      "collisions": 2,
+      "injected": false,
+      "report": null
+    }
+  ],
+  "endTime": "2026-07-28T06:20:43.118Z"
+}
