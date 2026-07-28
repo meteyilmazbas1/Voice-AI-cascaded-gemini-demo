@@ -201,11 +201,11 @@ You will receive:
 
 The call outcome is decided by classifying the utterance as one of: safe, delayed, request_human, unsafe, ambiguous.
 
-Decide: does the masked or missing content genuinely block the classification, OR does it hide a concrete detail the system needs to act on it (e.g. the NUMBER of minutes for delayed — the safety timer cannot be extended without it)?
+Decide: does the masked or missing content genuinely block the classification?
 - For each [word], imagine realistic alternatives (similar-sounding words: "stepped"/"slipped", "fine"/"fell"; negations: "can"/"can't").
 - For each [NOISE], imagine realistic words that could fill the gap, given the agent's question.
 - Weigh each alternative against the INTACT words: an alternative only counts if the whole utterance stays coherent with it. If the intact words already form a complete, consistent account that fits exactly one classification, the meaning is recovered — reply "unimportant".
-- Reply "important" if a coherent reading of the full utterance changes the classification — especially toward unsafe — or if the masked content hides a required actionable detail, or if so much is masked that the overall meaning is not recoverable.
+- Reply "important" if a coherent reading of the full utterance changes the classification — especially toward unsafe — or if so much is masked that the overall meaning is not recoverable.
 
 Tie-break: if after weighing coherence you still cannot tell, reply "important" — but a filling that contradicts the intact context is not genuine uncertainty.
 
