@@ -596,6 +596,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
           if (sessionState === 'LISTENING' && geminiWs && geminiWs.readyState === WebSocket.OPEN) {
             if (vad.isSpeaking() && !activityOpen) {
               activityOpen = true;
+              clearWorkerSilenceTimer();
               geminiWs.send(JSON.stringify({ realtime_input: { activity_start: {} } }));
               console.log('[Twilio-Gemini Turn] activity_start @', audioClockMs.toFixed(0) + 'ms');
             }
@@ -622,7 +623,8 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
               callLog.noiseTurns.push(entry);
 
               const gapCount = m.collisions.filter(function(c) { return c.type === 'gap'; }).length;
-              const snrLow = m.snrReliable && m.snrDb != null && m.snrDb < 12;
+              const speechMs = spans.reduce(function(sum, s) { return sum + (s.endMs - s.startMs); }, 0);
+              const snrLow = m.snrReliable && m.snrDb != null && m.snrDb < 12 && speechMs >= 1000;
               const degraded = gapCount > 0 || m.noisy || snrLow;
 
               if (degraded) {
@@ -638,6 +640,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
               geminiWs.send(JSON.stringify({ realtime_input: { activity_end: {} } }));
               turnStartTime = Date.now();
               twilioFirstAudioTime = null; // next model audio = this turn's TTFA candidate
+              startWorkerSilenceTimer();
               console.log('[Twilio-Gemini Turn] activity_end');
             }
 
