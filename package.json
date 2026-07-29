@@ -19,6 +19,8 @@
     "@anthropic-ai/sdk": "^0.105.0",
     "@deepgram/sdk": "^5.4.0",
     "@google/generative-ai": "^0.24.1",
+    "@jitsi/rnnoise-wasm": "^0.2.1",
+    "@supabase/supabase-js": "^2.111.0",
     "@twilio/voice-sdk": "^2.18.3",
     "axios": "^1.18.1",
     "better-sqlite3": "^12.11.1",
@@ -26,7 +28,9 @@
     "express": "^5.2.1",
     "onnxruntime-node": "^1.27.0",
     "twilio": "^6.0.2",
-    "ws": "^8.21.0",
-    "@jitsi/rnnoise-wasm": "^0.2.1"
+    "ws": "^8.21.0"
+  },
+  "overrides": {
+    "adm-zip": "^0.6.0"
   }
 }

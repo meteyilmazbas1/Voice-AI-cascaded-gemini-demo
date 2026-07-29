@@ -241,7 +241,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
     }
 
     /** Persist Gemini end-of-speech → first-audio latency (History uses ttfa_ms + llm_ms). */
-    function recordListeningTtfa(ttfa) {
+    async function recordListeningTtfa(ttfa) {
       if (ttfa == null || !Number.isFinite(ttfa) || ttfa < 0) return;
       if (callTtfaMs != null) return; // keep first worker-turn TTFA
       callTtfaMs = Math.round(ttfa);
@@ -250,7 +250,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
       if (callLog.callSid) {
         try {
           // llm_ms = TTFA for Gemini (no separate STT/TTS stages) so Total Turn / LLM columns work
-          updateCallLatency({
+          await updateCallLatency({
             callSid: callLog.callSid,
             sttMs: null,
             llmMs: callTtfaMs,
@@ -566,7 +566,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
           console.log('[Twilio-Gemini] Stream started | SID:', streamSid, '| Call:', callLog.callSid);
 
           try {
-            insertCallStart({
+            await insertCallStart({
               callSid: callLog.callSid,
               streamSid: streamSid,
               workerPhone: callLog.workerPhone,
@@ -662,7 +662,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
       }
     });
 
-    ws.on('close', function() {
+    ws.on('close', async function() {
       console.log('[Twilio-Gemini WS] Disconnected');
       clearWorkerSilenceTimer();
       if (silenceInterval) { clearInterval(silenceInterval); silenceInterval = null; }
@@ -677,7 +677,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
         const duration = Math.round((new Date(callLog.endTime) - new Date(callLog.startTime)) / 1000);
         let finalSessionState = callLog.finalState || (silencePromptCount >= 2 ? 'NO_ANSWER' : 'UNKNOWN');
         if (callLog.callSid) {
-          const existing = getCallBySid(callLog.callSid);
+          const existing = await getCallBySid(callLog.callSid);
           if (existing && existing.session_state === 'VOICEMAIL') {
             finalSessionState = 'VOICEMAIL';
           }
@@ -689,7 +689,7 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
 
         if (callLog.callSid) {
           const ttfa = callTtfaMs != null ? callTtfaMs : callLog.ttfa_ms;
-          updateCallEnd({
+          await updateCallEnd({
             callSid: callLog.callSid,
             streamSid: callLog.streamSid,
             workerPhone: callLog.workerPhone,

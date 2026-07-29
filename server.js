@@ -98,7 +98,7 @@ app.use('/scenario_audio', function(req, res) {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl } = require('./db');
+const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl, insertComparison, listComparisons } = require('./db');
 const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
 const { createRnnoise, preloadRnnoise, isRnnoiseReady } = require("./rnnoiseWrapper");
 const { createNoiseEstimator } = require("./noiseEstimator");
@@ -816,7 +816,7 @@ twilioWss.on('connection', function(ws) {
         callStartTime = new Date().toISOString();
         console.log('[Twilio] Stream started | SID:', streamSid, '| Call:', callSid);
         try {
-          insertCallStart({
+          await insertCallStart({
             callSid: callSid,
             streamSid: streamSid,
             workerPhone: workerPhone,
@@ -867,7 +867,7 @@ twilioWss.on('connection', function(ws) {
     } catch (e) { console.error('[Twilio WS Error]', e.message); }
   });
 
-  ws.on('close', function() {
+  ws.on('close', async function() {
     console.log('[Twilio WS] Disconnected');
     twilioDgIntentionalClose = true;
     clearTwilioDgKeepAlive();
@@ -889,7 +889,7 @@ twilioWss.on('connection', function(ws) {
         console.log('[Twilio] Call log | duration_sec:', durationSeconds,
           '| stream_audio_sec:', streamSec != null ? Number(streamSec).toFixed(3) : 'n/a',
           '| deepgram_cost:', callDeepgramCost != null ? callDeepgramCost.toFixed(6) : 'n/a');
-        updateCallEnd({
+        await updateCallEnd({
           callSid: callSid,
           streamSid: streamSid,
           workerPhone: workerPhone,
@@ -904,7 +904,7 @@ twilioWss.on('connection', function(ws) {
           ttsMs: callTtsMs,
           deepgramCost: callDeepgramCost,
         });
-        updateCallLatency({
+        await updateCallLatency({
           callSid: callSid,
           sttMs: callSttMs,
           llmMs: callLlmMs,
@@ -4105,19 +4105,54 @@ app.post('/compare-freeform', async function(req, res) {
   }
 });
 
-app.get('/api/calls', function(req, res) {
+app.get('/api/calls', async function(req, res) {
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
   try {
-    res.json(listCalls(page, limit));
+    res.json(await listCalls(page, limit));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get('/api/calls/:callSid', function(req, res) {
+/** Shared Session History: browser posts its full comparison snapshot here so the
+ *  other instance sees the same runs. results_json holds the whole snapshot, so
+ *  clicking a remote entry restores the comparison screen exactly like a local one. */
+app.post('/api/comparisons', express.json({ limit: '10mb' }), async function(req, res) {
   try {
-    const call = getCallBySid(req.params.callSid);
+    const snap = req.body && req.body.snapshot;
+    if (!snap || typeof snap !== 'object') {
+      return res.status(400).json({ error: 'snapshot object is required' });
+    }
+    const id = await insertComparison({
+      transcript: snap.transcript || snap.groundTruth || '',
+      expected: snap.expectedIntent || snap.expected || null,
+      runs: snap.runCount != null ? snap.runCount : snap.runs,
+      sttMs: snap.stt_ms != null ? snap.stt_ms : null,
+      sttSource: snap.compareMode || null,
+      durationSec: snap.duration_sec != null ? snap.duration_sec : null,
+      deepgramCost: snap.deepgram_cost != null ? snap.deepgram_cost : null,
+      results: snap,
+    });
+    res.json({ ok: true, id: id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/comparisons', async function(req, res) {
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 50;
+  try {
+    res.json(await listComparisons(page, limit));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/calls/:callSid', async function(req, res) {
+  try {
+    const call = await getCallBySid(req.params.callSid);
     if (!call) return res.status(404).json({ error: 'Call not found' });
     call.transcript = call.transcript ? JSON.parse(call.transcript) : [];
     res.json(call);
@@ -4126,7 +4161,7 @@ app.get('/api/calls/:callSid', function(req, res) {
   }
 });
 
-app.post('/recording-status', function(req, res) {
+app.post('/recording-status', async function(req, res) {
   const url = buildTwilioWebhookUrl(req, '/recording-status');
   if (!validateTwilioSignature(req, res, url)) return;
 
@@ -4135,7 +4170,7 @@ app.post('/recording-status', function(req, res) {
   if (RecordingStatus === 'completed' && RecordingUrl && CallSid) {
     const recordingUrl = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
     try {
-      updateRecordingUrl(CallSid, recordingUrl);
+      await updateRecordingUrl(CallSid, recordingUrl);
       console.log('[Recording] Saved URL for call:', CallSid);
       console.log('[Recording] URL:', recordingUrl);
     } catch (e) {
