@@ -6456,7 +6456,10 @@ function renderCmpCharts(results, opts) {
   });
   }
 
-  if (target === 'freeform' || hideAccuracy) {
+  // Free-form charts live in their own section and must not mutate Intent accuracy cards.
+  if (target === 'freeform') return;
+
+  if (hideAccuracy) {
     const accCard = document.getElementById('cardAccuracy');
     const trendCard = document.getElementById('cardAccuracyTrend');
     if (accCard) accCard.style.display = 'none';
