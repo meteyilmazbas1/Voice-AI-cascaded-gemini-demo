@@ -1196,7 +1196,7 @@ twilioWss.on('connection', function(ws) {
         console.log('[Twilio-Gemini] Stream started | SID:', streamSid, '| Call:', callLog.callSid);
 
         try {
-          insertCallStart({
+          await insertCallStart({
             callSid: callLog.callSid,
             streamSid: streamSid,
             workerPhone: callLog.workerPhone,
@@ -1276,7 +1276,7 @@ twilioWss.on('connection', function(ws) {
     } catch(e) { console.error('[Twilio-Gemini WS Error]', e.message); }
   });
 
-  ws.on('close', function() {
+  ws.on('close', async function() {
     console.log('[Twilio-Gemini WS] Disconnected');
     if (callLog.callSid) amdRedirectedCalls.delete(callLog.callSid);
     clearWorkerSilenceTimer();
@@ -1293,7 +1293,7 @@ twilioWss.on('connection', function(ws) {
       const duration = Math.round((new Date(callLog.endTime) - new Date(callLog.startTime)) / 1000);
       let finalSessionState = callLog.finalState || (silencePromptCount >= 2 ? 'NO_ANSWER' : 'UNKNOWN');
       if (callLog.callSid) {
-        const existing = getCallBySid(callLog.callSid);
+        const existing = await getCallBySid(callLog.callSid);
         if (existing && existing.session_state === 'VOICEMAIL') {
           finalSessionState = 'VOICEMAIL';
         }
@@ -1304,7 +1304,7 @@ twilioWss.on('connection', function(ws) {
       console.log('[Twilio-Gemini] Call log saved:', filename);
 
       if (callLog.callSid) {
-        updateCallEnd({
+        await updateCallEnd({
           callSid: callLog.callSid,
           streamSid: callLog.streamSid,
           workerPhone: callLog.workerPhone,
@@ -1354,7 +1354,7 @@ app.post('/call-status', function(req, res) {
   res.sendStatus(200);
 });
 
-app.post('/recording-status', function(req, res) {
+app.post('/recording-status', async function(req, res) {
   const url = buildTwilioWebhookUrl(req, '/recording-status');
   if (!validateTwilioSignature(req, res, url)) return;
 
@@ -1363,7 +1363,7 @@ app.post('/recording-status', function(req, res) {
   if (RecordingStatus === 'completed' && RecordingUrl && CallSid) {
     const recordingUrl = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
     try {
-      updateRecordingUrl(CallSid, recordingUrl);
+      await updateRecordingUrl(CallSid, recordingUrl);
       console.log('[Recording] Saved URL for call:', CallSid);
       console.log('[Recording] URL:', recordingUrl);
     } catch (e) {
@@ -1373,7 +1373,7 @@ app.post('/recording-status', function(req, res) {
   res.sendStatus(200);
 });
 
-app.post('/amd-status', function(req, res) {
+app.post('/amd-status', async function(req, res) {
   const url = buildTwilioWebhookUrl(req, '/amd-status');
   if (!validateTwilioSignature(req, res, url)) return;
 
@@ -1388,7 +1388,7 @@ app.post('/amd-status', function(req, res) {
 
     console.log('[AMD] Voicemail detected — will leave message');
     try {
-      updateCallSessionState(CallSid, 'VOICEMAIL');
+      await updateCallSessionState(CallSid, 'VOICEMAIL');
       console.log('[AMD] DB updated: VOICEMAIL for', CallSid);
     } catch (e) {
       console.error('[AMD] DB error:', e.message);
@@ -1436,19 +1436,19 @@ app.post('/voicemail-twiml', function(req, res) {
 </Response>`);
 });
 
-app.get('/api/calls', function(req, res) {
+app.get('/api/calls', async function(req, res) {
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
   try {
-    res.json(listCalls(page, limit));
+    res.json(await listCalls(page, limit));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get('/api/calls/:callSid', function(req, res) {
+app.get('/api/calls/:callSid', async function(req, res) {
   try {
-    const call = getCallBySid(req.params.callSid);
+    const call = await getCallBySid(req.params.callSid);
     if (!call) return res.status(404).json({ error: 'Call not found' });
     call.transcript = call.transcript ? JSON.parse(call.transcript) : [];
     res.json(call);
