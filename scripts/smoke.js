@@ -6,6 +6,7 @@ const child = spawn(process.execPath, ["server.js"], {
     env: {
         ...process.env,
         PORT,
+        PUBLIC_URL: `http://127.0.0.1:${PORT}`,
         DEEPGRAM_API_KEY: "dummy",
         ANTHROPIC_API_KEY: "dummy",
         ELEVENLABS_API_KEY: "dummy",
