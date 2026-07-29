@@ -7,7 +7,9 @@
     "test": "node --check server.js && node --check server_gemini.js && node --check sileroVad.js && node --check noiseEstimator.js && node --check testLogger.js && node --check deepFilterWrapper.js && node --check db.js && node --check rnnoiseWrapper.js",
     "start": "node server.js",
     "call": "node make_call.js",
-    "test:gemini-audio": "node gemini_noisy_audio_test.js"
+    "test:gemini-audio": "node gemini_noisy_audio_test.js",
+    "lint": "eslint . || true",
+    "test:smoke": "node scripts/smoke.js"
   },
   "keywords": [],
   "author": "",
