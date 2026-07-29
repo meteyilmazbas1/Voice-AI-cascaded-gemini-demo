@@ -588,6 +588,8 @@ twilioWss.on('connection', function(ws) {
   let dgClockMs = 0;
   let agentPlaybackUntil = 0;
   let uttWords = [];
+  // Accumulate Deepgram is_final segments until UtteranceEnd (do not LLM on speech_final alone)
+  let transcript = '';
   let twilioMediaCount = 0;
   let droppedLogged = false;
   let twilioDgAudioBuffer = Buffer.alloc(0);
@@ -775,23 +777,38 @@ twilioWss.on('connection', function(ws) {
             if (msg.is_final && typeof alt.confidence === 'number') {
               callLastConfidence = alt.confidence;
             }
-            // Audio always streams; only act on transcripts while LISTENING
-            // (avoid interrupting GREETING / PROCESSING / agent speech)
-            if (msg.is_final && msg.speech_final && sessionState === 'LISTENING') {
-              clearSilenceTimer();
-              const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
-              callSttMs = sttMs;
-              const callDurationSec = dgClockMs > 0 ? (dgClockMs / 1000) : null;
-              callDeepgramCost = calcDeepgramStreamingCost(callDurationSec);
-              console.log('[Twilio STT]', sttMs + 'ms',
-                '| audio_sec:', callDurationSec != null ? callDurationSec.toFixed(3) : 'n/a',
-                '| deepgram_cost:', callDeepgramCost != null ? callDeepgramCost.toFixed(6) : 'n/a',
-                '(streaming @ $' + DEEPGRAM_STREAMING_RATE + '/min)');
-              await handleTwilioTranscript(text);
-            } else if (msg.is_final && msg.speech_final && sessionState !== 'LISTENING') {
+            // Audio always streams; only accumulate while LISTENING.
+            // Never send to LLM on is_final / speech_final — long utterances often
+            // arrive as multiple finals; speech_final alone truncates mid-sentence.
+            // Flush only on UtteranceEnd (utterance_end_ms=1000).
+            if (msg.is_final && sessionState === 'LISTENING') {
+              const piece = text.trim();
+              transcript = transcript ? (transcript + ' ' + piece) : piece;
+              console.log('[Twilio STT] Accumulated final | speech_final=' + !!msg.speech_final
+                + ' | buf:', JSON.stringify(transcript).slice(0, 160));
+            } else if (msg.is_final && sessionState !== 'LISTENING') {
               console.log('[Twilio STT] Ignoring final while state=' + sessionState + ':', JSON.stringify(text).slice(0, 80));
             }
           }
+        }
+        if (msg.type === 'UtteranceEnd' && sessionState === 'LISTENING') {
+          const toProcess = (transcript || '').trim();
+          if (!toProcess) {
+            console.log('[Twilio STT] UtteranceEnd with empty buffer — ignore');
+            return;
+          }
+          transcript = '';
+          clearSilenceTimer();
+          const sttMs = lastMediaAt ? Date.now() - lastMediaAt : 300;
+          callSttMs = sttMs;
+          const callDurationSec = dgClockMs > 0 ? (dgClockMs / 1000) : null;
+          callDeepgramCost = calcDeepgramStreamingCost(callDurationSec);
+          console.log('[Twilio STT] UtteranceEnd — flush', sttMs + 'ms',
+            '| audio_sec:', callDurationSec != null ? callDurationSec.toFixed(3) : 'n/a',
+            '| deepgram_cost:', callDeepgramCost != null ? callDeepgramCost.toFixed(6) : 'n/a',
+            '(streaming @ $' + DEEPGRAM_STREAMING_RATE + '/min)',
+            '| tx:', JSON.stringify(toProcess).slice(0, 160));
+          await handleTwilioTranscript(toProcess);
         }
       } catch (e) {}
     });
@@ -2876,8 +2893,8 @@ async function classifyWithGeminiLive(transcript, model, opts) {
         }
       }
       turnStartTime = Date.now();
-      ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
-      console.log('[Gemini Live Compare] Audio sent (' + pcm.length + ' bytes) — audioStreamEnd');
+      ws.send(JSON.stringify({ realtime_input: { audio_stream_end: true } }));
+      console.log('[Gemini Live Compare] Audio sent (' + pcm.length + ' bytes) — audio_stream_end');
     }
 
     ws.on('open', function() {
@@ -3977,6 +3994,9 @@ async function runFreeformComparison(transcript, model, runs) {
         output_tokens: r.output_tokens,
         total_tokens: r.total_tokens != null ? r.total_tokens : ((r.input_tokens || 0) + (r.output_tokens || 0)),
         cost: r.cost,
+        // Per-run STT text the model saw (client may refresh STT each series; Gemini Live can differ)
+        transcript: transcript || null,
+        input_transcript: transcript || null,
       });
     } catch (err) {
       logCompareError('runFreeformComparison/' + model, err);
@@ -3987,6 +4007,8 @@ async function runFreeformComparison(transcript, model, runs) {
         error: detail.message,
         error_detail: detail,
         latency: 0,
+        transcript: transcript || null,
+        input_transcript: transcript || null,
       });
     }
     if (i < runs - 1) await sleepMs(150);
