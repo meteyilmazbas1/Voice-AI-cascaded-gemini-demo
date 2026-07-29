@@ -5560,6 +5560,58 @@ function loadCmpHistoryFromStorage() {
   }
 }
 
+/** Send this run to the shared store so the other instance sees it too.
+ *  Fire-and-forget: a failure must never block the local history entry. */
+function pushCmpHistoryToServer(snapshot) {
+  try {
+    fetch('/api/comparisons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snapshot: snapshot }),
+    }).then(function (r) {
+      if (!r.ok) console.warn('[cmpHistory] shared save failed:', r.status);
+    }).catch(function (e) {
+      console.warn('[cmpHistory] shared save failed:', e.message);
+    });
+  } catch (e) {
+    console.warn('[cmpHistory] shared save failed:', e.message);
+  }
+}
+
+/** Merge shared (Supabase) runs into the local list. Dedup by timestamp so your
+ *  own run does not appear twice once it comes back from the server. */
+function mergeCmpHistory(localList, remoteList) {
+  const seen = new Set(localList.map(function (h) { return h && h.timestamp; }));
+  const merged = localList.slice();
+  remoteList.forEach(function (r) {
+    if (!r || seen.has(r.timestamp)) return;
+    seen.add(r.timestamp);
+    r._shared = true;
+    merged.push(r);
+  });
+  merged.sort(function (a, b) {
+    return new Date(b && b.timestamp || 0) - new Date(a && a.timestamp || 0);
+  });
+  return merged;
+}
+
+/** Pull the shared history and re-render. Safe to call any time. */
+function refreshSharedCmpHistory() {
+  return fetch('/api/comparisons?limit=50')
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (!data) return;
+      const remote = (data.comparisons || [])
+        .map(function (c) { return c && c.results; })
+        .filter(function (s) { return s && typeof s === 'object' && s.timestamp; });
+      cmpHistory = mergeCmpHistory(loadCmpHistoryFromStorage(), remote);
+      renderCmpHistory();
+    })
+    .catch(function (e) {
+      console.warn('[cmpHistory] shared load failed:', e.message);
+    });
+}
+
 /** Deep-clone so history entries do not share live cmpResults / rows references. */
 function snapshotCmpHistoryEntry(entry) {
   try {
@@ -5618,6 +5670,7 @@ function saveCmpHistory(entry) {
       }
 
   if (!snapshot.timestamp) snapshot.timestamp = new Date().toISOString();
+  pushCmpHistoryToServer(snapshot);
   stored.unshift(snapshot);
       if (stored.length > 100) stored.length = 100; // keep more sessions; was 10 and felt like overwrite
   cmpHistory = stored;
@@ -5635,6 +5688,7 @@ function saveCmpHistory(entry) {
     }
   }
   renderCmpHistory();
+  refreshSharedCmpHistory();
 }
 
 function renderCmpHistory() {
@@ -5652,9 +5706,10 @@ function renderCmpHistory() {
             : `"${(h.transcript || h.groundTruth || '').slice(0, 48)}${(h.transcript || h.groundTruth || '').length > 48 ? '…' : ''}"`);
     const models = (h.models || []).map(m => (CMP_MODEL_META[m] || {}).label || m).join(', ');
         const intentBit = h.expectedIntent || h.expected || '';
+        const sharedBit = h._shared ? ' · <span style="color:var(--accent)">shared</span>' : '';
     return `<div class="cmp-history-item" onclick="loadCmpHistory(${i})">
       <div>${escapeHtml(title)}</div>
-      <div class="h-meta">${new Date(h.timestamp).toLocaleString()} · ${escapeHtml(models)}${intentBit ? ' · ' + escapeHtml(intentBit) : ''}</div>
+      <div class="h-meta">${new Date(h.timestamp).toLocaleString()} · ${escapeHtml(models)}${intentBit ? ' · ' + escapeHtml(intentBit) : ''}${sharedBit}</div>
     </div>`;
   }).join('');
 }
@@ -7044,6 +7099,7 @@ async function runComparisonSeries(seriesCount) {
 }
 
 renderCmpHistory();
+refreshSharedCmpHistory();
 initModelAudioUploads();
     if (location.hash === "#compare") switchView("compare");
     window.addEventListener("hashchange", () => {
