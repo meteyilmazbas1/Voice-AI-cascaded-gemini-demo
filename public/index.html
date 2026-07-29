@@ -710,8 +710,17 @@
   }
   .cmp-metrics { display: none; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .cmp-metrics.show { display: grid; }
+  .cmp-metrics.cols-3 { grid-template-columns: repeat(3, 1fr); }
   .cmp-metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
   .cmp-metric-card .m-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px; }
+  .cmp-results-section { display: flex; flex-direction: column; gap: 12px; }
+  .cmp-section-heading { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: 0.02em; padding: 4px 2px; border-bottom: 1px solid var(--border); margin-bottom: 2px; }
+  @media (max-width: 1100px) {
+    .cmp-metrics, .cmp-metrics.cols-3 { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .cmp-metrics, .cmp-metrics.cols-3 { grid-template-columns: 1fr; }
+  }
   .cmp-metric-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; gap: 8px; }
   .cmp-metric-row .m-name { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cmp-metric-row .m-val { font-weight: 700; }
@@ -1089,9 +1098,6 @@
           <div id="cmpPreviewAccuracy" class="scenario-preview-accuracy" aria-live="polite"></div>
         </div>
         <audio id="scenarioPreviewAudio" preload="none" style="display:none"></audio>
-        <div style="font-size:11px;color:var(--muted);margin-top:6px;max-width:300px">
-          Selecting a scenario fills the reference transcript (clean version) and loads the noisy audio file as the shared input for all models. Use Listen to preview noise before Run.
-        </div>
       </div>
       <div class="cmp-field">
         <label>Manual Audio Source</label>
@@ -1124,10 +1130,6 @@
           <span id="cmpRefStatus" style="font-size:11px;color:var(--muted)"></span>
         </div>
       </div>
-    </div>
-    <div style="font-size:11px;color:var(--muted);line-height:1.35;margin-top:4px">
-      The same audio is sent to all models, but each model runs its own independent STT request per run — transcript differences remain visible.
-      Claude: Deepgram Nova-3 · Gemini: Live inputTranscription. 5s throttle between requests.
     </div>
     <textarea id="cmpTranscript" style="display:none" aria-hidden="true"></textarea>
   </div>
@@ -1184,7 +1186,55 @@
   </div>
 
   <div class="run-transcript-diff-warn" id="cmpTranscriptDiffWarn">⚠️ Transcript mismatch detected between models</div>
-  <div class="cmp-panels" id="cmpPanels"></div>
+
+  <div class="cmp-results-section" id="cmpSectionIntent">
+    <div class="cmp-section-heading" id="cmpHeadingIntent" style="display:none">Intent results</div>
+    <div class="cmp-panels" id="cmpPanels"></div>
+    <div class="cmp-metrics" id="cmpMetrics"></div>
+    <div class="cmp-charts" id="cmpCharts">
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Latency (avg ± min/max)</div>
+        <canvas id="chartLatency"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Token usage (input / output)</div>
+        <canvas id="chartTokens"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Estimated cost ($ / run)</div>
+        <canvas id="chartCost"></canvas>
+      </div>
+      <div class="cmp-chart-card" id="cardAccuracy">
+        <div class="cmp-chart-title">Noise robustness — Intent accuracy & Transcript accuracy (1-WER)</div>
+        <canvas id="chartAccuracy"></canvas>
+      </div>
+      <div class="cmp-chart-card" id="cardAccuracyTrend" style="grid-column:1 / -1">
+        <div class="cmp-chart-title">Per-run accuracy (stability under noise)</div>
+        <canvas id="chartAccuracyTrend"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="cmp-results-section" id="cmpSectionFreeform" style="display:none">
+    <div class="cmp-section-heading" id="cmpHeadingFreeform" style="display:none">Free-form results</div>
+    <div class="cmp-panels" id="cmpPanelsFreeform"></div>
+    <div class="cmp-metrics cols-3" id="cmpMetricsFreeform"></div>
+    <div class="cmp-charts" id="cmpChartsFreeform">
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Free-form latency (avg ± min/max)</div>
+        <canvas id="chartFfLatency"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Free-form token usage (input / output)</div>
+        <canvas id="chartFfTokens"></canvas>
+      </div>
+      <div class="cmp-chart-card">
+        <div class="cmp-chart-title">Free-form estimated cost ($ / run)</div>
+        <canvas id="chartFfCost"></canvas>
+      </div>
+    </div>
+  </div>
+
   <div id="cmpMicStatus" style="font-size:11px;color:var(--muted);display:none"></div>
   <!-- legacy model check container kept for getSelectedCmpModels compatibility (filled by initCmpPanels) -->
   <div class="cmp-models" id="cmpModels" style="display:none"></div>
@@ -1197,8 +1247,7 @@
     <span style="font-size:11px;color:var(--muted);margin-left:4px" id="cmpToolbarMeta"></span>
   </div>
 
-  <div class="cmp-metrics" id="cmpMetrics"></div>
-
+  <!-- legacy tables kept for export/history fallbacks; not used by Intent/Freeform/Both panel UI -->
   <div class="cmp-table-wrap" id="cmpTableWrap" style="display:none">
     <table class="cmp-table">
       <thead>
@@ -1243,29 +1292,6 @@
       <thead id="cmpBatchHead"></thead>
       <tbody id="cmpBatchBody"></tbody>
     </table>
-  </div>
-
-  <div class="cmp-charts" id="cmpCharts">
-    <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Latency (avg ± min/max)</div>
-      <canvas id="chartLatency"></canvas>
-    </div>
-    <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Token usage (input / output)</div>
-      <canvas id="chartTokens"></canvas>
-    </div>
-    <div class="cmp-chart-card">
-      <div class="cmp-chart-title">Estimated cost ($ / run)</div>
-      <canvas id="chartCost"></canvas>
-    </div>
-    <div class="cmp-chart-card" id="cardAccuracy">
-      <div class="cmp-chart-title">Noise robustness — Intent accuracy & Transcript accuracy (1-WER)</div>
-      <canvas id="chartAccuracy"></canvas>
-    </div>
-    <div class="cmp-chart-card" id="cardAccuracyTrend" style="grid-column:1 / -1">
-      <div class="cmp-chart-title">Per-run accuracy (stability under noise)</div>
-      <canvas id="chartAccuracyTrend"></canvas>
-    </div>
   </div>
 
       <div class="cmp-summary" id="cmpSummaryBox">
@@ -2315,11 +2341,9 @@ async function getAudioFileDurationSeconds(file) {
       { group: "clean", label: "Unsafe (shorter)", kind: "audio", value: "unsafe_temiz_kisa.mp3", expected: "I am not safe." },
 
       { group: "noisy", label: "Safe(1s noise)", kind: "audio", value: "1s gurultu_safe.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert." },
-      { group: "noisy", label: "Safe(constant, high noise)", kind: "audio", value: "safe_sabit_yuksek_gurultu.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert." },
       { group: "noisy", label: "Delayed(1s noise)", kind: "audio", value: "delayed_1sgurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
       { group: "noisy", label: "Delayed(noisy end)", kind: "audio", value: "delayed_sonu_gurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here." },
       { group: 'noisy', label: 'Unsafe_shorter(instantaneous noise)', kind: 'audio', value: 'unsafe_anlik.wav', expected: "I am not safe." },
-      { group: "noisy", label: "Unsafe(injured, high noise)", kind: "audio", value: "unsafe(injured)_test + noise.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
       { group: "noisy", label: "Unsafe(injured, -5dB noise)", kind: "audio", value: "unsafe(injured)_test + noise -5db.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
       { group: 'noisy', label: 'Unsafe(injured, variable noise)', kind: 'audio', value: 'unsafe(injured)_test+ degisken gurultu.wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
       { group: 'noisy', label: 'Unsafe(injured, speech +5dB)', kind: 'audio', value: 'unsafe(injured)_test_(speech+5db).wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good." },
@@ -2619,12 +2643,6 @@ let cmpBatchData = null; // { mode:'batch', models, scenarios, rows, metrics, ti
         groundTruth: "I am not okay.",
         expectedIntent: "REQUEST_HUMAN"
       },
-      "not_okay_full": {
-        label: "Not Okay - Full Noise",
-        audioFile: "Im_not_okay_ful_gürültü.mp3",
-        groundTruth: "I am not okay.",
-        expectedIntent: "REQUEST_HUMAN"
-      },
       "fell_down": {
         label: "Fell Down (Noisy)",
         audioFile: "Everything is fine I just fell down but I'm okay I promise_gürültü.mp3",
@@ -2695,11 +2713,9 @@ let cmpBatchData = null; // { mode:'batch', models, scenarios, rows, metrics, ti
       { group: "clean", label: "Unsafe (injured)", kind: "audio", value: "unsafe(injured)_test.mp3", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good.", expectedIntent: "REQUEST_HUMAN" },
       { group: "clean", label: "Unsafe (shorter)", kind: "audio", value: "unsafe_temiz_kisa.mp3", expected: "I am not safe.", expectedIntent: "REQUEST_HUMAN" },
       { group: "noisy", label: "Safe(1s noise)", kind: "audio", value: "1s gurultu_safe.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert.", expectedIntent: "SAFE_CONFIRMATION" },
-      { group: "noisy", label: "Safe(constant, high noise)", kind: "audio", value: "safe_sabit_yuksek_gurultu.wav", expected: "Hi, yeah, I'm completely fine. I just stepped away from my radio for a few minutes and didn't hear the check-in alert.", expectedIntent: "SAFE_CONFIRMATION" },
       { group: "noisy", label: "Delayed(1s noise)", kind: "audio", value: "delayed_1sgurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here.", expectedIntent: "DELAYED_CHECKIN" },
       { group: "noisy", label: "Delayed(noisy end)", kind: "audio", value: "delayed_sonu_gurultu.wav", expected: "I'm okay, but I'm running a bit behind on this side. I think I'll need about another thirty minutes to finish up here.", expectedIntent: "DELAYED_CHECKIN" },
       { group: 'noisy', label: 'Unsafe_shorter(instantaneous noise)', kind: 'audio', value: 'unsafe_anlik.wav', expected: "I am not safe.", expectedIntent: "REQUEST_HUMAN" },
-      { group: "noisy", label: "Unsafe(injured, high noise)", kind: "audio", value: "unsafe(injured)_test + noise.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good.", expectedIntent: "REQUEST_HUMAN" },
       { group: "noisy", label: "Unsafe(injured, -5dB noise)", kind: "audio", value: "unsafe(injured)_test + noise -5db.wav", expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good.", expectedIntent: "REQUEST_HUMAN" },
       { group: 'noisy', label: 'Unsafe(injured, variable noise)', kind: 'audio', value: 'unsafe(injured)_test+ degisken gurultu.wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good.", expectedIntent: "REQUEST_HUMAN" },
       { group: 'noisy', label: 'Unsafe(injured, speech +5dB)', kind: 'audio', value: 'unsafe(injured)_test_(speech+5db).wav', expected: "I'm mostly all right. I feel good. I am safe, but I slipped on the ramp earlier, and my ankle is really hurting. I can barely put weight on it. All good.", expectedIntent: "REQUEST_HUMAN" },
@@ -2831,8 +2847,12 @@ function clearCmpAccumulated(keepModeUi) {
   document.getElementById('cmpSplitWrap').classList.remove('show');
   document.getElementById('cmpBatchTableWrap').classList.remove('show');
   document.getElementById('cmpCharts').classList.remove('show');
+  const chartsFf = document.getElementById('cmpChartsFreeform');
+  if (chartsFf) chartsFf.classList.remove('show');
   document.getElementById('cmpSummaryBox').classList.remove('show');
   document.getElementById('cmpMetrics').classList.remove('show');
+  const metricsFf = document.getElementById('cmpMetricsFreeform');
+  if (metricsFf) { metricsFf.classList.remove('show'); metricsFf.innerHTML = ''; }
   document.getElementById('cmpToolbar').classList.remove('show');
   const tbody = document.getElementById('cmpTableBody');
   if (tbody) tbody.innerHTML = '';
@@ -2840,12 +2860,54 @@ function clearCmpAccumulated(keepModeUi) {
   document.getElementById('cmpSplitBody').innerHTML = '';
   const emptyEl = document.getElementById('cmpEmpty');
   if (emptyEl) emptyEl.style.display = 'block';
-  const panelsEl = document.getElementById('cmpPanels');
-  if (panelsEl) panelsEl.style.display = compareMode === 'intent' ? 'flex' : 'none';
-  CMP_MODEL_ORDER.forEach(m => renderPanelRuns(m, null));
+  CMP_MODEL_ORDER.forEach(m => {
+    renderPanelRuns(m, null);
+    renderFreeformPanelRuns(m, null);
+  });
+  updateCompareResultsLayout();
   if (!keepModeUi) {
     const status = document.getElementById('cmpMicStatus');
     if (status) status.textContent = 'Results cleared.';
+  }
+}
+
+/** Show/hide Intent vs Freeform result sections to match compareMode. */
+function updateCompareResultsLayout() {
+  const mode = compareMode;
+  const intentSec = document.getElementById('cmpSectionIntent');
+  const ffSec = document.getElementById('cmpSectionFreeform');
+  const panels = document.getElementById('cmpPanels');
+  const ffPanels = document.getElementById('cmpPanelsFreeform');
+  const headingI = document.getElementById('cmpHeadingIntent');
+  const headingF = document.getElementById('cmpHeadingFreeform');
+  const charts = document.getElementById('cmpCharts');
+  const chartsFf = document.getElementById('cmpChartsFreeform');
+
+  document.getElementById('cmpFreeformTableWrap').classList.remove('show');
+  document.getElementById('cmpSplitWrap').classList.remove('show');
+  document.getElementById('cmpTableWrap').classList.remove('show');
+
+  if (mode === 'intent') {
+    if (intentSec) intentSec.style.display = '';
+    if (ffSec) ffSec.style.display = 'none';
+    if (panels) panels.style.display = 'flex';
+    if (headingI) headingI.style.display = 'none';
+    if (headingF) headingF.style.display = 'none';
+    if (chartsFf) chartsFf.classList.remove('show');
+  } else if (mode === 'freeform') {
+    if (intentSec) intentSec.style.display = 'none';
+    if (ffSec) ffSec.style.display = '';
+    if (ffPanels) ffPanels.style.display = 'flex';
+    if (headingI) headingI.style.display = 'none';
+    if (headingF) headingF.style.display = 'none';
+    if (charts) charts.classList.remove('show');
+  } else {
+    if (intentSec) intentSec.style.display = '';
+    if (ffSec) ffSec.style.display = '';
+    if (panels) panels.style.display = 'flex';
+    if (ffPanels) ffPanels.style.display = 'flex';
+    if (headingI) headingI.style.display = '';
+    if (headingF) headingF.style.display = '';
   }
 }
 
@@ -2855,8 +2917,7 @@ function setCompareMode(mode) {
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('mode-' + mode).classList.add('active');
   clearCmpAccumulated(true);
-  const panelsEl = document.getElementById('cmpPanels');
-  if (panelsEl) panelsEl.style.display = mode === 'intent' ? 'flex' : 'none';
+  updateCompareResultsLayout();
 }
 
 function avgArr(arr) {
@@ -2992,6 +3053,8 @@ function mergeFreeformRun(existing, next) {
     output_tokens: next && next.avg_output_tokens,
     cost: next && next.est_cost,
     error: next && next.error,
+    transcript: next && (next.transcript || next.input_transcript) || null,
+    input_transcript: next && (next.input_transcript || next.transcript) || null,
   }];
   const runs = prevRuns.concat(newRuns).map((r, i) => Object.assign({}, r, { run: i + 1 }));
   const okRuns = runs.filter(r => r.ok);
@@ -3010,11 +3073,13 @@ function mergeFreeformRun(existing, next) {
   const costs = okRuns.map(r => r.cost || 0);
   const avgInput = avgArr(inputTokens);
   const avgOutput = avgArr(outputTokens);
+  const lastOk = okRuns[okRuns.length - 1];
   return {
     ok: true,
     model,
     label,
-    last_response: okRuns[okRuns.length - 1].response,
+    last_response: lastOk.response,
+    transcript: lastOk.transcript || lastOk.input_transcript || (next && next.transcript) || (existing && existing.transcript) || null,
     avg_latency: Math.round(avgArr(latencies)),
     min_latency: Math.min(...latencies),
     max_latency: Math.max(...latencies),
@@ -3208,11 +3273,125 @@ function initCmpPanels() {
   if (legacy) legacy.innerHTML = '';
 }
 
+/** Freeform result panels — same card chrome as Intent, response-focused (no intent/accuracy lines). */
+function initCmpPanelsFreeform() {
+  const wrap = document.getElementById('cmpPanelsFreeform');
+  if (!wrap) return;
+  wrap.innerHTML = CMP_MODEL_ORDER.map(modelId => {
+    const meta = CMP_MODEL_META[modelId] || { label: modelId, color: '#58a6ff' };
+    const engine = panelSttEngine(modelId);
+    const badgeCls = engine === 'gemini' ? 'gemini' : 'deepgram';
+    const badgeText = engine === 'gemini' ? 'STT: Gemini Live' : 'STT: Deepgram Nova-3';
+    ensurePanelState(modelId);
+    const domId = modelDomId(modelId);
+    const enabled = ensurePanelState(modelId).enabled !== false;
+    return `<div class="cmp-panel${enabled ? '' : ' disabled'}" id="cmp-ff-panel-${domId}" data-model="${modelId}">
+      <div class="cmp-panel-header">
+        <label>
+          <input type="checkbox" class="cmp-panel-enable-ff" data-model="${modelId}" ${enabled ? 'checked' : ''} onchange="onPanelEnableChange('${modelId}', this.checked)">
+          <span class="cmp-dot" style="background:${meta.color}"></span>
+          ${meta.label}${engine === 'gemini' ? ' <span class="cmp-mode-badge live">🔴 Live</span>' : ''}
+        </label>
+        <span class="cmp-panel-stt-badge ${badgeCls}">${badgeText}</span>
+      </div>
+      <div class="cmp-panel-body">
+        <div class="cmp-panel-status" id="ffPanelStatus-${domId}"></div>
+      </div>
+      <div class="cmp-panel-results">
+        <div class="cmp-panel-results-title">Run results</div>
+        <div id="ffPanelRuns-${domId}"><div class="cmp-panel-run-empty">No runs yet — select a source and press Run.</div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function setFreeformPanelStatus(modelId, text) {
+  const el = document.getElementById('ffPanelStatus-' + modelDomId(modelId));
+  if (el) el.textContent = text || '';
+}
+
+function renderFreeformPanelRuns(modelId, data) {
+  const el = document.getElementById('ffPanelRuns-' + modelDomId(modelId));
+  if (!el) return;
+  if (!data) {
+    el.innerHTML = `<div class="cmp-panel-run-empty">No runs yet — select a source and press Run.</div>`;
+    return;
+  }
+  const runs = data.runs || [];
+  if (!data.ok && !runs.length) {
+    el.innerHTML = `<div class="cmp-panel-run-empty" style="color:var(--danger)">${formatErrorDetailHtml(data.error_detail, data.error || 'Run failed')}</div>`;
+    return;
+  }
+  if (!runs.length) {
+    el.innerHTML = `<div class="cmp-panel-run-empty">No runs yet.</div>`;
+    return;
+  }
+  const isGemini = String(modelId).startsWith('gemini');
+  const rowsHtml = runs.map((r, idx) => {
+    if (!r.ok) {
+      return `<div class="cmp-panel-run open"><div class="cmp-panel-run-main" onclick="this.parentElement.classList.toggle('open')">
+        <span>#${r.run || idx + 1}</span>
+        <span style="color:var(--danger)">ERROR${r.error_detail && r.error_detail.stage ? ' [' + escapeHtml(r.error_detail.stage) + ']' : ''}</span>
+        <span></span>
+      </div>
+        <div class="cmp-panel-run-bd">${formatErrorDetailHtml(r.error_detail, r.error || '')}</div></div>`;
+    }
+    const total = Math.round(Number(r.latency) || 0);
+    const inTok = r.input_tokens != null ? r.input_tokens : '—';
+    const outTok = r.output_tokens != null ? r.output_tokens : '—';
+    const dgCost = r.deepgram_cost != null ? r.deepgram_cost
+      : (ensurePanelState(modelId).deepgramCost != null ? ensurePanelState(modelId).deepgramCost
+        : (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost));
+    const costHtml = formatCostBreakdownHtml(resolveLlmCost(r), isGemini ? null : dgCost);
+    const responseText = String(r.response || '').trim();
+    const tx = (r.transcript || r.input_transcript || '').trim();
+    const txLine = tx
+      ? `<div class="cmp-panel-run-tx">Run ${r.run}: ${total}ms | "${escapeHtml(tx)}"</div>`
+      : '';
+    const txPart = tx ? `<br>Transcript: "${escapeHtml(tx)}"` : '';
+    const bd = `Total Latency: ${total}ms | Tokens: ${inTok}/${outTok} | Cost: ${costHtml}${txPart}<br>Response: "${escapeHtml(responseText)}"`;
+    return `<div class="cmp-panel-run" id="ff-panel-run-${modelDomId(modelId)}-${r.run}">
+      <div class="cmp-panel-run-main" onclick="this.parentElement.classList.toggle('open')">
+        <span>#${r.run}</span>
+        <span>Total: ${total}ms</span>
+        <span></span>
+      </div>
+      ${txLine}
+      <div class="cmp-panel-run-bd">${bd}</div>
+    </div>`;
+  }).join('');
+
+  const okRuns = runs.filter(r => r.ok);
+  let avgHtml = '';
+  if (okRuns.length) {
+    const n = okRuns.length;
+    const avgTotal = Math.round(okRuns.reduce((s, r) => s + (Number(r.latency) || 0), 0) / n);
+    data.avg_latency = avgTotal;
+    data.min_latency = Math.min(...okRuns.map(r => Number(r.latency) || 0));
+    data.max_latency = Math.max(...okRuns.map(r => Number(r.latency) || 0));
+    const avgIn = Math.round(okRuns.reduce((s, r) => s + (Number(r.input_tokens) || 0), 0) / n);
+    const avgOut = Math.round(okRuns.reduce((s, r) => s + (Number(r.output_tokens) || 0), 0) / n);
+    const dgCost = (okRuns.find(r => r.deepgram_cost != null) || {}).deepgram_cost
+      ?? ensurePanelState(modelId).deepgramCost
+      ?? (cmpSharedDeepgramMeta && cmpSharedDeepgramMeta.deepgram_cost);
+    const llmCost = okRuns.reduce((s, r) => s + resolveLlmCost(r), 0) / n;
+    const costHtml = formatCostBreakdownHtml(llmCost, isGemini ? null : dgCost);
+    avgHtml = `<div class="cmp-panel-run-avg">Average — Total: ${avgTotal}ms | Tokens: ${avgIn}/${avgOut} | Cost: ${costHtml}</div>`;
+  }
+  el.innerHTML = rowsHtml + avgHtml;
+}
+
 function onPanelEnableChange(modelId, checked) {
   const st = ensurePanelState(modelId);
   st.enabled = !!checked;
   const panel = document.getElementById('cmp-panel-' + modelDomId(modelId));
   if (panel) panel.classList.toggle('disabled', !checked);
+  const ffPanel = document.getElementById('cmp-ff-panel-' + modelDomId(modelId));
+  if (ffPanel) ffPanel.classList.toggle('disabled', !checked);
+  // Keep enable checkboxes in sync across Intent / Freeform panel sets
+  document.querySelectorAll('.cmp-panel-enable[data-model="' + modelId + '"], .cmp-panel-enable-ff[data-model="' + modelId + '"]').forEach(function (input) {
+    input.checked = !!checked;
+  });
 }
 
 function onPanelTranscriptInput(modelId, value) {
@@ -3854,14 +4033,27 @@ function renderPanelRuns(modelId, data) {
 function refreshAllPanelRuns() {
   getSelectedCmpModels().concat(CMP_MODEL_ORDER).filter((v, i, a) => a.indexOf(v) === i).forEach(m => {
     renderPanelRuns(m, cmpResults[m]);
+    renderFreeformPanelRuns(m, cmpFreeformResults[m]);
   });
   updateTranscriptDiffWarningFromPanels();
-  const chartsEl = document.getElementById('cmpCharts');
-  if (chartsEl && chartsEl.classList.contains('show')) {
-    renderCmpCharts(compareMode === 'freeform' ? cmpFreeformResults : cmpResults);
+  if (compareMode === 'freeform') {
+    const chartsFf = document.getElementById('cmpChartsFreeform');
+    if (chartsFf && chartsFf.classList.contains('show')) {
+      renderCmpCharts(cmpFreeformResults, { hideAccuracy: true, target: 'freeform' });
+    }
+  } else if (compareMode === 'both') {
+    const chartsEl = document.getElementById('cmpCharts');
+    const chartsFf = document.getElementById('cmpChartsFreeform');
+    if (chartsEl && chartsEl.classList.contains('show')) renderCmpCharts(cmpResults, { target: 'intent' });
+    if (chartsFf && chartsFf.classList.contains('show')) renderCmpCharts(cmpFreeformResults, { hideAccuracy: true, target: 'freeform' });
+  } else {
+    const chartsEl = document.getElementById('cmpCharts');
+    if (chartsEl && chartsEl.classList.contains('show')) {
+      renderCmpCharts(cmpResults);
+    }
   }
   const box = document.getElementById('cmpSummaryBox');
-  if (box && box.classList.contains('show') && compareMode !== 'freeform' && compareMode !== 'batch') {
+  if (box && box.classList.contains('show') && compareMode !== 'batch') {
     renderCmpSummaryText({
       results: cmpResults,
       freeformResults: cmpFreeformResults,
@@ -3873,6 +4065,8 @@ function refreshAllPanelRuns() {
 
 function initModelAudioUploads() {
   initCmpPanels();
+  initCmpPanelsFreeform();
+  updateCompareResultsLayout();
       loadCmpScenarios();
     }
 
@@ -4579,10 +4773,10 @@ function buildFreeformSummary(results) {
   const ok = orderedCmpResults(results).filter(r => r.ok);
   if (!ok.length) return ['No model produced a successful free-form response.'];
   const fastest = ok.reduce((a, b) => a.avg_latency <= b.avg_latency ? a : b);
-  const cheap = ok.reduce((a, b) => a.est_cost <= b.est_cost ? a : b);
+  const cheap = ok.reduce((a, b) => (Number(a.est_cost) || 0) <= (Number(b.est_cost) || 0) ? a : b);
   return [
-    `Fastest free-form: <strong>${fastest.label}</strong> (${fmtMs(fastest.avg_latency)})`,
-    `Cheapest free-form: <strong>${cheap.label}</strong> (${fmtCost(cheap.est_cost)} / run)`,
+    `Best Latency: <strong>${fastest.label}</strong> (${fmtMs(fastest.avg_latency)})`,
+    `Best Cost: <strong>${cheap.label}</strong> (${fmtCost(cheap.est_cost)} / run)`,
   ];
 }
 
@@ -5194,6 +5388,107 @@ function renderCmpMetrics(metrics, models) {
   el.classList.add('show');
 }
 
+function wordOrCharLength(text) {
+  const t = String(text || '').trim();
+  if (!t) return 0;
+  const words = t.split(/\s+/).filter(Boolean);
+  return words.length || t.length;
+}
+
+function stdDev(arr) {
+  if (!arr.length) return 0;
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const v = arr.reduce((s, x) => s + Math.pow(x - mean, 2), 0) / arr.length;
+  return Math.sqrt(v);
+}
+
+/** Freeform-only metric cards: length consistency, avg response time, cost consistency. */
+function computeFreeformMetrics(results) {
+  const metrics = {};
+  orderedCmpResults(results).forEach(function (data) {
+    if (!data || !data.model) return;
+    const meta = CMP_MODEL_META[data.model] || { label: data.model };
+    const okRuns = (data.runs || []).filter(r => r && r.ok);
+    const lengths = okRuns.map(r => wordOrCharLength(r.response));
+    const costs = okRuns.map(r => Number(r.cost != null ? r.cost : r.llm_cost) || 0);
+    const avgLen = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : null;
+    const lenSd = lengths.length ? stdDev(lengths) : null;
+    const cv = (avgLen && avgLen > 0 && lenSd != null) ? (lenSd / avgLen) : null;
+    let lengthLabel = '—';
+    let lengthCls = '';
+    if (cv != null) {
+      if (cv <= 0.15) { lengthLabel = 'High'; lengthCls = 'good'; }
+      else if (cv <= 0.35) { lengthLabel = 'Medium'; lengthCls = 'warn'; }
+      else { lengthLabel = 'Low'; lengthCls = 'bad'; }
+    }
+    const avgCost = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : null;
+    const minCost = costs.length ? Math.min.apply(null, costs) : null;
+    const maxCost = costs.length ? Math.max.apply(null, costs) : null;
+    const costSpread = (minCost != null && maxCost != null) ? (maxCost - minCost) : null;
+    metrics[data.model] = {
+      model: data.model,
+      label: data.label || meta.label,
+      length_label: lengthLabel,
+      length_cls: lengthCls,
+      avg_length: avgLen != null ? Math.round(avgLen) : null,
+      avg_latency: data.avg_latency != null ? data.avg_latency : (okRuns.length ? Math.round(okRuns.reduce((s, r) => s + (Number(r.latency) || 0), 0) / okRuns.length) : null),
+      avg_cost: avgCost,
+      cost_spread: costSpread,
+      min_cost: minCost,
+      max_cost: maxCost,
+    };
+  });
+  return metrics;
+}
+
+function renderCmpFreeformMetrics(metrics, models) {
+  const el = document.getElementById('cmpMetricsFreeform');
+  if (!el) return;
+  if (!metrics || !models.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+
+  const cards = [
+    {
+      title: 'Response Length Consistency',
+      sub: 'Word-count stability across runs',
+      render: (m) => m.avg_length == null ? '—' : `${m.length_label} <span style="color:var(--muted);font-weight:400">(avg ${m.avg_length} words)</span>`,
+      cls: (m) => m.length_cls || '',
+    },
+    {
+      title: 'Avg Response Time',
+      sub: 'Mean total latency',
+      render: (m) => m.avg_latency == null ? '—' : fmtMs(m.avg_latency),
+      cls: (m) => m.avg_latency == null ? '' : (m.avg_latency <= 1200 ? 'good' : m.avg_latency <= 2500 ? 'warn' : 'bad'),
+    },
+    {
+      title: 'Cost Consistency',
+      sub: 'Avg cost ± min/max spread',
+      render: (m) => {
+        if (m.avg_cost == null) return '—';
+        const spread = m.cost_spread != null ? m.cost_spread : 0;
+        return `${fmtCost(m.avg_cost)} (±${fmtCost(spread / 2)})`;
+      },
+      cls: (m) => {
+        if (m.avg_cost == null || m.cost_spread == null) return '';
+        const rel = m.avg_cost > 0 ? (m.cost_spread / m.avg_cost) : 0;
+        return rel <= 0.2 ? 'good' : rel <= 0.5 ? 'warn' : 'bad';
+      },
+    },
+  ];
+
+  el.classList.add('cols-3');
+  el.innerHTML = cards.map(card => `
+    <div class="cmp-metric-card">
+      <div class="m-label">${card.title}${card.sub ? `<div style="font-weight:400;text-transform:none;letter-spacing:0;margin-top:2px;opacity:0.8">${card.sub}</div>` : ''}</div>
+      ${models.map(model => {
+        const m = metrics[model];
+        if (!m) return '';
+        return `<div class="cmp-metric-row"><span class="m-name">${m.label}</span><span class="m-val ${card.cls(m)}">${card.render(m)}</span></div>`;
+      }).join('')}
+    </div>
+  `).join('');
+  el.classList.add('show');
+}
+
 function buildBatchSummary(metrics, models) {
   const list = models.map(m => metrics[m]).filter(Boolean);
       if (!list.length) return ['Batch completed but no scorable results.'];
@@ -5370,6 +5665,7 @@ function restoreCompareModeUI(mode) {
   document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('active'); });
   const modeBtn = document.getElementById('mode-' + compareMode);
   if (modeBtn) modeBtn.classList.add('active');
+  updateCompareResultsLayout();
 }
 
     /**
@@ -5518,22 +5814,35 @@ function loadCmpHistory(idx) {
   const panelsEl = document.getElementById('cmpPanels');
   let chartResults = cmpResults;
   let chartOpts = {};
+  updateCompareResultsLayout();
 
   if (compareMode === 'freeform') {
-    if (panelsEl) panelsEl.style.display = 'none';
-      document.getElementById('cmpFreeformTableWrap').classList.add('show');
-    document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-        renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: '—' })
-      ).join('');
+    models.forEach(function(modelId) {
+      renderFreeformPanelRuns(modelId, cmpFreeformResults[modelId] || null);
+    });
     chartResults = cmpFreeformResults;
+    chartOpts = { hideAccuracy: true, target: 'freeform' };
+    renderCmpFreeformMetrics(computeFreeformMetrics(cmpFreeformResults), models);
   } else if (compareMode === 'both') {
-    if (panelsEl) panelsEl.style.display = 'none';
-      document.getElementById('cmpSplitWrap').classList.add('show');
-    document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-        renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
-      ).join('');
+    models.forEach(function(modelId) {
+      if (cmpResults[modelId]) renderPanelRuns(modelId, cmpResults[modelId]);
+      else renderPanelRuns(modelId, null);
+      renderFreeformPanelRuns(modelId, cmpFreeformResults[modelId] || null);
+    });
     chartResults = cmpResults;
-    } else {
+    chartOpts = { target: 'intent' };
+    if (expectedIntent) {
+      const row = {
+        text: entry.transcript || groundTruth || '',
+        category: '',
+        expected: expectedIntent,
+        models: {},
+      };
+      models.forEach(function(m) { row.models[m] = historyResults[m]; });
+      renderCmpMetrics(computeBatchMetrics(models, [row]), models);
+    }
+    renderCmpFreeformMetrics(computeFreeformMetrics(cmpFreeformResults), models);
+  } else {
     if (panelsEl) panelsEl.style.display = 'flex';
     models.forEach(function(modelId) {
       if (cmpResults[modelId]) renderPanelRuns(modelId, cmpResults[modelId]);
@@ -5559,8 +5868,15 @@ function loadCmpHistory(idx) {
     compareMode: compareMode,
     expected: expectedIntent,
   });
-  document.getElementById('cmpCharts').classList.add('show');
-  renderCmpCharts(chartResults, chartOpts);
+  if (compareMode === 'freeform') {
+    renderCmpCharts(cmpFreeformResults, { hideAccuracy: true, target: 'freeform' });
+  } else if (compareMode === 'both') {
+    renderCmpCharts(cmpResults, { target: 'intent' });
+    renderCmpCharts(cmpFreeformResults, { hideAccuracy: true, target: 'freeform' });
+  } else {
+    document.getElementById('cmpCharts').classList.add('show');
+    renderCmpCharts(chartResults, chartOpts);
+  }
 
       // 9. Batch table handled above
 
@@ -5820,6 +6136,72 @@ function getModelAudioFile(modelId) {
   return st.audioFile || null;
 }
 
+/** Attach the STT text this freeform call used onto each run (Intent parity). */
+function stampFreeformRunTranscripts(row, transcript) {
+  const tx = (transcript || '').trim();
+  if (!row || !tx) return row;
+  row.transcript = row.transcript || tx;
+  if (Array.isArray(row.runs)) {
+    row.runs.forEach(r => {
+      if (!r) return;
+      if (!(r.transcript || r.input_transcript)) {
+        r.transcript = tx;
+        r.input_transcript = tx;
+      }
+    });
+  }
+  return row;
+}
+
+/**
+ * Per-model STT for freeform/both: Claude → Deepgram, Gemini → Live STT (same as Intent).
+ * Updates panel transcript state so Both-mode freeform can reuse Intent's STT text.
+ */
+async function sttTranscriptForCompareModel(modelId, fallbackTranscript, setStatus) {
+  const st = ensurePanelState(modelId);
+  let tx = (st.transcript || fallbackTranscript || '').trim();
+  const file = st.audioFile || getModelAudioFile(modelId);
+  if (!file) {
+    if (!tx) throw makeCompareClientError('No transcript and no audio source selected', null, 'STT');
+    return tx;
+  }
+  const status = typeof setStatus === 'function' ? setStatus : function () {};
+  if (panelSttEngine(modelId) === 'gemini') {
+    status(modelId, 'Run STT (Gemini Live)...');
+    const buf = await file.arrayBuffer();
+    const res = await fetch('/compare-gemini-stt?model=' + encodeURIComponent(modelId), {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'audio/wav', 'X-Compare-Model': modelId },
+      body: buf,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.transcript) {
+      throw makeCompareClientError(
+        data.error || 'Gemini STT returned empty transcript',
+        data.error_detail,
+        'STT'
+      );
+    }
+    tx = data.transcript.trim();
+    st.sttMs = data.sttMs;
+    st.sttEngine = 'gemini';
+  } else {
+    status(modelId, 'Run STT (Deepgram)...');
+    const sttRes = await compareAudioStt(file, st.durationSec);
+    tx = (sttRes.transcript || '').trim();
+    st.sttMs = sttRes.sttMs;
+    st.convertMs = sttRes.convertMs != null ? sttRes.convertMs : 0;
+    if (typeof sttRes.confidence === 'number') st.sttConfidence = sttRes.confidence;
+    st.sttEngine = 'deepgram';
+    if (sttRes.duration_sec != null) st.durationSec = sttRes.duration_sec;
+    if (sttRes.deepgram_cost != null) st.deepgramCost = sttRes.deepgram_cost;
+  }
+  if (!tx) throw makeCompareClientError('STT transcript is empty', null, 'STT');
+  st.transcript = tx;
+  updatePanelSttUI(modelId);
+  return tx;
+}
+
 /**
  * Per-model compare run. Each Claude/Gemini model runs its OWN STT when audio is present
  * (no shared Deepgram across Haiku/Sonnet — realistic end-to-end latency).
@@ -5937,14 +6319,35 @@ function destroyCmpCharts() {
 
 function renderCmpCharts(results, opts) {
   opts = opts || {};
-  destroyCmpCharts();
+  const hideAccuracy = !!opts.hideAccuracy || compareMode === 'freeform';
+  const target = opts.target || 'intent'; // 'intent' | 'freeform'
+  const ids = target === 'freeform'
+    ? { latency: 'chartFfLatency', tokens: 'chartFfTokens', cost: 'chartFfCost', chartsWrap: 'cmpChartsFreeform' }
+    : { latency: 'chartLatency', tokens: 'chartTokens', cost: 'chartCost', chartsWrap: 'cmpCharts' };
+
+  // Only wipe charts for this target namespace
+  Object.keys(cmpCharts).forEach(function (key) {
+    if (target === 'freeform' ? key.indexOf('ff') === 0 : key.indexOf('ff') !== 0) {
+      try { cmpCharts[key].destroy(); } catch (e) {}
+      delete cmpCharts[key];
+    }
+  });
+
   const ok = orderedCmpResults(results).filter(r => r.ok);
-  if (!ok.length || typeof Chart === 'undefined') return;
+  const wrap = document.getElementById(ids.chartsWrap);
+  if (!ok.length || typeof Chart === 'undefined') {
+    if (wrap) wrap.classList.remove('show');
+    return;
+  }
+  if (wrap) wrap.classList.add('show');
 
   const labels = ok.map(r => r.label);
   const colors = ok.map(r => (CMP_MODEL_META[r.model] || {}).color || '#58a6ff');
+  const keyPrefix = target === 'freeform' ? 'ff' : '';
 
-  cmpCharts.latency = new Chart(document.getElementById('chartLatency'), {
+  const latEl = document.getElementById(ids.latency);
+  if (latEl) {
+  cmpCharts[keyPrefix + 'latency'] = new Chart(latEl, {
     type: 'bar',
     data: {
       labels,
@@ -6001,8 +6404,11 @@ function renderCmpCharts(results, opts) {
       }
     }]
   });
+  }
 
-  cmpCharts.tokens = new Chart(document.getElementById('chartTokens'), {
+  const tokEl = document.getElementById(ids.tokens);
+  if (tokEl) {
+  cmpCharts[keyPrefix + 'tokens'] = new Chart(tokEl, {
     type: 'bar',
     data: {
       labels,
@@ -6020,8 +6426,11 @@ function renderCmpCharts(results, opts) {
       plugins: { legend: { labels: { color: '#7d8590' } } }
     }
   });
+  }
 
-  cmpCharts.cost = new Chart(document.getElementById('chartCost'), {
+  const costEl = document.getElementById(ids.cost);
+  if (costEl) {
+  cmpCharts[keyPrefix + 'cost'] = new Chart(costEl, {
     type: 'bar',
     data: {
       labels,
@@ -6045,6 +6454,15 @@ function renderCmpCharts(results, opts) {
       }
     }
   });
+  }
+
+  if (target === 'freeform' || hideAccuracy) {
+    const accCard = document.getElementById('cardAccuracy');
+    const trendCard = document.getElementById('cardAccuracyTrend');
+    if (accCard) accCard.style.display = 'none';
+    if (trendCard) trendCard.style.display = 'none';
+    return;
+  }
 
   // Latency / tokens / cost always render above — accuracy only when expected or WER ref exists
   const acc = computeAccuracyStats(results);
@@ -6274,9 +6692,14 @@ async function runComparisonSeries(seriesCount) {
       showCmpProgress(seriesIdx, seriesCount, seriesLabel);
 
       if (compareMode === 'intent') {
+        updateCompareResultsLayout();
         document.getElementById('cmpTableWrap').classList.remove('show');
         document.getElementById('cmpFreeformTableWrap').classList.remove('show');
         document.getElementById('cmpSplitWrap').classList.remove('show');
+        const metricsFf = document.getElementById('cmpMetricsFreeform');
+        if (metricsFf) { metricsFf.classList.remove('show'); metricsFf.innerHTML = ''; }
+        const chartsFf = document.getElementById('cmpChartsFreeform');
+        if (chartsFf) chartsFf.classList.remove('show');
         const panelsEl = document.getElementById('cmpPanels');
         if (panelsEl) panelsEl.style.display = 'flex';
 
@@ -6366,38 +6789,34 @@ async function runComparisonSeries(seriesCount) {
           renderCmpMetrics(computeBatchMetrics(models, [row]), models);
         }
       } else if (compareMode === 'freeform') {
-        const panelsEl = document.getElementById('cmpPanels');
-        if (panelsEl) panelsEl.style.display = 'none';
+        updateCompareResultsLayout();
         transcript = firstTx;
-        document.getElementById('cmpFreeformTableWrap').classList.add('show');
-        document.getElementById('cmpTableWrap').classList.remove('show');
-        document.getElementById('cmpSplitWrap').classList.remove('show');
-        document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-          cmpFreeformResults[m] && cmpFreeformResults[m].ok
-            ? renderCmpFreeformRow(m, cmpFreeformResults[m])
-            : `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</td></tr>`
-        ).join('');
+        models.forEach(m => {
+          setFreeformPanelStatus(m, seriesLabel);
+          if (cmpFreeformResults[m]) renderFreeformPanelRuns(m, cmpFreeformResults[m]);
+        });
 
         const claudeModels = models.filter(m => String(m).startsWith('claude'));
         const otherModels = models.filter(m => !String(m).startsWith('claude'));
 
         async function runOneFreeform(model) {
           if (cmpStopFlag) return;
+          setFreeformPanelStatus(model, 'Running...');
           try {
-          let ffTranscript = transcript;
-          // Per-model STT when audio is present (Claude and Gemini alike — no shared Deepgram)
-          const file = getModelAudioFile(model);
-          if (file) {
-            const stt = await compareAudioStt(file);
-            ffTranscript = stt.transcript;
-          } else if (!ffTranscript) {
-            throw makeCompareClientError('No transcript and no audio source selected', null, 'STT');
-          }
-          const fresh = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
-          cmpFreeformResults[model] = mergeFreeformRun(
-            cmpFreeformResults[model],
-            fresh[model] || { ok: false, error: 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model }
+          // Per-model STT each series run (Claude → Deepgram, Gemini → Live) — Intent parity
+          const ffTranscript = await sttTranscriptForCompareModel(
+            model,
+            transcript,
+            function (m, msg) { setFreeformPanelStatus(m, msg); }
           );
+          const fresh = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
+          const stamped = stampFreeformRunTranscripts(
+            fresh[model] || { ok: false, error: 'No result', model, label: (CMP_MODEL_META[model] || {}).label || model },
+            ffTranscript
+          );
+          cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], stamped);
+          setFreeformPanelStatus(model, cmpFreeformResults[model] && cmpFreeformResults[model].ok === false
+            ? ('Error: ' + (cmpFreeformResults[model].error || 'failed')) : 'Done');
           } catch (e) {
             console.error('[Run Error]', model, 'run', nextRunNum, e);
             const detail = e.error_detail || { stage: 'LLM', message: e.message || String(e) };
@@ -6409,12 +6828,9 @@ async function runComparisonSeries(seriesCount) {
               label: (CMP_MODEL_META[model] || {}).label || model,
               runs: [{ run: 1, ok: false, error: detail.message, error_detail: detail }],
             });
+            setFreeformPanelStatus(model, 'Error' + (detail.stage ? ' [' + detail.stage + ']' : '') + ': ' + (detail.message || e.message));
           }
-          document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-            cmpFreeformResults[m]
-              ? renderCmpFreeformRow(m, cmpFreeformResults[m])
-              : `<tr class="loading"><td colspan="7"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</td></tr>`
-          ).join('');
+          renderFreeformPanelRuns(model, cmpFreeformResults[model]);
         }
 
         const orderedFf = otherModels.concat(claudeModels);
@@ -6428,18 +6844,17 @@ async function runComparisonSeries(seriesCount) {
             await new Promise(r => setTimeout(r, 5000));
           }
         }
-        document.getElementById('cmpFreeformBody').innerHTML = models.map(m =>
-          renderCmpFreeformRow(m, cmpFreeformResults[m] || { ok: false, error: 'No result', model: m, label: (CMP_MODEL_META[m] || {}).label || m })
-        ).join('');
+        models.forEach(m => renderFreeformPanelRuns(m, cmpFreeformResults[m] || null));
         chartResults = cmpFreeformResults;
+        chartOpts = { hideAccuracy: true, target: 'freeform' };
         summaryLines = buildFreeformSummary(cmpFreeformResults);
+        renderCmpFreeformMetrics(computeFreeformMetrics(cmpFreeformResults), models);
       } else {
-        document.getElementById('cmpSplitWrap').classList.add('show');
-        document.getElementById('cmpTableWrap').classList.remove('show');
-        document.getElementById('cmpFreeformTableWrap').classList.remove('show');
-        document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-          `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</div></div>`
-        ).join('');
+        updateCompareResultsLayout();
+        models.forEach(m => {
+          setPanelStatus(m, seriesLabel);
+          setFreeformPanelStatus(m, seriesLabel);
+        });
 
         const claudeModels = models.filter(m => String(m).startsWith('claude'));
         const otherModels = models.filter(m => !String(m).startsWith('claude'));
@@ -6447,6 +6862,7 @@ async function runComparisonSeries(seriesCount) {
         async function runOneBoth(model) {
           if (cmpStopFlag) return;
           let intentMap = {};
+          setPanelStatus(model, 'Running intent...');
           try {
             const single = await runSingleModelCompare(model, transcript, expected);
             intentMap[model] = single;
@@ -6462,22 +6878,32 @@ async function runComparisonSeries(seriesCount) {
               runs: [{ run: 1, ok: false, error: detail.message, error_detail: detail }],
             };
           }
-          // Freeform: per-model STT (reuse intent transcript from panel when no fresh audio STT needed)
+          // Freeform: reuse Intent panel transcript (already per-run STT including Gemini Live)
+          setFreeformPanelStatus(model, 'Running free-form...');
           try {
           let ffTranscript = (ensurePanelState(model).transcript || transcript || '').trim();
           const file = getModelAudioFile(model);
-          // Intent path already ran STT into panel transcript when audio present — reuse it
+          // If Intent skipped STT somehow, run the same per-model STT path
           if (!ffTranscript && file) {
             try {
-              const stt = await compareAudioStt(file);
-              ffTranscript = stt.transcript;
+              ffTranscript = await sttTranscriptForCompareModel(
+                model,
+                transcript,
+                function (m, msg) { setFreeformPanelStatus(m, msg); }
+              );
             } catch (e) {
               console.error('[Run Error]', model, 'run', nextRunNum, e);
             }
           }
           const freeformMap = await fetchCompareFreeformBatch(ffTranscript, [model], runs);
+          const stampedFf = stampFreeformRunTranscripts(
+            freeformMap[model] || { ok: false, error: 'No result', model },
+            ffTranscript
+          );
           cmpResults[model] = mergeIntentRun(cmpResults[model], intentMap[model] || { ok: false, error: 'No result', model }, expected);
-          cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], freeformMap[model] || { ok: false, error: 'No result', model });
+          cmpFreeformResults[model] = mergeFreeformRun(cmpFreeformResults[model], stampedFf);
+          setPanelStatus(model, cmpResults[model] && cmpResults[model].ok === false ? ('Error: ' + (cmpResults[model].error || 'failed')) : 'Done');
+          setFreeformPanelStatus(model, cmpFreeformResults[model] && cmpFreeformResults[model].ok === false ? ('Error: ' + (cmpFreeformResults[model].error || 'failed')) : 'Done');
           } catch (e) {
             console.error('[Run Error]', model, 'run', nextRunNum, e);
             const detail = e.error_detail || { stage: 'LLM', message: e.message || String(e) };
@@ -6486,12 +6912,11 @@ async function runComparisonSeries(seriesCount) {
               ok: false, error: detail.message, error_detail: detail, model,
               runs: [{ run: 1, ok: false, error: detail.message, error_detail: detail }],
             });
+            setPanelStatus(model, 'Done');
+            setFreeformPanelStatus(model, 'Error: ' + (detail.message || e.message));
           }
-          document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-            (cmpResults[m] || cmpFreeformResults[m])
-              ? renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
-              : `<div class="cmp-split-card"><div class="cmp-split-card-header"><span class="cmp-spinner"></span>${(CMP_MODEL_META[m] || {}).label || m} — ${seriesLabel}</div></div>`
-          ).join('');
+          renderPanelRuns(model, cmpResults[model]);
+          renderFreeformPanelRuns(model, cmpFreeformResults[model]);
         }
 
         const orderedBoth = otherModels.concat(claudeModels);
@@ -6506,10 +6931,12 @@ async function runComparisonSeries(seriesCount) {
           }
         }
 
-        document.getElementById('cmpSplitBody').innerHTML = models.map(m =>
-          renderCmpSplitCard(m, cmpResults[m], cmpFreeformResults[m])
-        ).join('');
+        models.forEach(m => {
+          renderPanelRuns(m, cmpResults[m] || null);
+          renderFreeformPanelRuns(m, cmpFreeformResults[m] || null);
+        });
         chartResults = cmpResults;
+        chartOpts = { target: 'intent' };
         summaryLines = buildBothSummary(cmpResults, cmpFreeformResults);
 
         if (expected) {
@@ -6517,6 +6944,7 @@ async function runComparisonSeries(seriesCount) {
           models.forEach(m => { row.models[m] = cmpResults[m]; });
           renderCmpMetrics(computeBatchMetrics(models, [row]), models);
         }
+        renderCmpFreeformMetrics(computeFreeformMetrics(cmpFreeformResults), models);
       }
 
       completedInSeries++;
@@ -6524,8 +6952,15 @@ async function runComparisonSeries(seriesCount) {
       // Update summary/charts after each run so user sees live results
       document.getElementById('cmpSummaryLines').innerHTML = summaryLines.map(l => `<div>${l}</div>`).join('');
       document.getElementById('cmpSummaryBox').classList.add('show');
-      document.getElementById('cmpCharts').classList.add('show');
-      renderCmpCharts(chartResults, chartOpts);
+      if (compareMode === 'freeform') {
+        renderCmpCharts(cmpFreeformResults, { hideAccuracy: true, target: 'freeform' });
+      } else if (compareMode === 'both') {
+        renderCmpCharts(cmpResults, { target: 'intent' });
+        renderCmpCharts(cmpFreeformResults, { hideAccuracy: true, target: 'freeform' });
+      } else {
+        document.getElementById('cmpCharts').classList.add('show');
+        renderCmpCharts(chartResults, chartOpts);
+      }
 
       const totalRunsShown = Math.max(
         1,
