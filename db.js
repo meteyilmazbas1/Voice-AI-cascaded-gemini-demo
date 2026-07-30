@@ -24,6 +24,7 @@ async function insertCallStart({ callSid, streamSid, workerPhone, startTime, mod
       start_time: startTime,
       model_used: modelUsed,
       session_state: 'ACTIVE',
+      instance_name: process.env.INSTANCE_NAME || null,
     },
     { onConflict: 'call_sid', ignoreDuplicates: true }   // eski "INSERT OR IGNORE"
   );
@@ -132,6 +133,16 @@ async function listComparisons(page, limit) {
   return { comparisons, total: count || 0, page, limit };
 }
 
+async function uploadRecording(callSid, buffer) {
+  const filePath = callSid + ".mp3";
+  const { error } = await supabase.storage
+    .from("recordings")
+    .upload(filePath, buffer, { contentType: "audio/mpeg", upsert: true });
+    if (error) { console.warn("[DB] uploadRecording:", error.message); return null; }
+    const { data } = supabase.storage.from("recordings").getPublicUrl(filePath);
+    return (data && data.publicUrl) || null;
+}
+
 module.exports = {
   insertCallStart,
   updateCallEnd,
@@ -142,4 +153,5 @@ module.exports = {
   getCallBySid,
   insertComparison,
   listComparisons,
+  uploadRecording,
 };

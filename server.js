@@ -98,7 +98,7 @@ app.use('/scenario_audio', function(req, res) {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl, insertComparison, listComparisons } = require('./db');
+const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl, insertComparison, listComparisons, uploadRecording } = require('./db');
 const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
 const { createRnnoise, preloadRnnoise, isRnnoiseReady } = require("./rnnoiseWrapper");
 const { createNoiseEstimator } = require("./noiseEstimator");
@@ -4131,7 +4131,9 @@ app.get('/api/calls', async function(req, res) {
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
   try {
-    res.json(await listCalls(page, limit));
+    const data = await listCalls(page, limit);
+    data.instance = process.env.INSTANCE_NAME || null;
+    res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -4189,14 +4191,26 @@ app.post('/recording-status', async function(req, res) {
 
   const { RecordingUrl, RecordingDuration, RecordingSid, CallSid, RecordingStatus } = req.body || {};
   console.log('[Recording] Status:', RecordingStatus, '| Duration:', RecordingDuration + 's', '| SID:', RecordingSid);
-  if (RecordingStatus === 'completed' && RecordingUrl && CallSid) {
-    const recordingUrl = RecordingUrl.endsWith('.mp3') ? RecordingUrl : RecordingUrl + '.mp3';
+  if (RecordingStatus === "completed" && RecordingUrl && CallSid) {
+    const recordingUrl = RecordingUrl.endsWith(".mp3") ? RecordingUrl : RecordingUrl + ".mp3";
     try {
-      await updateRecordingUrl(CallSid, recordingUrl);
-      console.log('[Recording] Saved URL for call:', CallSid);
-      console.log('[Recording] URL:', recordingUrl);
+      let sharedUrl = null;
+      try {
+        await new Promise(function (r) { setTimeout(r, 2000); });
+        const audio = await axios.get(recordingUrl, {
+          auth: { username: process.env.TWILIO_ACCOUNT_SID, password: process.env.TWILIO_AUTH_TOKEN },
+          responseType: "arraybuffer",
+        });
+        sharedUrl = await uploadRecording(CallSid, Buffer.from(audio.data));
+        if (sharedUrl) console.log("[Recording] Uploaded to Supabase Storage");
+      } catch (e) {
+        console.warn("[Recording] Storage upload failed, Twilio Url will be used:", e.message);
+      }
+      await updateRecordingUrl(CallSid, sharedUrl || recordingUrl);
+      console.log("[Recording] Saved URL for call:", CallSid);
+      console.log("[Recording] URL:", sharedUrl || recordingUrl);
     } catch (e) {
-      console.error('[Recording] DB update error:', e.message);
+      console.error("[Recording] DB update error:", e.message);
     }
   }
   res.sendStatus(200);

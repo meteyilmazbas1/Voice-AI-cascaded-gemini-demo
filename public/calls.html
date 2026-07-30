@@ -109,6 +109,7 @@ header span { font-size: 12px; color: var(--muted); margin-left: 4px; }
 let currentPage = 1;
 let totalPages = 1;
 let selectedSid = null;
+let myInstance = null;
 
 function stateBadge(state) {
   const s = state || 'UNKNOWN';
@@ -139,6 +140,7 @@ async function loadCalls(page) {
   try {
     const res = await fetch(`/api/calls?page=${page}&limit=20`);
     const data = await res.json();
+    myInstance = data.instance || null;
     totalPages = Math.max(1, Math.ceil(data.total / data.limit));
     document.getElementById('callCount').textContent = `(${data.total})`;
     document.getElementById('pageInfo').textContent = `Page ${data.page} / ${totalPages}`;
@@ -161,6 +163,7 @@ async function loadCalls(page) {
           ${c.final_intent ? `<span class="intent-tag">${c.final_intent}</span>` : ''}
           <span>${escapeHtml(c.model_used || '—')}</span>
           ${c.worker_phone ? `<span>${escapeHtml(c.worker_phone)}</span>` : ''}
+          ${c.instance_name && c.instance_name !== myInstance ? `<span style="color:var(--accent)">shared</span>` : ''}
         </div>
       </div>
     `).join('');
@@ -232,11 +235,14 @@ function renderDetail(call) {
   }
 
   const rec = document.getElementById('recordingArea');
-  const proxyUrl = call.recording_url
-    ? `/api/recordings/proxy?url=${encodeURIComponent(call.recording_url)}`
-    : null;
-  if (proxyUrl) {
-    rec.innerHTML = `<audio controls src="${escapeHtml(proxyUrl)}"></audio>`;
+  const src = !call.recording_url
+    ? null
+    : (call.recording_url.indexOf('https://api.twilio.com/') === 0
+        ? `/api/recordings/proxy?url=${encodeURIComponent(call.recording_url)}`
+        : call.recording_url);
+  if (src) {
+    rec.innerHTML = `<audio controls src="${escapeHtml(src)}"
+      onerror="this.outerHTML='&lt;div style=\\'font-size:12px;color:var(--danger);margin-top:8px\\'&gt;Recording could not be loaded (Twilio credentials missing on this instance?)&lt;/div&gt;'"></audio>`;
   } else {
     rec.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-top:8px">Recording not available</div>';
   }
