@@ -5597,7 +5597,7 @@ function mergeCmpHistory(localList, remoteList) {
 
 /** Pull the shared history and re-render. Safe to call any time. */
 function refreshSharedCmpHistory() {
-  return fetch('/api/comparisons?limit=50')
+  return fetch('/api/comparisons?limit=500')
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (data) {
       if (!data) return;
