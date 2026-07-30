@@ -15,6 +15,7 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": { "node": ">=22"},
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
     "@deepgram/sdk": "^5.4.0",
