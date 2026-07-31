@@ -589,6 +589,13 @@ function attachTwilioGeminiWss(twilioGeminiWss) {
           audioClockMs += mulawChunk.length / 8;
           twilioMediaCount++;
 
+          // Throttled Render diagnostics: confirm Silero VAD is producing speech probability
+          if (twilioMediaCount % 50 === 0) {
+            console.log('[Twilio-Gemini Media]', 'frame#' + twilioMediaCount,
+              '| vad.isSpeaking=' + vad.isSpeaking(),
+              '| vad.prob=' + (vad.prob ? vad.prob() : 'n/a'));
+          }
+
           if (activityOpen && twilioMediaCount % 25 === 0) {
             console.log('[Twilio-Gemini VAD]', 'isSpeaking=' + vad.isSpeaking(), '| idleMs=' + vad.idleMs(), '| audioClockMs=' + audioClockMs.toFixed(0));
           }
