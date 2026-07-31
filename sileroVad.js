@@ -6,7 +6,10 @@ const MODEL_PATH = path.join(__dirname, 'models', 'silero_vad.onnx');
 
 let sessionPromise = null;
 const getSession = () => {
-    if (!sessionPromise) sessionPromise = ort.InferenceSession.create(MODEL_PATH);
+    if (!sessionPromise) sessionPromise = ort.InferenceSession.create(MODEL_PATH).catch(e => {
+      console.error('[SileroVad] Model load FAILED:', e.message, '| path:', MODEL_PATH);
+      throw e;
+    });
     return sessionPromise;
 };
 
@@ -81,7 +84,9 @@ function createSileroVad({
             const chunk = sampleBuf.slice(off, off + windowSize);
             off += windowSize;
             const idx = frameCount++;
-            queue = queue.then(() => runChunk(chunk, idx)).catch(() => {});
+            queue = queue.then(() => runChunk(chunk, idx)).catch(e => {
+              console.error('[SileroVad] runChunk error:', e.message);
+            });
         }
         sampleBuf = sampleBuf.slice(off);
     };
