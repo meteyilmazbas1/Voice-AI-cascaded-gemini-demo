@@ -869,7 +869,17 @@ twilioWss.on('connection', function(ws) {
         lastMediaAt = Date.now();
         const buf = Buffer.from(msg.media.payload, 'base64');
         noise.setAgentSpeaking(Date.now() < agentPlaybackUntil + 200);
-        vad.processMulaw(buf);
+        if (twilioMediaCount % 50 === 0) {
+          console.log('[VAD Debug] Before processMulaw | chunk length:', buf.length);
+        }
+        try {
+          vad.processMulaw(buf);
+          if (twilioMediaCount % 50 === 0) {
+            console.log('[VAD Debug] After processMulaw | isSpeaking:', vad.isSpeaking(), '| prob:', vad.prob());
+          }
+        } catch (e) {
+          console.error('[VAD Debug] processMulaw threw:', e.message, e.stack);
+        }
         noise.pushFrame({ ...frameStatsMulaw(buf), speechProb: vad.prob() }, dgClockMs);
         dgClockMs += buf.length / 8;
         sendAudioToTwilioDeepgram(buf);
