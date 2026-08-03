@@ -154,7 +154,7 @@ const COMPARE_INTENT_PROMPT = `Classify the worker's response to a safety check-
 {"intent":"<safe|delayed|request_human|unsafe|ambiguous>","confidence":<0.0-1.0>,"distress":<null|"low"|"medium"|"high">}
 
 safe: clear safety confirmation ("I'm fine", "yes", "all good")
-delayed: needs more time ("give me 10 minutes", "running late")
+delayed: needs more time ("give me 10 minutes", "running late", "reset my check-in", "reset my timer", "reset for me")
 request_human: wants human agent ("get me someone", "human please")
 unsafe: injury/distress/danger ("I fell", "I'm hurt", "SOS") — always escalate even if worker also claims to be safe
 ambiguous: unclear, contradictory, or unrecognised
@@ -187,7 +187,7 @@ const INTENT_PROMPT = `You are an intent classifier for a Voice AI Safety Assist
 
 Intents:
 - safe = worker says they are safe/fine/ok, with NO mention of injury, pain, or danger
-- delayed = running late, needs more time, give me X minutes
+- delayed = running late, needs more time, give me X minutes, reset my check-in, reset my timer, reset for me
 - request_human = explicitly wants a live person/agent/human
 - unsafe = ANY mention of injury, pain, hurt, bleeding, trapped, stuck, danger, fell/fall, accident, needs help, SOS — even if the worker also says they are "okay" or "fine"
 - ambiguous = silent, unclear, off-topic, or cannot tell
@@ -249,7 +249,7 @@ function fastPathIntent(transcript) {
   if (/\b(connect|agent|human|representative|operator)\b/i.test(t)) {
     return { intent: 'REQUEST_HUMAN', confidence: 0.9, response: CACHE_RESPONSES.request_human, resolved: false, escalate: true, delay_minutes: null, distress: null, distress_signals: null };
   }
-  if (/\b(more\s+time|need\s+time|extend|delay|minute|minutes|later)\b/i.test(t)) {
+  if (/\b(more\s+time|need\s+time|extend|delay|minute|minutes|later|reset\s+(my\s+)?(check[\s-]?in|timer)|reset\s+for\s+me)\b/i.test(t)) {
     return { intent: 'DELAYED_CHECKIN', confidence: 0.9, response: CACHE_RESPONSES.delayed_checkin_15, resolved: true, escalate: false, delay_minutes: 15, distress: null, distress_signals: null };
   }
   return null;
