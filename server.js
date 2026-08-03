@@ -50,19 +50,10 @@ server.on('upgrade', function(request, socket, head) {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Scenario noise-test audio — serve directly from OneDrive UI-ready scenarios folder (no copy/symlink).
+// Scenario noise-test audio — default to repo public/scenarios_legacy (works on Render Linux + local).
 // Override with SCENARIO_AUDIO_DIR env if needed.
 const SCENARIO_AUDIO_DIR = process.env.SCENARIO_AUDIO_DIR
-  || path.join(
-    'C:',
-    'Users',
-    'meyilmaz',
-    'OneDrive - Orion Systems Integrators, LLC',
-    'Documents',
-    'voices',
-    'test_voices',
-    'UI_hazır_senaryolar'
-  );
+  || path.join(__dirname, 'public', 'scenarios_legacy');
 
 try {
   if (!fs.existsSync(SCENARIO_AUDIO_DIR)) {
