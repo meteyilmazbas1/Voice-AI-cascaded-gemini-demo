@@ -720,7 +720,7 @@ twilioWss.on('connection', function(ws) {
       if (result.intent === 'UNRECOGNISED') {
         unrecognisedCount++;
         if (unrecognisedCount > 1) {
-          await speakText("I'm unable to process your response. A human agent will follow up shortly.", null, false);
+          await speakText("I'm unable to process your response. A human agent will follow up shortly.", 'escalate_max', false);
           sessionState = 'ENDED'; return;
         }
       }
