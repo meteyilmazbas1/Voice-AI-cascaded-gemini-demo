@@ -1662,8 +1662,8 @@ function floatToPcm16Resampled(float32, fromRate, toRate) {
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const port = pipelineMode === 'gemini' ? '3001' : location.port || '3000';
-  const host = location.hostname + ':' + port;
+  // Use the page's actual host (includes port locally; omits default 443/80 in production)
+  const host = location.host;
   ws = new WebSocket(proto + '://' + host);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {
