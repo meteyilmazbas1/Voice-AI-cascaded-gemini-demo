@@ -1323,10 +1323,11 @@ browserWss.on('connection', function(ws) {
         const cacheKey = result.distress ? null : INTENT_CACHE_MAP[result.intent];
         const useCache = cacheKey && audioCache[cacheKey];
         if (useCache) {
-          console.log('[Cache] Hit:', cacheKey);
+          console.log('[Demo Cache] Hit:', cacheKey);
           send({ type: 'stage', stage: 'tts', status: 'done', ms: Date.now() - ttsStart });
           send({ type: 'response', text: result.response, audio: audioCache[cacheKey], resolved: result.resolved, escalate: result.escalate });
         } else {
+          console.log('[Demo Cache] Miss:', cacheKey || '(no key)', '— generating from ElevenLabs');
           const apiKey = process.env.ELEVENLABS_API_KEY;
           const voiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
           const spoken = extractSpoken(result.response);
@@ -1347,6 +1348,7 @@ browserWss.on('connection', function(ws) {
               }
             }
             send({ type: 'audio_stream_end' });
+            console.log('[Demo TTS] Generated in', (Date.now() - ttsStart) + 'ms');
           } catch (e) {
             console.error('[TTS Stream Error]', e.message);
             send({ type: 'stage', stage: 'tts', status: 'done', ms: 0 });
