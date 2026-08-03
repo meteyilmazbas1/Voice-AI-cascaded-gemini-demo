@@ -2548,37 +2548,32 @@ async function sendAudioFile() {
       const audioCtx = new AudioContext();
       try {
         const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-        const sourceRate = decoded.sampleRate;
-        const channelData = decoded.getChannelData(0);
-        const TARGET_RATE = 16000;
-        let mono;
-        if (sourceRate === TARGET_RATE) {
-          mono = channelData;
-        } else {
-          const ratio = sourceRate / TARGET_RATE;
-          const outLen = Math.floor(channelData.length / ratio);
-          mono = new Float32Array(outLen);
-          for (let i = 0; i < outLen; i++) mono[i] = channelData[Math.floor(i * ratio)] || 0;
-        }
-        const pcm = new Int16Array(mono.length);
-        for (let i = 0; i < mono.length; i++) {
-          pcm[i] = Math.max(-32768, Math.min(32767, Math.round(mono[i] * 32767)));
-        }
-        return pcm;
+        // Same resample path as microphone (floatToPcm16Resampled → 16 kHz PCM16)
+        return floatToPcm16Resampled(decoded.getChannelData(0), decoded.sampleRate, 16000);
       } finally {
         try { await audioCtx.close(); } catch (e) { }
       }
     }
 
     /**
-     * Stream PCM16 @ 16kHz over the demo WebSocket exactly like the microphone:
-     * ~20ms chunks (320 samples), paced in real time. Cascaded and Gemini share
-     * the same binary ws.send(int16.buffer) path.
+     * Stream PCM16 @ 16kHz over the demo WebSocket like the microphone.
+     *
+     * Mic path (ScriptProcessor 4096 @ typical 48 kHz AudioContext):
+     *   callback period ≈ 4096/48000 ≈ 85.33ms
+     *   after floatToPcm16Resampled → floor(4096 * 16000/48000) = 1365 samples/frame
+     *
+     * Trailing silence must exceed Deepgram utterance_end_ms (1000) + endpointing (800);
+     * mic keeps sending forever after speech — scenario must pad ≥2s of zeros or
+     * UtteranceEnd never fires and the UI stays on "Worker (live)".
      */
     async function streamPcm16LikeMic(pcm, statusEl) {
-      const SAMPLES_PER_CHUNK = 320; // 20ms @ 16kHz
-      const INTERVAL_MS = 20;
-      const SILENCE_MS = 800;
+      const MIC_BUFFER_SIZE = 4096;
+      const ASSUMED_CTX_RATE = 48000; // matches typical browser getUserMedia AudioContext
+      const TARGET_RATE = 16000;
+      const SAMPLES_PER_CHUNK = Math.floor(MIC_BUFFER_SIZE * TARGET_RATE / ASSUMED_CTX_RATE); // 1365
+      const INTERVAL_MS = Math.round((1000 * MIC_BUFFER_SIZE) / ASSUMED_CTX_RATE); // ~85
+      // Deepgram: utterance_end_ms=1000, endpointing=800 — need clean zeros past both
+      const SILENCE_MS = 2000;
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
       if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -2597,6 +2592,7 @@ async function sendAudioFile() {
       }
 
       const total = pcm.length;
+      const streamStarted = Date.now();
       for (let i = 0; i < total; i += SAMPLES_PER_CHUNK) {
         if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket closed");
         while (aiSpeaking) {
@@ -2608,22 +2604,29 @@ async function sendAudioFile() {
         copy.set(pcm.subarray(i, end));
         lastMicSendTime = Date.now();
         ws.send(copy.buffer);
-        if (statusEl && (i % (SAMPLES_PER_CHUNK * 25) === 0 || end === total)) {
+        if (statusEl && (i === 0 || end === total || (end % (SAMPLES_PER_CHUNK * 4) < SAMPLES_PER_CHUNK))) {
           statusEl.textContent =
             "Sending scenario audio… " + Math.round((end / total) * 100) + "%";
         }
-        await sleep(INTERVAL_MS);
+        // Pace to realtime wall-clock (avoid setTimeout drift compressing long noisy files)
+        const samplesSent = end;
+        const targetElapsed = (samplesSent / TARGET_RATE) * 1000;
+        const lag = targetElapsed - (Date.now() - streamStarted);
+        if (lag > 1) await sleep(lag);
       }
 
-      // Keep feeding silence so server VAD / Deepgram can endpoint (mic would keep sending)
+      // Keep feeding silence so Deepgram can fire speech_final / UtteranceEnd
       if (statusEl) statusEl.textContent = "Scenario audio sent — endpointing…";
-      const silenceChunks = Math.ceil(SILENCE_MS / INTERVAL_MS);
+      const silenceChunks = Math.ceil((SILENCE_MS / 1000) * TARGET_RATE / SAMPLES_PER_CHUNK);
+      const silenceStarted = Date.now();
       for (let s = 0; s < silenceChunks; s++) {
         if (!ws || ws.readyState !== WebSocket.OPEN) break;
         while (aiSpeaking) await sleep(50);
         lastMicSendTime = Date.now();
         ws.send(new Int16Array(SAMPLES_PER_CHUNK).buffer);
-        await sleep(INTERVAL_MS);
+        const targetElapsed = ((s + 1) * SAMPLES_PER_CHUNK / TARGET_RATE) * 1000;
+        const lag = targetElapsed - (Date.now() - silenceStarted);
+        if (lag > 1) await sleep(lag);
       }
     }
 
