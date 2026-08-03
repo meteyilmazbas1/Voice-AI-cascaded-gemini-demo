@@ -144,7 +144,7 @@ Never read the measurements out loud, never mention the monitor, and never menti
 IMPORTANT: Only greet the worker ONCE at the very start of the conversation. Do not repeat the greeting.
 CRITICAL: After the greeting, do NOT speak, acknowledge, or produce ANY output until the worker speaks. Do not say "standing by", "acknowledged", "waiting", or anything else. Complete silence until worker responds.`;
 
-const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
+const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay?`;
 
 let cachedGreetingChunks = null;
 let cachedGreetingMimeType = null;
@@ -813,7 +813,7 @@ function mulawToPcm(mulawBuffer) {
   return out;
 }
 
-const TWILIO_WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay?`;
+const TWILIO_WORKER_INTRO = WORKER_INTRO;
 
 const OVERLAP_ABOVE_FLOOR_DB = 50;
 

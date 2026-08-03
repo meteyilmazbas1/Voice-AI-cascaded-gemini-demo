@@ -167,7 +167,7 @@ const GEMINI_ENGLISH_AUDIO_RULE = `CRITICAL LANGUAGE RULE: The audio is ALWAYS i
 // Live compare: intent JSON + strict English-only transcription/response rule
 const COMPARE_LIVE_PROMPT = COMPARE_INTENT_PROMPT + '\n\n' + GEMINI_ENGLISH_AUDIO_RULE;
 
-const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay? Please say "I'm safe", "I need more time", or "connect me to an agent".`;
+const WORKER_INTRO = `Hello, this is the Aware360 Monitoring Center. We noticed you missed your scheduled check-in. Are you okay?`;
 
 const INTENT_CACHE_MAP = {
   'SAFE_CONFIRMATION': 'safe_confirmation',
