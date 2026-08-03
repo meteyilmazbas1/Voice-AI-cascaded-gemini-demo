@@ -962,7 +962,7 @@
               <button class="btn" id="demoScenarioListenBtn" onclick="toggleDemoListen('scenario')" disabled
                 title="Preview selected scenario audio (does not send to the model)">🔊 Listen</button>
               <button class="btn primary" id="scenarioBtn" onclick="runScenario()" disabled>
-                Run scenario
+                Send Scenario
               </button>
             </div>
 
@@ -1891,11 +1891,13 @@ if (msg.type === 'audio_stream_end') {
       const scenarioToggle = document.getElementById("scenarioDdToggle");
 
       if (micBtn) {
-        micBtn.disabled = !sessionConnected;
+        // Lock mic while scenario/file streams; otherwise enable when call is connected
+        // (Stop microphone stays available when micActive because scenarioRunning is false then)
+        micBtn.disabled = !sessionConnected || scenarioRunning || audioFileSending;
       }
 
       if (uploadBtn) {
-        uploadBtn.disabled = micActive;
+        uploadBtn.disabled = micActive || scenarioRunning;
       }
 
       if (sendAudioBtn) {
@@ -1905,7 +1907,8 @@ if (msg.type === 'audio_stream_end') {
           !fileSelected ||
           audioFileSending ||
           audioFileSent ||
-          scenarioRunning;
+          scenarioRunning ||
+          micActive;
 
         sendAudioBtn.textContent =
           audioFileSending ? "Sending…" :
@@ -1919,21 +1922,22 @@ if (msg.type === 'audio_stream_end') {
           selectedScenario === null ||
           scenarioRunning ||
           scenarioSent ||
-          audioFileSending;
+          audioFileSending ||
+          micActive;
 
         scenarioBtn.textContent =
-          scenarioRunning ? "Running…" :
+          scenarioRunning ? "Sending…" :
           scenarioSent ? "Sent" :
-          "Run scenario";
+          "Send Scenario";
       }
 
       if (scenarioToggle) {
-        scenarioToggle.disabled = micActive;
+        scenarioToggle.disabled = micActive || scenarioRunning;
       }
 
       document.querySelectorAll(".input-mode-tab").forEach((button) => {
         button.disabled =
-          micActive && button.dataset.inputMode !== "mic";
+          (micActive || scenarioRunning) && button.dataset.inputMode !== "mic";
       });
     }
 
@@ -2280,6 +2284,12 @@ async function getAudioFileDurationSeconds(file) {
       return !!(s && s.kind === "audio" && s.value);
     }
 
+    function demoScenarioAudioUrl(scenario) {
+      if (!scenario || scenario.kind !== "audio" || !scenario.value) return null;
+      const base = (scenario.audioUrlBase || "/scenarios/").replace(/\/?$/, "/");
+      return base + encodeURIComponent(scenario.value);
+    }
+
     function updateDemoListenButtons() {
       const fileBtn = demoListenBtnFor("file");
       if (fileBtn) fileBtn.hidden = !canDemoListen("file");
@@ -2304,8 +2314,7 @@ async function getAudioFileDurationSeconds(file) {
         demoListenObjectUrl = url;
       } else {
         const s = (selectedScenario != null) ? DEMO_SCENARIOS[selectedScenario] : null;
-        if (!s || s.kind !== "audio" || !s.value) return;
-        url = "/scenarios/" + encodeURIComponent(s.value);
+        url = demoScenarioAudioUrl(s);
       }
       if (!url) return;
 
@@ -2354,8 +2363,13 @@ async function getAudioFileDurationSeconds(file) {
     function initScenarioSelect() {
       const menu = document.getElementById("scenarioDdMenu");
       if (!menu) return;
-      const groupLabels = { text: '💬 Predefined texts', clean: '🔊 Clean audio', noisy: '🏭 Noisy audio' };
-      const order = ["text", "clean", "noisy"];
+      const groupLabels = {
+        text: '💬 Predefined texts',
+        clean: '🔊 Clean audio',
+        noisy: '🏭 Noisy audio',
+        legacy: '📼 Legacy Scenarios',
+      };
+      const order = ["text", "clean", "noisy", "legacy"];
       menu.innerHTML = "";
       order.forEach(g => {
         const rows = DEMO_SCENARIOS
@@ -2380,7 +2394,7 @@ async function getAudioFileDurationSeconds(file) {
         });
       });
     }
-    initScenarioSelect();
+    // initScenarioSelect() runs after LEGACY_SCENARIOS is merged below
 
     function toggleScenarioMenu() {
       const menu = document.getElementById("scenarioDdMenu");
@@ -2529,6 +2543,90 @@ async function sendAudioFile() {
       }
     }
 
+    async function decodeBlobToPcm16_16k(blob) {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioCtx = new AudioContext();
+      try {
+        const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+        const sourceRate = decoded.sampleRate;
+        const channelData = decoded.getChannelData(0);
+        const TARGET_RATE = 16000;
+        let mono;
+        if (sourceRate === TARGET_RATE) {
+          mono = channelData;
+        } else {
+          const ratio = sourceRate / TARGET_RATE;
+          const outLen = Math.floor(channelData.length / ratio);
+          mono = new Float32Array(outLen);
+          for (let i = 0; i < outLen; i++) mono[i] = channelData[Math.floor(i * ratio)] || 0;
+        }
+        const pcm = new Int16Array(mono.length);
+        for (let i = 0; i < mono.length; i++) {
+          pcm[i] = Math.max(-32768, Math.min(32767, Math.round(mono[i] * 32767)));
+        }
+        return pcm;
+      } finally {
+        try { await audioCtx.close(); } catch (e) { }
+      }
+    }
+
+    /**
+     * Stream PCM16 @ 16kHz over the demo WebSocket exactly like the microphone:
+     * ~20ms chunks (320 samples), paced in real time. Cascaded and Gemini share
+     * the same binary ws.send(int16.buffer) path.
+     */
+    async function streamPcm16LikeMic(pcm, statusEl) {
+      const SAMPLES_PER_CHUNK = 320; // 20ms @ 16kHz
+      const INTERVAL_MS = 20;
+      const SILENCE_MS = 800;
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        throw new Error("WebSocket not open");
+      }
+
+      if (pipelineMode === "gemini") {
+        ws.send(JSON.stringify({ type: "gemini_sample_rate", rate: 16000 }));
+      }
+
+      const waitStart = Date.now();
+      while (aiSpeaking && Date.now() - waitStart < 15000) {
+        if (statusEl) statusEl.textContent = "Waiting for AI to finish speaking…";
+        await sleep(50);
+        if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket closed");
+      }
+
+      const total = pcm.length;
+      for (let i = 0; i < total; i += SAMPLES_PER_CHUNK) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket closed");
+        while (aiSpeaking) {
+          await sleep(50);
+          if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket closed");
+        }
+        const end = Math.min(i + SAMPLES_PER_CHUNK, total);
+        const copy = new Int16Array(end - i);
+        copy.set(pcm.subarray(i, end));
+        lastMicSendTime = Date.now();
+        ws.send(copy.buffer);
+        if (statusEl && (i % (SAMPLES_PER_CHUNK * 25) === 0 || end === total)) {
+          statusEl.textContent =
+            "Sending scenario audio… " + Math.round((end / total) * 100) + "%";
+        }
+        await sleep(INTERVAL_MS);
+      }
+
+      // Keep feeding silence so server VAD / Deepgram can endpoint (mic would keep sending)
+      if (statusEl) statusEl.textContent = "Scenario audio sent — endpointing…";
+      const silenceChunks = Math.ceil(SILENCE_MS / INTERVAL_MS);
+      for (let s = 0; s < silenceChunks; s++) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) break;
+        while (aiSpeaking) await sleep(50);
+        lastMicSendTime = Date.now();
+        ws.send(new Int16Array(SAMPLES_PER_CHUNK).buffer);
+        await sleep(INTERVAL_MS);
+      }
+    }
+
     async function runScenario() {
       const status = document.getElementById("scenarioStatus");
 
@@ -2547,8 +2645,14 @@ async function sendAudioFile() {
         return;
       }
 
+      if (micActive) {
+        alert("Stop the microphone before sending a scenario");
+        return;
+      }
+
       scenarioRunning = true;
       updateInputAvailability();
+      stopDemoListen();
 
       try {
         if (scenario.kind === "text") {
@@ -2562,23 +2666,25 @@ async function sendAudioFile() {
           return;
         }
 
-        status.textContent = "Scenario loading…";
+        status.textContent = "Sending scenario audio…";
 
-        const response = await fetch(
-          "/scenarios/" + encodeURIComponent(scenario.value)
-        );
+        const url = demoScenarioAudioUrl(scenario);
+        const response = await fetch(url);
 
         if (!response.ok) {
           throw new Error(response.status + " " + response.statusText);
         }
 
-        const sent = await sendAudioBlob(
-          await response.blob(),
-          scenario.value,
-          status
-        );
+        const blob = await response.blob();
+        status.textContent = "Converting to PCM16…";
+        const pcm = await decodeBlobToPcm16_16k(blob);
+        await streamPcm16LikeMic(pcm, status);
 
-        if (sent) scenarioSent = true;
+        status.textContent =
+          "✓ Scenario streamed (" +
+          (Math.round((pcm.length / 16000) * 10) / 10) +
+          "s) — listening for response";
+        scenarioSent = true;
       } catch (error) {
         status.textContent =
           "✕ Failed to run scenario: " + error.message;
@@ -2586,8 +2692,8 @@ async function sendAudioFile() {
       } finally {
         scenarioRunning = false;
         updateInputAvailability();
-  }
-}
+      }
+    }
 
 updateAlertTimes();
 setInterval(updateAlertTimes, 60000);
@@ -2694,6 +2800,24 @@ let cmpBatchData = null; // { mode:'batch', models, scenarios, rows, metrics, ti
     };
     /** @deprecated alias — prefer LEGACY_SCENARIOS / getCmpScenario */
     const SCENARIOS = LEGACY_SCENARIOS;
+
+    // Demo screen: append the same live Legacy catalog (9 scenarios — do not hardcode)
+    (function mergeLegacyIntoDemoScenarios() {
+      Object.keys(LEGACY_SCENARIOS).forEach(function (id) {
+        const s = LEGACY_SCENARIOS[id];
+        DEMO_SCENARIOS.push({
+          group: "legacy",
+          label: s.label,
+          kind: "audio",
+          value: s.audioFile,
+          expected: s.groundTruth || null,
+          audioUrlBase: "/scenario_audio/",
+          legacyId: id,
+        });
+      });
+      initScenarioSelect();
+      updateDemoListenButtons();
+    })();
 
     /**
      * Repo public/scenarios list (text + clean + noisy). Audio via /scenarios/<file>.
