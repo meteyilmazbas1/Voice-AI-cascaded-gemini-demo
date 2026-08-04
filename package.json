@@ -9,7 +9,8 @@
     "call": "node make_call.js",
     "test:gemini-audio": "node gemini_noisy_audio_test.js",
     "lint": "eslint . || true",
-    "test:smoke": "node scripts/smoke.js"
+    "test:smoke": "node scripts/smoke.js",
+    "test:regression": "node run_regression.js"
   },
   "keywords": [],
   "author": "",

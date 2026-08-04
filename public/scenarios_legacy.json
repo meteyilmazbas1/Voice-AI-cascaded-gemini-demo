@@ -1,0 +1,67 @@
+{
+  "scenarios": [
+    {
+      "id": "not_okay_short",
+      "label": "Not Okay - Short Noise",
+      "audioFile": "Im_not_okay_ani_gürültü.mp3",
+      "groundTruth": "I am not okay.",
+      "expectedIntent": "REQUEST_HUMAN"
+    },
+    {
+      "id": "fell_down",
+      "label": "Fell Down (Noisy)",
+      "audioFile": "Everything is fine I just fell down but I'm okay I promise_gürültü.mp3",
+      "groundTruth": "Everything is fine I just fell down but I'm okay I promise.",
+      "expectedIntent": "REQUEST_HUMAN"
+    },
+    {
+      "id": "fell_down_choppy",
+      "label": "Fell Down - Choppy Noise",
+      "audioFile": "fell_down_kesikli_gürültü.mp3",
+      "groundTruth": "Everything is fine I just fell down but I'm okay I promise.",
+      "expectedIntent": "REQUEST_HUMAN"
+    },
+    {
+      "id": "injured_speech5db",
+      "label": "Injured - Ankle (Speech +5dB)",
+      "audioFile": "unsafe(injured)_test_(speech+5db).wav",
+      "groundTruth": "I am mostly alright I feel good I am safe but I slipped on the ramp earlier and my ankle is really hurting I can barely put weight on it, all good.",
+      "expectedIntent": "REQUEST_HUMAN"
+    },
+    {
+      "id": "unsafe_transient",
+      "label": "Unsafe - Transient",
+      "audioFile": "unsafe_transient.wav",
+      "groundTruth": "Yes I feel good all good, I am okay I am fine I am unsafe.",
+      "expectedIntent": "REQUEST_HUMAN"
+    },
+    {
+      "id": "long_safe_choppy",
+      "label": "Long Safe Confirmation - Choppy Noise",
+      "audioFile": "uzun_karmaşık_safe_kesikli_gürültü.mp3",
+      "groundTruth": "Ah yeah hi, so I got the alert but, but I was in the middle of calibrating the pressure valve and couldn't pick up right away. I am fine though, no issues.",
+      "expectedIntent": "SAFE_CONFIRMATION"
+    },
+    {
+      "id": "feels_wrong",
+      "label": "Something Feels Wrong (+2dB Noise)",
+      "audioFile": "Yes_Im_Okay_But_Something_Feels_Wrong_Sonu_Gürültülü+2db.mp3",
+      "groundTruth": "Yes I'm okay but something feels wrong.",
+      "expectedIntent": "REQUEST_HUMAN"
+    },
+    {
+      "id": "delayed",
+      "label": "Delayed Check-in (Noisy)",
+      "audioFile": "delayed_1sgürültü.wav",
+      "groundTruth": "I'm okay, but I'm running a bit behind on this side. I think I'll need about another 30 minutes to finish up here.",
+      "expectedIntent": "DELAYED_CHECKIN"
+    },
+    {
+      "id": "delayed_twenty_five",
+      "label": "Delayed - Twenty Five Minutes (Noisy)",
+      "audioFile": "Fine_Twenty_Five_Gürültülü.mp3",
+      "groundTruth": "I'm fine, just running behind. Give me about twenty five more minutes and I'll check back in.",
+      "expectedIntent": "DELAYED_CHECKIN"
+    }
+  ]
+}

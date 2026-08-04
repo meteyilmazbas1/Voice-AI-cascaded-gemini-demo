@@ -2744,7 +2744,9 @@ let cmpAccumTranscript = null; // accumulate runs while transcript unchanged
 let compareMode = 'intent';
 let cmpBatchData = null; // { mode:'batch', models, scenarios, rows, metrics, timestamp }
 
-    /** Noise-test scenarios (OneDrive UI_hazır_senaryolar) — served via /scenario_audio/ */
+    /** Noise-test scenarios — served via /scenario_audio/.
+     * Keep in sync with scenarios_legacy.json / public/scenarios_legacy.json
+     * (canonical list for run_regression.js). */
     const LEGACY_SCENARIOS = {
       "not_okay_short": {
         label: "Not Okay - Short Noise",

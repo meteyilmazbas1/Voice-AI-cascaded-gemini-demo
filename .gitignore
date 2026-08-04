@@ -148,6 +148,8 @@ uploads/
 *_results.json
 gemini_comparison_results.json
 pipeline_latency_results.json
+regression_report.json
+regression_report.md
 *.pcm
 
 # metrics
