@@ -235,17 +235,38 @@ function renderDetail(call) {
   }
 
   const rec = document.getElementById('recordingArea');
-  const src = !call.recording_url
-    ? null
-    : (call.recording_url.indexOf('https://api.twilio.com/') === 0
-        ? `/api/recordings/proxy?url=${encodeURIComponent(call.recording_url)}`
-        : call.recording_url);
-  if (src) {
+  if (!call.recording_url && !call.recording_storage_path) {
+    rec.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-top:8px">Recording not available</div>';
+    return;
+  }
+
+  // Legacy Twilio-only URLs still go through the auth proxy
+  if (call.recording_url && call.recording_url.indexOf('https://api.twilio.com/') === 0) {
+    const src = '/api/recordings/proxy?url=' + encodeURIComponent(call.recording_url);
     rec.innerHTML = `<audio controls src="${escapeHtml(src)}"
       onerror="this.outerHTML='&lt;div style=\\'font-size:12px;color:var(--danger);margin-top:8px\\'&gt;Recording could not be loaded (Twilio credentials missing on this instance?)&lt;/div&gt;'"></audio>`;
-  } else {
-    rec.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-top:8px">Recording not available</div>';
+    return;
   }
+
+  // Private Supabase bucket: always fetch a fresh short-lived signed URL
+  rec.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-top:8px">Loading recording…</div>';
+  fetch('/api/recordings/' + encodeURIComponent(call.call_sid) + '/signed-url')
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.j.url) throw new Error((res.j && res.j.error) || 'Signed URL unavailable');
+      rec.innerHTML = `<audio controls src="${escapeHtml(res.j.url)}"
+        onerror="this.outerHTML='&lt;div style=\\'font-size:12px;color:var(--danger);margin-top:8px\\'&gt;Recording could not be loaded&lt;/div&gt;'"></audio>`;
+    })
+    .catch(function (e) {
+      // Last resort: try stored URL (may already be expired signed link)
+      if (call.recording_url) {
+        rec.innerHTML = `<audio controls src="${escapeHtml(call.recording_url)}"
+          onerror="this.outerHTML='&lt;div style=\\'font-size:12px;color:var(--danger);margin-top:8px\\'&gt;Recording could not be loaded: ${escapeHtml(e.message)}&lt;/div&gt;'"></audio>`;
+      } else {
+        rec.innerHTML = '<div style="font-size:12px;color:var(--danger);margin-top:8px">Recording could not be loaded: ' +
+          escapeHtml(e.message) + '</div>';
+      }
+    });
 }
 
 loadCalls(1);

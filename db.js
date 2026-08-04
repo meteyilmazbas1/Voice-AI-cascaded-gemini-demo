@@ -67,8 +67,10 @@ async function updateCallLatency({ callSid, sttMs, llmMs, ttsMs, deepgramCost, t
   if (error) console.warn('[DB] updateCallLatency:', error.message);
 }
 
-async function updateRecordingUrl(callSid, recordingUrl) {
-  const { error } = await supabase.from('calls').update({ recording_url: recordingUrl }).eq('call_sid', callSid);
+async function updateRecordingUrl(callSid, recordingUrl, storagePath) {
+  const patch = { recording_url: recordingUrl };
+  if (storagePath != null) patch.recording_storage_path = storagePath;
+  const { error } = await supabase.from('calls').update(patch).eq('call_sid', callSid);
   if (error) console.warn('[DB] updateRecordingUrl:', error.message);
 }
 
@@ -133,14 +135,57 @@ async function listComparisons(page, limit) {
   return { comparisons, total: count || 0, page, limit };
 }
 
+const RECORDING_SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 365; // 1 year (stored URL); playback uses short-lived refresh
+
 async function uploadRecording(callSid, buffer) {
-  const filePath = callSid + ".mp3";
+  const filePath = callSid + '.mp3';
   const { error } = await supabase.storage
-    .from("recordings")
-    .upload(filePath, buffer, { contentType: "audio/mpeg", upsert: true });
-    if (error) { console.warn("[DB] uploadRecording:", error.message); return null; }
-    const { data } = supabase.storage.from("recordings").getPublicUrl(filePath);
-    return (data && data.publicUrl) || null;
+    .from('recordings')
+    .upload(filePath, buffer, { contentType: 'audio/mpeg', upsert: true });
+  if (error) {
+    console.warn('[DB] uploadRecording:', error.message);
+    return null;
+  }
+  const { data: signedData, error: signError } = await supabase.storage
+    .from('recordings')
+    .createSignedUrl(filePath, RECORDING_SIGNED_URL_TTL_SEC);
+  if (signError) {
+    console.warn('[DB] uploadRecording createSignedUrl:', signError.message);
+    return null;
+  }
+  return {
+    url: signedData && signedData.signedUrl ? signedData.signedUrl : null,
+    storagePath: filePath,
+  };
+}
+
+/** Fresh short-lived signed URL for playback (default 1 hour). */
+async function createRecordingSignedUrl(callSid, expirySec) {
+  const ttl = expirySec != null ? expirySec : 3600;
+  const call = await getCallBySid(callSid);
+  let filePath = call && call.recording_storage_path;
+  if (!filePath) {
+    // Fallback: derive from call_sid (upload convention) or from legacy public URL
+    filePath = callSid + '.mp3';
+    if (call && call.recording_url) {
+      const m = String(call.recording_url).match(/\/recordings\/([^?]+)/);
+      if (m && m[1]) {
+        try { filePath = decodeURIComponent(m[1]); } catch (e) { filePath = m[1]; }
+      }
+    }
+  }
+  const { data, error } = await supabase.storage
+    .from('recordings')
+    .createSignedUrl(filePath, ttl);
+  if (error) {
+    console.warn('[DB] createRecordingSignedUrl:', error.message);
+    return { error: error.message, storagePath: filePath };
+  }
+  return {
+    url: data && data.signedUrl ? data.signedUrl : null,
+    storagePath: filePath,
+    expiresIn: ttl,
+  };
 }
 
 module.exports = {
@@ -154,4 +199,6 @@ module.exports = {
   insertComparison,
   listComparisons,
   uploadRecording,
+  createRecordingSignedUrl,
+  RECORDING_SIGNED_URL_TTL_SEC,
 };

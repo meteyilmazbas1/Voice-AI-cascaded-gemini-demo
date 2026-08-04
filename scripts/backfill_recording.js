@@ -14,9 +14,9 @@ const { listCalls, updateRecordingUrl, uploadRecording } = require("../db");
                     auth: { username: process.env.TWILIO_ACCOUNT_SID, password: process.env.TWILIO_AUTH_TOKEN },
                     responseType: "arraybuffer",
                 });
-                const url = await uploadRecording(c.call_sid, Buffer.from(audio.data));
-                if (!url) throw new Error("upload basarisiz");
-                await updateRecordingUrl(c.call_sid, url);
+                const uploaded = await uploadRecording(c.call_sid, Buffer.from(audio.data));
+                if (!uploaded || !uploaded.url) throw new Error("upload basarisiz");
+                await updateRecordingUrl(c.call_sid, uploaded.url, uploaded.storagePath);
                 console.log(" ✓", c.call_sid);
                 ok++;
             } catch (e) {

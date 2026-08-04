@@ -10,7 +10,8 @@
     "test:gemini-audio": "node gemini_noisy_audio_test.js",
     "lint": "eslint . || true",
     "test:smoke": "node scripts/smoke.js",
-    "test:regression": "node run_regression.js"
+    "test:regression": "node run_regression.js",
+    "resign:recordings": "node resign_recordings.js"
   },
   "keywords": [],
   "author": "",
