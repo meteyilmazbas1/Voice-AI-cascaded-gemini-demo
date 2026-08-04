@@ -144,7 +144,6 @@ vite.config.ts.timestamp-*
 calls.db
 calls.db-wal
 calls.db-shm
-audio_cache/
 uploads/
 *_results.json
 gemini_comparison_results.json
@@ -159,4 +158,3 @@ noise_test_results.csv
 .vscode/
 
 call_logs/
-
