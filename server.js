@@ -89,7 +89,7 @@ app.use('/scenario_audio', function(req, res) {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl, insertComparison, listComparisons, uploadRecording } = require('./db');
+const { listCalls, getCallBySid, insertCallStart, updateCallEnd, updateCallLatency, updateRecordingUrl, insertComparison, listComparisons, uploadRecording, createRecordingSignedUrl } = require('./db');
 const { createDeepFilter, preloadDeepFilter, isDeepFilterReady } = require('./deepFilterWrapper');
 const { createRnnoise, preloadRnnoise, isRnnoiseReady } = require("./rnnoiseWrapper");
 const { createNoiseEstimator } = require("./noiseEstimator");
@@ -4198,25 +4198,49 @@ app.post('/recording-status', async function(req, res) {
     const recordingUrl = RecordingUrl.endsWith(".mp3") ? RecordingUrl : RecordingUrl + ".mp3";
     try {
       let sharedUrl = null;
+      let storagePath = null;
       try {
         await new Promise(function (r) { setTimeout(r, 2000); });
         const audio = await axios.get(recordingUrl, {
           auth: { username: process.env.TWILIO_ACCOUNT_SID, password: process.env.TWILIO_AUTH_TOKEN },
           responseType: "arraybuffer",
         });
-        sharedUrl = await uploadRecording(CallSid, Buffer.from(audio.data));
-        if (sharedUrl) console.log("[Recording] Uploaded to Supabase Storage");
+        const uploaded = await uploadRecording(CallSid, Buffer.from(audio.data));
+        if (uploaded && uploaded.url) {
+          sharedUrl = uploaded.url;
+          storagePath = uploaded.storagePath || (CallSid + '.mp3');
+          console.log("[Recording] Uploaded to Supabase Storage (signed URL)");
+        }
       } catch (e) {
         console.warn("[Recording] Storage upload failed, Twilio Url will be used:", e.message);
       }
-      await updateRecordingUrl(CallSid, sharedUrl || recordingUrl);
+      await updateRecordingUrl(CallSid, sharedUrl || recordingUrl, storagePath);
       console.log("[Recording] Saved URL for call:", CallSid);
       console.log("[Recording] URL:", sharedUrl || recordingUrl);
+      if (storagePath) console.log("[Recording] storage_path:", storagePath);
     } catch (e) {
       console.error("[Recording] DB update error:", e.message);
     }
   }
   res.sendStatus(200);
+});
+
+/** Fresh signed URL for private recordings bucket (1h TTL). */
+app.get('/api/recordings/:callSid/signed-url', async function(req, res) {
+  try {
+    const callSid = req.params.callSid;
+    const result = await createRecordingSignedUrl(callSid, 3600);
+    if (result.error || !result.url) {
+      return res.status(404).json({ error: result.error || 'Recording not found' });
+    }
+    res.json({
+      url: result.url,
+      storagePath: result.storagePath,
+      expiresIn: result.expiresIn,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/recordings/proxy', async function(req, res) {
